@@ -1,0 +1,1 @@
+deoxys_control/deoxys/auto_scripts/auto_arm.sh

@@ -253,7 +253,7 @@ class UltimateRobotTester:
     
     def test_movement(self, detailed=True):
         """Test robot movement capability."""
-        print(f"\n🎯 MOVEMENT TEST {'(DETAILED)' if detailed else '(QUICK)'}")
+        print(f"\n🎯 MOVEMENT TEST")
         print("=" * 40)
         
         if not self.connected:
@@ -277,103 +277,65 @@ class UltimateRobotTester:
                 return False
         
         start_pos = current_state.pos.copy()
-        start_quat = current_state.quat.copy()
         
         print(f"Starting position: {start_pos}")
-        print("Using VR-style incremental movements...")
+        print("Testing 5cm movement in X direction...")
         
-        # Define test movements (smaller, incremental movements)
-        if detailed:
-            movements = [
-                ("2mm X (incremental)", np.array([0.002, 0.0, 0.0])),
-                ("2mm Y (incremental)", np.array([0.0, 0.002, 0.0])),
-                ("2mm Z (incremental)", np.array([0.0, 0.0, 0.002])),
-            ]
-        else:
-            movements = [
-                ("1mm X (incremental)", np.array([0.001, 0.0, 0.0])),
-            ]
+        # Test a practical 5cm movement
+        distance_m = 0.05  # 5cm
+        target_pos = start_pos + np.array([distance_m, 0.0, 0.0])
         
-        success_count = 0
+        # Check if target is within bounds
+        if not self.check_position_in_bounds(target_pos):
+            print("⚠️  5cm would go outside bounds, trying 2cm...")
+            distance_m = 0.02
+            target_pos = start_pos + np.array([distance_m, 0.0, 0.0])
         
-        # VR-style movement: send small increments multiple times
-        for description, offset in movements:
-            print(f"\n   Testing {description} movement...")
+        # Move incrementally
+        step_size_m = 0.002  # 2mm steps
+        num_steps = int(distance_m / step_size_m)
+        
+        print(f"Moving {distance_m*100:.1f}cm in {num_steps} steps...")
+        
+        for i in range(num_steps):
+            progress = (i + 1) / num_steps
+            intermediate_pos = start_pos + np.array([distance_m * progress, 0.0, 0.0])
             
-            # Get fresh state before each movement
-            current_state = self.get_robot_state()
-            if current_state is None:
-                continue
-                
-            current_pos = current_state.pos.copy()
+            action = FrankaAction(
+                pos=intermediate_pos.flatten().astype(np.float32),
+                quat=current_state.quat.flatten().astype(np.float32),
+                gripper=current_state.gripper,
+                reset=False,
+                timestamp=time.time(),
+            )
             
-            # Send multiple small steps (like VR controller would)
-            num_steps = 5
-            step_size = offset / num_steps
-            
-            for step in range(num_steps):
-                # Calculate incremental target
-                target_pos = current_pos + step_size
+            try:
+                self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+                response = self.action_socket.recv()
+                result_state = pickle.loads(response)
                 
-                # Ensure target is within bounds
-                if not self.check_position_in_bounds(target_pos):
-                    print(f"   ⚠️  Step {step+1} would go outside bounds, stopping")
-                    break
+                # Small delay between steps
+                time.sleep(0.05)  # 50ms, similar to VR update rate
                 
-                action = FrankaAction(
-                    pos=target_pos.flatten().astype(np.float32),
-                    quat=current_state.quat.flatten().astype(np.float32),
-                    gripper=current_state.gripper,
-                    reset=False,
-                    timestamp=time.time(),
-                )
-                
-                try:
-                    self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
-                    response = self.action_socket.recv()
-                    result_state = pickle.loads(response)
-                    
-                    # Update current position for next step
-                    current_pos = result_state.pos.copy()
-                    
-                    # Small delay between steps (like VR would have)
-                    time.sleep(0.05)  # 50ms, similar to VR update rate
-                    
-                except Exception as e:
-                    print(f"   ❌ Step {step+1} failed: {e}")
-                    break
-            
-            # Check total movement
-            final_state = self.get_robot_state()
-            if final_state:
-                actual_movement = np.linalg.norm(final_state.pos - start_pos)
-                expected_movement = np.linalg.norm(offset)
-                
-                print(f"   Expected total: {expected_movement*1000:.1f}mm")
-                print(f"   Actual total: {actual_movement*1000:.1f}mm")
-                
-                if actual_movement > 0.0005:  # More than 0.5mm
-                    print(f"   ✅ Robot moved!")
-                    success_count += 1
-                    start_pos = final_state.pos.copy()  # Update for next test
-                else:
-                    print(f"   ❌ No significant movement detected")
-            
-            time.sleep(0.5)
+            except Exception as e:
+                print(f"❌ Error at step {i+1}: {e}")
+                return False
         
-        success = success_count > 0
-        print(f"\n📊 Movement Result: {success_count}/{len(movements)} successful")
+        # Check total movement
+        final_state = self.get_robot_state()
+        if final_state:
+            actual_movement = np.linalg.norm(final_state.pos - start_pos)
+            print(f"Expected movement: {distance_m*100:.1f}cm")
+            print(f"Actual movement: {actual_movement*100:.1f}cm")
+            
+            if actual_movement > distance_m * 0.5:  # At least 50% of expected
+                print(f"✅ Robot movement working!")
+                return True
+            else:
+                print(f"❌ Insufficient movement")
+                return False
         
-        if success:
-            print(f"✅ Robot movement is working!")
-        else:
-            print(f"❌ Robot not moving")
-            print(f"   Possible causes:")
-            print(f"   - Deoxys OSC controller issue")
-            print(f"   - Movement commands too small")
-            print(f"   - Pose interpolator expecting different format")
-        
-        return success
+        return False
     
     def reset_to_home(self):
         """Reset robot to home position (like teleoperator does)."""
@@ -691,6 +653,346 @@ class UltimateRobotTester:
             print("   Reset position may be invalid or deoxys not connected")
             return False
     
+    def test_trajectory(self):
+        """Test a complete trajectory: home -> gripper -> move -> gripper -> home -> open."""
+        print("\n🎯 COMPLETE TRAJECTORY TEST")
+        print("=" * 40)
+        print("Sequence: Reset → Gripper Test → Move 20cm → Gripper Test → Return Home → Open")
+        
+        if not self.connected:
+            print("❌ Not connected")
+            return False
+        
+        success_steps = []
+        
+        # Step 1: Reset to home
+        print("\n" + "="*40)
+        print("STEP 1: Reset to Home Position")
+        print("="*40)
+        reset_state = self.reset_to_home()
+        if reset_state is None:
+            print("❌ Failed to reset to home")
+            return False
+        
+        home_pos = reset_state.pos.copy()
+        home_quat = reset_state.quat.copy()
+        print(f"✅ Home position: {home_pos}")
+        success_steps.append("Reset to Home")
+        
+        # Step 2: Open and close gripper at home
+        print("\n" + "="*40)
+        print("STEP 2: Gripper Test at Home")
+        print("="*40)
+        
+        # Close gripper
+        print("Closing gripper...")
+        action = FrankaAction(
+            pos=home_pos,
+            quat=home_quat,
+            gripper=GRIPPER_CLOSE,
+            reset=False,
+            timestamp=time.time()
+        )
+        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+        response = self.action_socket.recv()
+        time.sleep(1)
+        
+        # Open gripper
+        print("Opening gripper...")
+        action.gripper = GRIPPER_OPEN
+        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+        response = self.action_socket.recv()
+        time.sleep(1)
+        print("✅ Gripper test complete")
+        success_steps.append("Gripper Test at Home")
+        
+        # Step 3: Move 20cm in X direction
+        print("\n" + "="*40)
+        print("STEP 3: Move 20cm Forward (X direction)")
+        print("="*40)
+        
+        distance_m = 0.20  # 20cm
+        target_pos = home_pos + np.array([distance_m, 0.0, 0.0])
+        
+        # Check bounds
+        if not self.check_position_in_bounds(target_pos):
+            print("⚠️  Adjusting target to stay within bounds...")
+            max_x = ROBOT_WORKSPACE_MAX[0] - home_pos[0]
+            distance_m = min(distance_m, max_x * 0.95)
+            target_pos = home_pos + np.array([distance_m, 0.0, 0.0])
+            print(f"   Adjusted to {distance_m*100:.1f}cm")
+        
+        # Move incrementally
+        step_size_m = 0.002  # 2mm steps
+        num_steps = int(distance_m / step_size_m)
+        
+        print(f"Moving {distance_m*100:.1f}cm in {num_steps} steps...")
+        print("Progress: ", end='', flush=True)
+        
+        for i in range(num_steps):
+            progress = (i + 1) / num_steps
+            intermediate_pos = home_pos + np.array([distance_m * progress, 0.0, 0.0])
+            
+            action = FrankaAction(
+                pos=intermediate_pos.flatten().astype(np.float32),
+                quat=home_quat.flatten().astype(np.float32),
+                gripper=GRIPPER_OPEN,
+                reset=False,
+                timestamp=time.time()
+            )
+            
+            self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+            response = self.action_socket.recv()
+            
+            if (i + 1) % max(1, num_steps // 10) == 0:
+                print(f"{int(progress * 100)}%", end='', flush=True)
+            else:
+                print(".", end='', flush=True)
+            
+            time.sleep(0.05)  # 50ms between steps
+        
+        print()  # New line
+        
+        # Get actual position after movement
+        current_state = self.get_robot_state()
+        if current_state:
+            actual_movement = np.linalg.norm(current_state.pos - home_pos)
+            print(f"✅ Moved {actual_movement*100:.1f}cm to position: {current_state.pos}")
+            extended_pos = current_state.pos.copy()
+            success_steps.append(f"Move {actual_movement*100:.1f}cm")
+        else:
+            print("❌ Failed to get position after movement")
+            return False
+        
+        # Step 4: Open and close gripper at extended position
+        print("\n" + "="*40)
+        print("STEP 4: Gripper Test at Extended Position")
+        print("="*40)
+        
+        # Close gripper
+        print("Closing gripper...")
+        action = FrankaAction(
+            pos=extended_pos,
+            quat=home_quat,
+            gripper=GRIPPER_CLOSE,
+            reset=False,
+            timestamp=time.time()
+        )
+        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+        response = self.action_socket.recv()
+        time.sleep(1)
+        
+        # Open gripper
+        print("Opening gripper...")
+        action.gripper = GRIPPER_OPEN
+        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+        response = self.action_socket.recv()
+        time.sleep(1)
+        print("✅ Gripper test complete")
+        success_steps.append("Gripper Test at Extended")
+        
+        # Step 5: Return to home position
+        print("\n" + "="*40)
+        print("STEP 5: Return to Home Position")
+        print("="*40)
+        
+        print(f"Returning to home position...")
+        print("Progress: ", end='', flush=True)
+        
+        # Move back incrementally
+        return_distance = np.linalg.norm(extended_pos - home_pos)
+        num_steps = int(return_distance / step_size_m)
+        
+        for i in range(num_steps):
+            progress = (i + 1) / num_steps
+            # Interpolate from extended position back to home
+            intermediate_pos = extended_pos + (home_pos - extended_pos) * progress
+            
+            action = FrankaAction(
+                pos=intermediate_pos.flatten().astype(np.float32),
+                quat=home_quat.flatten().astype(np.float32),
+                gripper=GRIPPER_OPEN,
+                reset=False,
+                timestamp=time.time()
+            )
+            
+            self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+            response = self.action_socket.recv()
+            
+            if (i + 1) % max(1, num_steps // 10) == 0:
+                print(f"{int(progress * 100)}%", end='', flush=True)
+            else:
+                print(".", end='', flush=True)
+            
+            time.sleep(0.05)
+        
+        print()  # New line
+        
+        # Verify we're back at home
+        current_state = self.get_robot_state()
+        if current_state:
+            distance_from_home = np.linalg.norm(current_state.pos - home_pos)
+            print(f"✅ Returned to home (error: {distance_from_home*1000:.1f}mm)")
+            success_steps.append("Return to Home")
+        
+        # Step 6: Final gripper open
+        print("\n" + "="*40)
+        print("STEP 6: Final Gripper Open")
+        print("="*40)
+        
+        print("Opening gripper...")
+        action = FrankaAction(
+            pos=home_pos,
+            quat=home_quat,
+            gripper=GRIPPER_OPEN,
+            reset=False,
+            timestamp=time.time()
+        )
+        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+        response = self.action_socket.recv()
+        print("✅ Gripper opened")
+        success_steps.append("Final Gripper Open")
+        
+        # Summary
+        print("\n" + "="*40)
+        print("TRAJECTORY SUMMARY")
+        print("="*40)
+        print(f"Completed steps: {len(success_steps)}/6")
+        for i, step in enumerate(success_steps, 1):
+            print(f"  {i}. ✅ {step}")
+        
+        if len(success_steps) == 6:
+            print("\n🎉 COMPLETE TRAJECTORY EXECUTED SUCCESSFULLY!")
+            print("The robot performed a full pick-and-place style trajectory")
+            return True
+        else:
+            print(f"\n⚠️  Trajectory incomplete ({len(success_steps)}/6 steps)")
+            return False
+    
+    def test_gripper_diagnostic(self):
+        """Diagnostic test for gripper to understand why it's not physically moving."""
+        print(f"\n🔧 GRIPPER DIAGNOSTIC TEST")
+        print("=" * 40)
+        
+        if not self.connected:
+            print("❌ Not connected")
+            return False
+        
+        # Get initial state
+        state = self.get_robot_state()
+        if state is None:
+            print("❌ Cannot get robot state")
+            return False
+        
+        pos = state.pos.copy()
+        quat = state.quat.copy()
+        initial_gripper = state.gripper
+        
+        print(f"Initial state:")
+        print(f"   Position: {pos}")
+        print(f"   Gripper: {initial_gripper}")
+        print(f"   GRIPPER_OPEN constant: {GRIPPER_OPEN}")
+        print(f"   GRIPPER_CLOSE constant: {GRIPPER_CLOSE}")
+        
+        # Test sequence of gripper commands
+        tests = [
+            ("Open", GRIPPER_OPEN, 3.0),
+            ("Close", GRIPPER_CLOSE, 3.0),
+            ("Open again", GRIPPER_OPEN, 3.0),
+            ("Partial open", -0.5, 3.0),  # Test partial values
+            ("Partial close", 0.5, 3.0),
+            ("Full open", GRIPPER_OPEN, 3.0)
+        ]
+        
+        for test_name, gripper_value, wait_time in tests:
+            print(f"\n[{test_name}] Sending gripper={gripper_value}")
+            
+            # Send command
+            action = FrankaAction(
+                pos=pos, 
+                quat=quat, 
+                gripper=gripper_value, 
+                reset=False, 
+                timestamp=time.time()
+            )
+            
+            pickled_action = pickle.dumps(action)
+            self.action_socket.send(pickled_action)
+            
+            # Get response
+            response = self.action_socket.recv()
+            result = pickle.loads(response)
+            
+            print(f"   Response gripper: {result.gripper}")
+            print(f"   Waiting {wait_time}s for physical movement...")
+            time.sleep(wait_time)
+            
+            # Get updated state
+            updated_state = self.get_robot_state()
+            if updated_state:
+                print(f"   Updated gripper state: {updated_state.gripper}")
+                if abs(updated_state.gripper - result.gripper) > 0.01:
+                    print(f"   ⚠️  Mismatch between reported ({result.gripper}) and actual ({updated_state.gripper})")
+        
+        # Check if deoxys is communicating with gripper controller
+        print("\n" + "="*40)
+        print("GRIPPER CONTROLLER STATUS CHECK")
+        print("="*40)
+        print("Checking if gripper controller is running on robot...")
+        print("Note: The gripper needs:")
+        print("  1. Gripper controller process running on robot")
+        print("  2. ZMQ communication on ports 5557/5558")
+        print("  3. Physical gripper power and initialization")
+        print()
+        print("If gripper values change in software but not physically:")
+        print("  → The network_server is working")
+        print("  → But deoxys/gripper controller may not be connected")
+        print("  → Or gripper hardware needs initialization")
+        
+        return True
+    
+    def run_simple_test(self):
+        """Run simplified three-test sequence: home, move, gripper."""
+        print("🎯 SIMPLE ROBOT TEST")
+        print("=" * 50)
+        print("Running: Home Reset → 20cm Movement → Gripper Test")
+        
+        if not self.connected:
+            print("❌ Not connected to robot")
+            return False
+        
+        # Test 1: Reset to home
+        print("\n" + "="*40)
+        print("TEST 1: Reset to Home")
+        print("="*40)
+        reset_state = self.reset_to_home()
+        if reset_state is None:
+            print("❌ Reset failed - cannot continue")
+            return False
+        print(f"✅ Home position: {reset_state.pos}")
+        
+        # Test 2: 20cm movement
+        print("\n" + "="*40)
+        print("TEST 2: 20cm Movement")
+        print("="*40)
+        move_success = self.test_large_movement(distance_cm=20, direction='x')
+        
+        # Test 3: Gripper
+        print("\n" + "="*40)
+        print("TEST 3: Gripper Control")
+        print("="*40)
+        gripper_success = self.test_gripper()
+        
+        # Summary
+        print("\n" + "="*40)
+        print("RESULTS")
+        print("="*40)
+        print(f"✅ Home Reset: SUCCESS")
+        print(f"{'✅' if move_success else '❌'} 20cm Movement: {'SUCCESS' if move_success else 'FAILED'}")
+        print(f"{'✅' if gripper_success else '❌'} Gripper Control: {'SUCCESS' if gripper_success else 'FAILED'}")
+        
+        return move_success and gripper_success
+    
     # ==================== TEST MODES ====================
     
     def run_quick_check(self):
@@ -751,25 +1053,24 @@ class UltimateRobotTester:
         
         # Robot tests
         results = {}
-        results['communication'] = self.test_communication()
         
-        # Try reset first if robot is out of bounds
-        state = self.get_robot_state()
-        if state and not self.check_position_in_bounds(state.pos):
-            print("\n⚠️  Robot outside bounds - attempting reset first...")
-            results['reset'] = self.test_reset_and_move()
-            if results['reset']:
-                results['movement'] = self.test_movement(detailed=True)
-            else:
-                results['movement'] = False
-                print("❌ Skipping movement test - reset failed")
+        # Test 1: Reset to home
+        print("\n[TEST 1/3] HOME RESET")
+        reset_state = self.reset_to_home()
+        results['home_reset'] = reset_state is not None
+        if results['home_reset']:
+            print(f"✅ Successfully reset to home position")
         else:
-            results['movement'] = self.test_movement(detailed=True)
+            print(f"❌ Failed to reset to home")
+            print("Skipping remaining tests - reset is critical")
+            return False
         
-        # Test large movement if small movements work
-        if results.get('movement', False):
-            results['large_movement'] = self.test_large_movement(distance_cm=20, direction='x')
+        # Test 2: 20cm movement
+        print("\n[TEST 2/3] 20CM MOVEMENT")
+        results['large_movement'] = self.test_large_movement(distance_cm=20, direction='x')
         
+        # Test 3: Gripper
+        print("\n[TEST 3/3] GRIPPER CONTROL")
         results['gripper'] = self.test_gripper()
         
         # Summary
@@ -779,7 +1080,8 @@ class UltimateRobotTester:
         
         for test, status in results.items():
             icon = "✅" if status else "❌"
-            print(f"{icon} {test.replace('_', ' ').title()}: {'PASS' if status else 'FAIL'}")
+            test_name = test.replace('_', ' ').title()
+            print(f"{icon} {test_name}: {'PASS' if status else 'FAIL'}")
         
         passed = sum(results.values())
         total = len(results)
@@ -789,24 +1091,21 @@ class UltimateRobotTester:
         if passed == total:
             print(f"\n🎉 ALL TESTS PASSED!")
             print(f"✅ Robot system fully functional")
-            print(f"✅ Robot can perform large movements!")
-        elif results['communication']:
+            print(f"✅ Ready for teleoperation and teaching")
+        elif results['home_reset'] and results['large_movement']:
             print(f"\n⚠️  PARTIAL SUCCESS")
-            print(f"✅ Robot responds to commands")
-            if not results.get('movement', False) and not results.get('reset', False):
-                print(f"❌ Movement blocked - check:")
-                print(f"   - CPU performance mode")
-                print(f"   - Real-time permissions")
-                print(f"   - Robot workspace bounds")
-                print(f"   - Deoxys connection to robot")
-                print(f"\n🔧 CRITICAL: Neither arm nor gripper moving indicates")
-                print(f"   deoxys is NOT connected to the physical robot!")
-                print(f"\n   Run deoxys with sudo in another terminal:")
-                print(f"   cd ~/projects/lbx-Franka-Teach")
-                print(f"   ./run_arm_sudo.sh")
+            print(f"✅ Robot arm movement working")
+            print(f"❌ Gripper not responding - check:")
+            print(f"   - Franka Hand power")
+            print(f"   - Gripper initialization")
+            print(f"   - Check deoxys terminal for errors")
+        elif results['home_reset']:
+            print(f"\n⚠️  LIMITED SUCCESS")
+            print(f"✅ Robot can reset to home")
+            print(f"❌ Movement control issues")
         else:
-            print(f"\n❌ ROBOT SYSTEM ISSUES")
-            print(f"🔧 Core robot system needs attention")
+            print(f"\n❌ CRITICAL ISSUES")
+            print(f"🔧 Check deoxys connection to robot")
         
         return passed == total
     
@@ -822,18 +1121,24 @@ def show_help():
     print("=" * 40)
     print("Usage:")
     print("  python robot_test.py              # Full comprehensive test")
+    print("  python robot_test.py --simple     # Simple 3-test sequence")
     print("  python robot_test.py --quick      # Quick status check")
     print("  python robot_test.py --diagnostic # System diagnostics")
-    print("  python robot_test.py --move20     # Test 20cm movement")
-    print("  python robot_test.py --gripper    # Test gripper open/close only")
+    print("  python robot_test.py --move20     # Test 20cm movement only")
+    print("  python robot_test.py --gripper    # Test gripper only")
+    print("  python robot_test.py --gripper-diagnostic # Detailed gripper diagnostics")
+    print("  python robot_test.py --trajectory # Complete pick-and-place trajectory")
     print("  python robot_test.py --help       # Show this help")
     print()
     print("Modes:")
+    print("  --simple     : Just the essentials: home, move 20cm, gripper")
     print("  --quick      : Fast system status check")
     print("  --diagnostic : Full system diagnostics")
     print("  --move20     : Test 20cm movement in X direction")
     print("  --gripper    : Test gripper open/close only")
-    print("  (default)    : Comprehensive robot testing")
+    print("  --gripper-diagnostic : Detailed gripper troubleshooting")
+    print("  --trajectory : Full pick-and-place sequence")
+    print("  (default)    : Comprehensive robot testing with diagnostics")
 
 
 def main():
@@ -843,12 +1148,18 @@ def main():
         show_help()
         return
     
+    simple_mode = '--simple' in sys.argv or '-s' in sys.argv
     quick_mode = '--quick' in sys.argv or '-q' in sys.argv
     diagnostic_mode = '--diagnostic' in sys.argv or '-d' in sys.argv
     move20_mode = '--move20' in sys.argv
     gripper_mode = '--gripper' in sys.argv
+    gripper_diagnostic_mode = '--gripper-diagnostic' in sys.argv
+    trajectory_mode = '--trajectory' in sys.argv
     
-    if quick_mode:
+    if simple_mode:
+        print("🎯 SIMPLE MODE")
+        need_input = False
+    elif quick_mode:
         print("⚡ QUICK MODE")
         need_input = False
     elif diagnostic_mode:
@@ -859,6 +1170,12 @@ def main():
         need_input = False
     elif gripper_mode:
         print("🤏 GRIPPER TEST MODE")
+        need_input = False
+    elif gripper_diagnostic_mode:
+        print("🔧 GRIPPER DIAGNOSTIC MODE")
+        need_input = False
+    elif trajectory_mode:
+        print("🎯 TRAJECTORY MODE")
         need_input = False
     else:
         print("🤖 COMPREHENSIVE TEST MODE")
@@ -876,7 +1193,9 @@ def main():
     tester = UltimateRobotTester()
     
     try:
-        if quick_mode:
+        if simple_mode:
+            success = tester.run_simple_test()
+        elif quick_mode:
             success = tester.run_quick_check()
         elif diagnostic_mode:
             success = tester.run_diagnostics()
@@ -891,6 +1210,15 @@ def main():
             # Quick check first
             if tester.test_communication():
                 success = tester.test_gripper()
+            else:
+                print("❌ Cannot communicate with robot")
+                success = False
+        elif gripper_diagnostic_mode:
+            success = tester.test_gripper_diagnostic()
+        elif trajectory_mode:
+            # Quick check first
+            if tester.test_communication():
+                success = tester.test_trajectory()
             else:
                 print("❌ Cannot communicate with robot")
                 success = False

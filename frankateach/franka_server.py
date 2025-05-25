@@ -82,12 +82,15 @@ class Robot(FrankaInterface):
             general_cfg_file=os.path.join(CONFIG_ROOT, cfg),
             use_visualizer=False,
             control_freq=control_freq,
+            has_gripper=True,
+            automatic_gripper_reset=True
         )
         self.velocity_controller_cfg = verify_controller_config(
             YamlConfig(
                 os.path.join(CONFIG_ROOT, "osc-pose-controller.yml")
             ).as_easydict()
         )
+        self.last_gripper_dim = 6
 
     def reset_robot(self):
         self.reset()

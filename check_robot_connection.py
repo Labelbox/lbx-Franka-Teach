@@ -55,8 +55,8 @@ def main():
     except Exception as e:
         print(f"❌ Error loading config: {e}")
         robot_ip = "192.168.1.59"
-        pc_ip = "192.168.1.122"
-        nuc_ip = "192.168.1.122"
+        pc_ip = "192.168.1.54"
+        nuc_ip = "192.168.1.54"
     
     print(f"\n📋 Configuration:")
     print(f"   Robot IP: {robot_ip}")

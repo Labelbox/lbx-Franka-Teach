@@ -6,3 +6,5 @@ hydra-core
 pyrealsense2
 h5py
 pre-commit
+pure-python-adb
+pyyaml

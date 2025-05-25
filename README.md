@@ -119,17 +119,40 @@ python3 test_franka_env.py
 
 1. Do the steps until 6 in the "How to run the Franka-Teach environment" section.
 
+2. Choose your control method:
 
-2. Also, start the teleoperation script. Set the teleop mode based on if you are collecting human or robot demonstrations.:
+### Option A: Mouse Control (Simple 2D)
+For basic 2D control using mouse, see [mouse_control_readme.md](mouse_control_readme.md).
+
+### Option B: Oculus VR Control (Full 6DOF) 
+For full 6DOF control using Meta Quest VR controllers:
+
+```bash
+# First test the Oculus connection
+python3 test_oculus_reader.py
+
+# If test passes, start the Oculus VR server
+python3 oculus_vr_server.py
+
+# Or use debug mode to test without robot
+python3 oculus_vr_server.py --debug
+```
+
+See [oculus_control_readme.md](oculus_control_readme.md) for detailed setup and usage instructions.
+
+3. Start the teleoperation script. Set the teleop mode based on if you are collecting human or robot demonstrations:
 
 ```bash
 python3 teleop.py teleop_mode=<human/robot>
 ```
 
-3. You can start the data collection by running the `collect_data.py` script. Set the `demo_num` to the number of demonstrations you want to collect and `collect_depth` to `True` if you want to collect depth data from the Intel realsense cameras.
+4. You can start the data collection by running the `collect_data.py` script. Set the `demo_num` to the number of demonstrations you want to collect and `collect_depth` to `True` if you want to collect depth data from the Intel realsense cameras.
 
 ```bash
 python3 collect_data.py demo_num=0 collect_depth=<True/False>
 ```
 
-4. For robot teleoperation, use the VR controllers to control the robot. When collecting human data, use the VR controller to start and stop the data collection while performing the actions with the human hand.
+5. Control methods:
+   - **Mouse Control**: Hold left-click and move mouse for 2D position control
+   - **Oculus VR**: Hold grip button and move controller for full 6DOF control, use trigger for gripper
+   - **Human Mode**: Use VR controller buttons to start/stop recording while manually moving the robot

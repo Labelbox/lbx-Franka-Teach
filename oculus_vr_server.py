@@ -203,7 +203,7 @@ class OculusVRServer:
         print("\n🧭 Forward Direction Calibration:")
         print("   - HOLD joystick button and MOVE controller forward")
         print("   - The direction you move defines 'forward' for the robot")
-        print("   - Move at least 5mm in your desired forward direction")
+        print("   - Move at least 3mm in your desired forward direction")
         print("   - Release joystick button to complete calibration")
         print("   - The robot will move forward when you move the controller in that direction")
         
@@ -369,9 +369,9 @@ class OculusVRServer:
                 # Show progress periodically
                 if len(self.calibration_positions) % 10 == 0:
                     movement = np.linalg.norm(raw_pos - self.calibration_start_pos)
-                    progress_percent = min(100, (self.calibration_max_distance / 0.005) * 100)  # Progress toward 5mm goal
-                    if self.calibration_max_distance < 0.005:
-                        print(f"   Tracking movement: {movement:.6f}m ({progress_percent:.0f}% to 5mm goal) - Keep moving!")
+                    progress_percent = min(100, (self.calibration_max_distance / 0.003) * 100)  # Progress toward 3mm goal
+                    if self.calibration_max_distance < 0.003:
+                        print(f"   Tracking movement: {movement:.6f}m ({progress_percent:.0f}% to 3mm goal) - Keep moving!")
                     else:
                         print(f"   Tracking movement: {movement:.6f}m ✅ Ready to release joystick!")
             
@@ -396,7 +396,7 @@ class OculusVRServer:
                     
                     # Check if there was enough movement
                     movement_distance = self.calibration_max_distance
-                    if movement_distance > 0.005:  # 5mm minimum movement
+                    if movement_distance > 0.003:  # 3mm minimum movement
                         forward_vec_normalized = forward_vec / movement_distance  # Normalize
                         
                         print(f"\n✅ Forward direction calibrated!")
@@ -449,7 +449,7 @@ class OculusVRServer:
                         print(f"   Test: Your forward motion in VR space")
                         print(f"         maps to robot space: [{test_forward[0]:.2f}, {test_forward[1]:.2f}, {test_forward[2]:.2f}]")
                     else:
-                        print(f"\n⚠️  Not enough movement detected ({movement_distance:.6f}m). Please move controller at least 5mm forward.")
+                        print(f"\n⚠️  Not enough movement detected ({movement_distance:.6f}m). Please move controller at least 3mm forward.")
                         print(f"   💡 Try making a more deliberate forward motion - move your whole arm, not just your wrist!")
                 else:
                     print(f"\n⚠️  No movement detected. Please move the controller while holding the joystick button.")
@@ -737,10 +737,11 @@ class OculusVRServer:
                                     print(f"{prefix}   Current pos (raw): [{raw_pos[0]:.6f}, {raw_pos[1]:.6f}, {raw_pos[2]:.6f}]")
                                     print(f"{prefix}   Current pos (transformed): [{transformed_pos[0]:.6f}, {transformed_pos[1]:.6f}, {transformed_pos[2]:.6f}]")
                                     if len(self.calibration_positions) > 0:
-                                        start_pos = self.calibration_positions[0]
+                                        start_pos = self.calibration_start_pos
                                         movement = np.linalg.norm(raw_pos - start_pos)
+                                        max_movement = self.calibration_max_distance
                                         print(f"{prefix}   Start pos: [{start_pos[0]:.6f}, {start_pos[1]:.6f}, {start_pos[2]:.6f}]")
-                                        print(f"{prefix}   Movement: {movement:.6f}m, Samples: {len(self.calibration_positions)}")
+                                        print(f"{prefix}   Movement: {movement:.6f}m (Max: {max_movement:.6f}m), Samples: {len(self.calibration_positions)}")
                             elif self.debug:
                                 print(f"   🔴 TELEOPERATION: INACTIVE (Hold grip button to enable)")
                             

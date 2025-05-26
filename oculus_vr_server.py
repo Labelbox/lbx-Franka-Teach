@@ -417,97 +417,99 @@ class OculusVRServer:
             elif joystick_released and self.calibrating_forward:
                 self.calibrating_forward = False
                 
-                # Calculate movement vector from start to furthest point reached
+                # Calculate final movement vector using maximum distance point
                 start_pos = self.calibration_start_pos
                 end_pos = self.calibration_furthest_pos
-                movement_vec = end_pos - start_pos
-                movement_distance = np.linalg.norm(movement_vec)
+                forward_vec = end_pos - start_pos
+                movement_distance = np.linalg.norm(forward_vec)
                 
                 print(f"\n🔍 Calibration Analysis:")
                 print(f"   Start position: [{start_pos[0]:.3f}, {start_pos[1]:.3f}, {start_pos[2]:.3f}]")
                 print(f"   End position:   [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}]")
-                print(f"   Movement vector: [{movement_vec[0]:.3f}, {movement_vec[1]:.3f}, {movement_vec[2]:.3f}]")
+                print(f"   Movement vector: [{forward_vec[0]:.3f}, {forward_vec[1]:.3f}, {forward_vec[2]:.3f}]")
                 print(f"   Total distance: {movement_distance:.1f}mm")
+                print(f"   Positions collected: {len(self.calibration_positions)}")
                 print(f"   Time elapsed: {time.time() - self.calibration_start_time:.1f}s")
                 
                 # Analyze movement by axis
-                axis_movement = np.abs(movement_vec)
+                axis_movement = np.abs(forward_vec)
                 dominant_axis = np.argmax(axis_movement)
                 axis_names = ['X', 'Y', 'Z']
                 axis_contributions = axis_movement / (movement_distance + 1e-6) * 100
                 
                 print(f"\n   Movement Analysis by Axis:")
-                print(f"   - VR {axis_names[0]}: {movement_vec[0]:+.1f}mm ({axis_contributions[0]:.1f}%)")
-                print(f"   - VR {axis_names[1]}: {movement_vec[1]:+.1f}mm ({axis_contributions[1]:.1f}%)")
-                print(f"   - VR {axis_names[2]}: {movement_vec[2]:+.1f}mm ({axis_contributions[2]:.1f}%)")
-                print(f"   Dominant axis: VR {axis_names[dominant_axis]} ({movement_vec[dominant_axis]:+.1f}mm)")
+                print(f"   - VR {axis_names[0]}: {forward_vec[0]:+.1f}mm ({axis_contributions[0]:.1f}%)")
+                print(f"   - VR {axis_names[1]}: {forward_vec[1]:+.1f}mm ({axis_contributions[1]:.1f}%)")
+                print(f"   - VR {axis_names[2]}: {forward_vec[2]:+.1f}mm ({axis_contributions[2]:.1f}%)")
+                print(f"   Dominant axis: VR {axis_names[dominant_axis]} ({forward_vec[dominant_axis]:+.1f}mm)")
                 
-                if movement_distance > 3.0:  # 3mm minimum movement
-                    # Normalize the movement vector - this is our forward direction
-                    forward_direction = movement_vec / movement_distance
+                # Use maximum distance achieved during calibration, with adjusted threshold
+                if self.calibration_max_distance > 3.0:  # Now checking for 3mm in scaled units
+                    # Scale back down for the actual calibration
+                    forward_vec_normalized = forward_vec / (movement_distance * self.vr_position_scale)
                     
                     print(f"\n✅ Forward direction calibrated!")
-                    print(f"   Movement distance: {movement_distance:.1f}mm")
-                    print(f"   Forward direction: [{forward_direction[0]:.3f}, {forward_direction[1]:.3f}, {forward_direction[2]:.3f}]")
+                    print(f"   Maximum movement: {self.calibration_max_distance:.1f}mm")
+                    print(f"   Final movement: {movement_distance:.1f}mm")
+                    print(f"   Normalized direction: [{forward_vec_normalized[0]:.3f}, {forward_vec_normalized[1]:.3f}, {forward_vec_normalized[2]:.3f}]")
                     
-                    # Create rotation matrix that aligns this direction with robot's +X axis
+                    # Apply only the reordering transformation to see where this vector goes
+                    temp_mat = np.eye(4)
+                    temp_mat[:3, 3] = forward_vec_normalized
+                    transformed_temp = self.global_to_env_mat @ temp_mat
+                    transformed_forward = transformed_temp[:3, 3]
+                    
+                    print(f"\n   After coordinate reordering:")
+                    print(f"   [{transformed_forward[0]:.3f}, {transformed_forward[1]:.3f}, {transformed_forward[2]:.3f}]")
+                    
+                    # We want the transformed forward to align with robot's +X axis
                     robot_forward = np.array([1.0, 0.0, 0.0])
                     
-                    # Calculate the rotation needed to align movement direction with robot forward
-                    # First, get the rotation axis (cross product)
-                    rotation_axis = np.cross(forward_direction, robot_forward)
-                    rotation_axis_norm = np.linalg.norm(rotation_axis)
+                    # Calculate rotation to align transformed_forward with robot_forward
+                    rotation_axis = np.cross(transformed_forward, robot_forward)
+                    rotation_angle = np.arccos(np.clip(np.dot(transformed_forward, robot_forward), -1.0, 1.0))
                     
-                    if rotation_axis_norm > 1e-6:  # If vectors aren't parallel
-                        # Normalize rotation axis
-                        rotation_axis = rotation_axis / rotation_axis_norm
-                        
-                        # Get rotation angle
-                        cos_angle = np.clip(np.dot(forward_direction, robot_forward), -1.0, 1.0)
-                        rotation_angle = np.arccos(cos_angle)
-                        
+                    if np.linalg.norm(rotation_axis) > 0.001:
+                        rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
                         # Create rotation matrix using Rodrigues' formula
                         K = np.array([[0, -rotation_axis[2], rotation_axis[1]],
-                                    [rotation_axis[2], 0, -rotation_axis[0]],
-                                    [-rotation_axis[1], rotation_axis[0], 0]])
-                        R = np.eye(3) + np.sin(rotation_angle) * K + (1 - np.cos(rotation_angle)) * K @ K
+                                     [rotation_axis[2], 0, -rotation_axis[0]],
+                                     [-rotation_axis[1], rotation_axis[0], 0]])
+                        R_calibration = np.eye(3) + np.sin(rotation_angle) * K + (1 - np.cos(rotation_angle)) * K @ K
                     else:
-                        # Vectors are parallel or anti-parallel
-                        if np.dot(forward_direction, robot_forward) > 0:
-                            # Already aligned
-                            R = np.eye(3)
+                        # Movement is already aligned with robot forward or backward
+                        if transformed_forward[0] < 0:  # Moving backward
+                            # Rotate 180 degrees around Z axis
+                            R_calibration = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
                         else:
-                            # Anti-parallel - rotate 180° around any perpendicular axis (e.g., Z)
-                            R = np.array([[-1, 0, 0],
-                                        [0, -1, 0],
-                                        [0, 0, 1]])
+                            R_calibration = np.eye(3)
                     
                     # Update the VR to global transformation
                     self.vr_to_global_mat = np.eye(4)
-                    self.vr_to_global_mat[:3, :3] = R
+                    self.vr_to_global_mat[:3, :3] = R_calibration
                     
                     # Test the calibration
-                    test_vec = np.zeros(4)
-                    test_vec[:3] = forward_direction
-                    test_vec[3] = 1.0
-                    transformed = self.global_to_env_mat @ self.vr_to_global_mat @ test_vec
+                    test_mat = np.eye(4)
+                    test_mat[:3, 3] = forward_vec_normalized
+                    test_result = self.global_to_env_mat @ self.vr_to_global_mat @ test_mat
+                    test_forward = test_result[:3, 3]
                     
-                    print(f"\n   Calibration Test:")
-                    print(f"   Your movement direction will map to robot direction:")
-                    print(f"   [{transformed[0]:.3f}, {transformed[1]:.3f}, {transformed[2]:.3f}]")
+                    print(f"\n   Final Calibration Test:")
+                    print(f"   Your forward motion will map to robot direction:")
+                    print(f"   [{test_forward[0]:.3f}, {test_forward[1]:.3f}, {test_forward[2]:.3f}]")
                     
-                    if abs(transformed[0] - 1.0) < 0.01:
-                        print(f"   ✅ Successfully aligned with robot's forward direction!")
+                    if abs(test_forward[0] - 1.0) < 0.01:
+                        print(f"   ✅ Perfect alignment with robot's forward direction!")
                     else:
-                        print(f"   ⚠️  Note: Movement not perfectly aligned with robot's X axis")
+                        print(f"   ⚠️  Note: Forward direction is not perfectly aligned with robot's X axis")
                         print(f"       This is normal if you moved diagonally")
                 else:
                     print(f"\n⚠️  Not enough movement detected ({movement_distance:.1f}mm)")
                     print(f"   Please move controller at least 3mm in your desired forward direction")
                     print(f"   💡 Tips:")
-                    print(f"   - Make a clear, straight movement in your desired forward direction")
+                    print(f"   - Make a clear, deliberate forward motion")
                     print(f"   - Move your whole arm, not just your wrist")
-                    print(f"   - The direction you move will become the robot's forward direction")
+                    print(f"   - Try moving in a straight line along one axis")
             
             # Update previous button states for next iteration
             self.prev_grip_state = current_grip

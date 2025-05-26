@@ -203,7 +203,7 @@ class OculusVRServer:
         print("\n🧭 Forward Direction Calibration:")
         print("   - HOLD joystick button and MOVE controller forward")
         print("   - The direction you move defines 'forward' for the robot")
-        print("   - Move at least 5cm in your desired forward direction")
+        print("   - Move at least 5mm in your desired forward direction")
         print("   - Release joystick button to complete calibration")
         print("   - The robot will move forward when you move the controller in that direction")
         
@@ -239,12 +239,17 @@ class OculusVRServer:
         self.calibrating_forward = False
         self.calibration_start_pos = None
         self.calibration_positions = []
+        self.calibration_max_distance = 0.0
+        self.calibration_furthest_pos = None
         
         # Robot state
         self.robot_pos = None
         self.robot_quat = None
         self.robot_euler = None
         self.robot_gripper = 0.0
+        
+        # Current VR controller position (raw, before transformations)
+        self.current_vr_pos = None
         
         # First frame flag
         self.is_first_frame = True
@@ -254,6 +259,12 @@ class OculusVRServer:
         print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
         self.stop_server()
         
+    def _transform_vr_position(self, pose_matrix):
+        """Apply the same coordinate transformations as robot control"""
+        transformed_matrix = self.global_to_env_mat @ self.vr_to_global_mat @ pose_matrix
+        transformed_pos = self.spatial_coeff * transformed_matrix[:3, 3]
+        return transformed_pos
+    
     def _update_internal_state(self, num_wait_sec=5, hz=50):
         """Continuously poll VR controller state at 50Hz"""
         last_read_time = time.time()
@@ -270,9 +281,28 @@ class OculusVRServer:
             if poses == {}:
                 continue
             
+            # Debug: Show raw poses data periodically
+            if self.debug and len(poses) > 0:
+                debug_counter = getattr(self, '_debug_counter', 0)
+                self._debug_counter = debug_counter + 1
+                if self._debug_counter % 50 == 0:  # Every 50 frames (1 second at 50Hz)
+                    print(f"\n🔍 DEBUG: Raw VR poses data:")
+                    for controller_id, pose_matrix in poses.items():
+                        pos = pose_matrix[:3, 3]
+                        print(f"   Controller '{controller_id}': [{pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.6f}]")
+                    print(f"   Using controller: '{self.controller_id}'")
+                    print(f"   Available controllers: {list(poses.keys())}")
+            
             # Get current button states
             current_grip = buttons.get(self.controller_id.upper() + "G", False)
             current_joystick = buttons.get(self.controller_id.upper() + "J", False)
+            
+            # Debug: Show button states when they change
+            if self.debug:
+                if current_grip != self.prev_grip_state:
+                    print(f"🎮 Grip button {'PRESSED' if current_grip else 'RELEASED'}")
+                if current_joystick != self.prev_joystick_state:
+                    print(f"🕹️  Joystick button {'PRESSED' if current_joystick else 'RELEASED'}")
             
             # Detect edge transitions
             grip_toggled = self.prev_grip_state != current_grip
@@ -295,129 +325,134 @@ class OculusVRServer:
                 pose_matrix = self._state["poses"][self.controller_id]
                 controller_pos = pose_matrix[:3, 3]
                 
-                # Start calibration when joystick is pressed
-                if joystick_pressed:
-                    self.calibrating_forward = True
-                    self.calibration_start_pos = controller_pos.copy()
-                    self.calibration_positions = [controller_pos.copy()]
-                    if self.debug:
-                        print(f"\n🎯 Forward calibration started - Move controller forward while holding joystick")
-                        print(f"   Start position: [{controller_pos[0]:.3f}, {controller_pos[1]:.3f}, {controller_pos[2]:.3f}]")
+                # Store current position for consistent access
+                self.current_vr_pos = controller_pos.copy()
+            else:
+                # Controller not found in poses
+                if self.debug and self._state["poses"]:
+                    print(f"⚠️  Controller '{self.controller_id}' not found in poses. Available: {list(self._state['poses'].keys())}")
+                self.current_vr_pos = None
+            
+            # Start calibration when joystick is pressed
+            if joystick_pressed:
+                self.calibrating_forward = True
+                # Collect positions in RAW VR space, not transformed
+                pose_matrix = self._state["poses"][self.controller_id]
+                raw_pos = pose_matrix[:3, 3]
                 
-                # Collect positions during calibration
-                elif self.calibrating_forward and current_joystick:
-                    # Always append the current position during calibration
-                    self.calibration_positions.append(controller_pos.copy())
-                    
-                    # Show progress periodically
-                    if self.debug and len(self.calibration_positions) % 10 == 0:
-                        movement = np.linalg.norm(controller_pos - self.calibration_start_pos)
-                        print(f"   Tracking movement: {movement:.3f}m (samples: {len(self.calibration_positions)})")
+                self.calibration_start_pos = raw_pos.copy()
+                self.calibration_positions = [raw_pos.copy()]
+                self.calibration_max_distance = 0.0
+                self.calibration_furthest_pos = raw_pos.copy()
+                print(f"\n🎯 Forward calibration started - Move controller forward while holding joystick")
+                print(f"   Start position (raw VR): [{raw_pos[0]:.3f}, {raw_pos[1]:.3f}, {raw_pos[2]:.3f}]")
+            
+            # Collect positions during calibration
+            elif self.calibrating_forward and current_joystick:
+                # Collect positions in RAW VR space
+                pose_matrix = self._state["poses"][self.controller_id]
+                raw_pos = pose_matrix[:3, 3]
                 
-                # Complete calibration when joystick is released
-                elif joystick_released and self.calibrating_forward:
-                    self.calibrating_forward = False
-                    
-                    if self.debug:
-                        print(f"\n   Calibration ended with {len(self.calibration_positions)} samples")
-                    
-                    # Filter out duplicate positions
-                    unique_positions = [self.calibration_positions[0]]
-                    for pos in self.calibration_positions[1:]:
-                        if not np.allclose(pos, unique_positions[-1], atol=0.02):  # 2cm tolerance
-                            unique_positions.append(pos)
-                    
-                    if self.debug:
-                        print(f"   Unique positions: {len(unique_positions)}")
-                        print(f"   Total samples collected: {len(self.calibration_positions)}")
-                        if len(self.calibration_positions) >= 2:
-                            first_pos = self.calibration_positions[0]
-                            last_pos = self.calibration_positions[-1]
-                            total_movement = np.linalg.norm(last_pos - first_pos)
-                            print(f"   Raw first: [{first_pos[0]:.3f}, {first_pos[1]:.3f}, {first_pos[2]:.3f}]")
-                            print(f"   Raw last: [{last_pos[0]:.3f}, {last_pos[1]:.3f}, {last_pos[2]:.3f}]")
-                            print(f"   Raw movement: {total_movement:.3f}m")
-                        if len(unique_positions) >= 2:
-                            print(f"   Filtered first: [{unique_positions[0][0]:.3f}, {unique_positions[0][1]:.3f}, {unique_positions[0][2]:.3f}]")
-                            print(f"   Filtered last: [{unique_positions[-1][0]:.3f}, {unique_positions[-1][1]:.3f}, {unique_positions[-1][2]:.3f}]")
-                        else:
-                            print(f"   All positions within 2cm of each other")
-                    
-                    if len(unique_positions) >= 2:  # Need at least start and end position
-                        # Calculate forward direction from movement
-                        start_pos = np.array(unique_positions[0])
-                        end_pos = np.array(unique_positions[-1])
-                        forward_vec = end_pos - start_pos
-                        
-                        if self.debug:
-                            print(f"   Start: [{start_pos[0]:.3f}, {start_pos[1]:.3f}, {start_pos[2]:.3f}]")
-                            print(f"   End: [{end_pos[0]:.3f}, {end_pos[1]:.3f}, {end_pos[2]:.3f}]")
-                            print(f"   Movement: [{forward_vec[0]:.3f}, {forward_vec[1]:.3f}, {forward_vec[2]:.3f}]")
-                        
-                        # Check if there was enough movement
-                        movement_distance = np.linalg.norm(forward_vec)
-                        if movement_distance > 0.05:  # 5cm minimum movement
-                            forward_vec_normalized = forward_vec / movement_distance  # Normalize
-                            
-                            if self.debug:
-                                print(f"\n✅ Forward direction calibrated!")
-                                print(f"   Movement direction: [{forward_vec[0]:.3f}, {forward_vec[1]:.3f}, {forward_vec[2]:.3f}]")
-                                print(f"   Normalized: [{forward_vec_normalized[0]:.3f}, {forward_vec_normalized[1]:.3f}, {forward_vec_normalized[2]:.3f}]")
-                                print(f"   Total movement: {movement_distance:.3f}m")
-                            
-                            # Determine which axis had the most movement
-                            abs_movement = np.abs(forward_vec)
-                            dominant_axis = np.argmax(abs_movement)
-                            axis_names = ['X', 'Y', 'Z']
-                            
-                            if self.debug:
-                                print(f"   Dominant axis: {axis_names[dominant_axis]} ({forward_vec[dominant_axis]:.3f}m)")
-                            
-                            # Create a calibration matrix that maps the movement direction to robot forward
-                            # The goal is to make the user's forward motion map to robot's forward (X) motion
-                            # We need to create a rotation that aligns the movement vector with [1, 0, 0] (robot forward)
-                            
-                            # First, let's create the target forward vector in robot space
-                            robot_forward = np.array([1.0, 0.0, 0.0])  # Robot forward is +X
-                            
-                            # Calculate the rotation needed to align movement with robot forward
-                            # Using Rodrigues' rotation formula
-                            rotation_axis = np.cross(forward_vec_normalized, robot_forward)
-                            rotation_angle = np.arccos(np.clip(np.dot(forward_vec_normalized, robot_forward), -1.0, 1.0))
-                            
-                            if np.linalg.norm(rotation_axis) > 0.001:
-                                rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
-                                # Create rotation matrix
-                                K = np.array([[0, -rotation_axis[2], rotation_axis[1]],
-                                             [rotation_axis[2], 0, -rotation_axis[0]],
-                                             [-rotation_axis[1], rotation_axis[0], 0]])
-                                R_calibration = np.eye(3) + np.sin(rotation_angle) * K + (1 - np.cos(rotation_angle)) * K @ K
-                            else:
-                                # Movement is already aligned with robot forward or backward
-                                if forward_vec_normalized[0] < 0:  # Moving backward
-                                    # Rotate 180 degrees around Z axis
-                                    R_calibration = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
-                                else:
-                                    R_calibration = np.eye(3)
-                            
-                            # Update the VR to global transformation
-                            # This matrix will transform VR coordinates so that the user's forward motion
-                            # becomes robot forward motion
-                            self.vr_to_global_mat = np.eye(4)
-                            self.vr_to_global_mat[:3, :3] = R_calibration
-                            
-                            if self.debug:
-                                print(f"   Calibration matrix applied")
-                                # Test the calibration
-                                test_forward = R_calibration @ forward_vec_normalized
-                                print(f"   Test: Your forward [{forward_vec_normalized[0]:.2f}, {forward_vec_normalized[1]:.2f}, {forward_vec_normalized[2]:.2f}]")
-                                print(f"         maps to robot [{test_forward[0]:.2f}, {test_forward[1]:.2f}, {test_forward[2]:.2f}]")
-                        else:
-                            if self.debug:
-                                print(f"\n⚠️  Not enough movement detected ({movement_distance:.3f}m). Please move controller at least 5cm forward.")
+                # Always append the raw position during calibration
+                self.calibration_positions.append(raw_pos.copy())
+                
+                # Track the furthest point reached
+                current_distance = np.linalg.norm(raw_pos - self.calibration_start_pos)
+                if current_distance > self.calibration_max_distance:
+                    self.calibration_max_distance = current_distance
+                    self.calibration_furthest_pos = raw_pos.copy()
+                
+                # Debug: Show position collection
+                if self.debug and len(self.calibration_positions) % 25 == 0:
+                    print(f"🔍 Collecting position #{len(self.calibration_positions)}: [{raw_pos[0]:.6f}, {raw_pos[1]:.6f}, {raw_pos[2]:.6f}]")
+                
+                # Show progress periodically
+                if len(self.calibration_positions) % 10 == 0:
+                    movement = np.linalg.norm(raw_pos - self.calibration_start_pos)
+                    progress_percent = min(100, (self.calibration_max_distance / 0.005) * 100)  # Progress toward 5mm goal
+                    if self.calibration_max_distance < 0.005:
+                        print(f"   Tracking movement: {movement:.6f}m ({progress_percent:.0f}% to 5mm goal) - Keep moving!")
                     else:
-                        if self.debug:
-                            print(f"\n⚠️  No movement detected. Please move the controller while holding the joystick button.")
+                        print(f"   Tracking movement: {movement:.6f}m ✅ Ready to release joystick!")
+            
+            # Complete calibration when joystick is released
+            elif joystick_released and self.calibrating_forward:
+                self.calibrating_forward = False
+                
+                print(f"\n   Calibration ended with {len(self.calibration_positions)} samples")
+                
+                # Use the furthest point reached during calibration
+                if len(self.calibration_positions) >= 2 and self.calibration_max_distance > 0:
+                    print(f"   Using furthest point reached during calibration")
+                    
+                    # Calculate movement vector to furthest point
+                    start_pos = np.array(self.calibration_start_pos)
+                    furthest_pos = np.array(self.calibration_furthest_pos)
+                    forward_vec = furthest_pos - start_pos
+                    
+                    print(f"   Start (raw VR): [{start_pos[0]:.6f}, {start_pos[1]:.6f}, {start_pos[2]:.6f}]")
+                    print(f"   Furthest (raw VR): [{furthest_pos[0]:.6f}, {furthest_pos[1]:.6f}, {furthest_pos[2]:.6f}]")
+                    print(f"   Movement (raw VR): [{forward_vec[0]:.6f}, {forward_vec[1]:.6f}, {forward_vec[2]:.6f}]")
+                    
+                    # Check if there was enough movement
+                    movement_distance = self.calibration_max_distance
+                    if movement_distance > 0.005:  # 5mm minimum movement
+                        forward_vec_normalized = forward_vec / movement_distance  # Normalize
+                        
+                        print(f"\n✅ Forward direction calibrated!")
+                        print(f"   Maximum movement reached: {movement_distance:.6f}m")
+                        print(f"   Movement direction (normalized): [{forward_vec_normalized[0]:.6f}, {forward_vec_normalized[1]:.6f}, {forward_vec_normalized[2]:.6f}]")
+                        
+                        # Now we need to figure out what this movement becomes after the global_to_env transformation
+                        # Apply only the reordering transformation to see where this vector goes
+                        temp_mat = np.eye(4)
+                        temp_mat[:3, 3] = forward_vec_normalized
+                        transformed_temp = self.global_to_env_mat @ temp_mat
+                        transformed_forward = transformed_temp[:3, 3]
+                        
+                        print(f"   After reordering: [{transformed_forward[0]:.6f}, {transformed_forward[1]:.6f}, {transformed_forward[2]:.6f}]")
+                        
+                        # We want the transformed forward to align with robot's +X axis
+                        robot_forward = np.array([1.0, 0.0, 0.0])
+                        
+                        # Calculate rotation to align transformed_forward with robot_forward
+                        rotation_axis = np.cross(transformed_forward, robot_forward)
+                        rotation_angle = np.arccos(np.clip(np.dot(transformed_forward, robot_forward), -1.0, 1.0))
+                        
+                        if np.linalg.norm(rotation_axis) > 0.001:
+                            rotation_axis = rotation_axis / np.linalg.norm(rotation_axis)
+                            # Create rotation matrix using Rodrigues' formula
+                            K = np.array([[0, -rotation_axis[2], rotation_axis[1]],
+                                         [rotation_axis[2], 0, -rotation_axis[0]],
+                                         [-rotation_axis[1], rotation_axis[0], 0]])
+                            R_calibration = np.eye(3) + np.sin(rotation_angle) * K + (1 - np.cos(rotation_angle)) * K @ K
+                        else:
+                            # Movement is already aligned with robot forward or backward
+                            if transformed_forward[0] < 0:  # Moving backward
+                                # Rotate 180 degrees around Z axis
+                                R_calibration = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])
+                            else:
+                                R_calibration = np.eye(3)
+                        
+                        # Update the VR to global transformation
+                        # This matrix will be applied BEFORE the global_to_env transformation
+                        self.vr_to_global_mat = np.eye(4)
+                        self.vr_to_global_mat[:3, :3] = R_calibration
+                        
+                        print(f"   Calibration matrix applied")
+                        
+                        # Test the calibration
+                        test_mat = np.eye(4)
+                        test_mat[:3, 3] = forward_vec_normalized
+                        test_result = self.global_to_env_mat @ self.vr_to_global_mat @ test_mat
+                        test_forward = test_result[:3, 3]
+                        print(f"   Test: Your forward motion in VR space")
+                        print(f"         maps to robot space: [{test_forward[0]:.2f}, {test_forward[1]:.2f}, {test_forward[2]:.2f}]")
+                    else:
+                        print(f"\n⚠️  Not enough movement detected ({movement_distance:.6f}m). Please move controller at least 5mm forward.")
+                        print(f"   💡 Try making a more deliberate forward motion - move your whole arm, not just your wrist!")
+                else:
+                    print(f"\n⚠️  No movement detected. Please move the controller while holding the joystick button.")
             
             # Update previous button states for next iteration
             self.prev_grip_state = current_grip
@@ -469,8 +504,7 @@ class OculusVRServer:
             self.robot_origin = {"pos": self.robot_pos.copy(), "quat": self.robot_quat.copy()}
             self.vr_origin = {"pos": self.vr_state["pos"].copy(), "quat": self.vr_state["quat"].copy()}
             self.reset_origin = False
-            if self.debug:
-                print("📍 Origin calibrated")
+            print("📍 Origin calibrated")
         
         # Calculate Positional Action
         robot_pos_offset = self.robot_pos - self.robot_origin["pos"]
@@ -633,7 +667,7 @@ class OculusVRServer:
                             # Velocity-based gripper control
                             gripper_state = GRIPPER_CLOSE if target_gripper > 0.5 else GRIPPER_OPEN
                             self.robot_gripper = target_gripper
-                    
+                        
                         if self.debug:
                             # Debug mode - print status for ACTIVE teleoperation
                             if current_time - last_debug_time > 0.5:
@@ -684,29 +718,40 @@ class OculusVRServer:
                             self.robot_euler = quat_to_euler(robot_state.quat)
                             self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
                     else:
-                        # Not moving - just print status in debug mode
-                        if self.debug and current_time - last_debug_time > 0.5:
-                            print(f"\n📊 Debug Data [{message_count:04d}]:")
+                        # Not moving - show status periodically
+                        if current_time - last_debug_time > 0.5:
+                            if self.debug:
+                                print(f"\n📊 Debug Data [{message_count:04d}]:")
+                            
                             if self.calibrating_forward:
-                                print(f"   🎯 CALIBRATING FORWARD - Keep moving controller forward!")
+                                if not self.debug:
+                                    print(f"\n🎯 CALIBRATING FORWARD - Keep moving controller forward!")
+                                else:
+                                    print(f"   🎯 CALIBRATING FORWARD - Keep moving controller forward!")
+                                # Use real-time position data directly from state
                                 if self.controller_id in self._state["poses"]:
-                                    current_pos = self._state["poses"][self.controller_id][:3, 3]
-                                    print(f"   Current pos: [{current_pos[0]:.3f}, {current_pos[1]:.3f}, {current_pos[2]:.3f}]")
+                                    raw_pos = self._state["poses"][self.controller_id][:3, 3]
+                                    pose_matrix = self._state["poses"][self.controller_id]
+                                    transformed_pos = self._transform_vr_position(pose_matrix)
+                                    prefix = "   " if self.debug else ""
+                                    print(f"{prefix}   Current pos (raw): [{raw_pos[0]:.6f}, {raw_pos[1]:.6f}, {raw_pos[2]:.6f}]")
+                                    print(f"{prefix}   Current pos (transformed): [{transformed_pos[0]:.6f}, {transformed_pos[1]:.6f}, {transformed_pos[2]:.6f}]")
                                     if len(self.calibration_positions) > 0:
                                         start_pos = self.calibration_positions[0]
-                                        movement = np.linalg.norm(current_pos - start_pos)
-                                        print(f"   Start pos: [{start_pos[0]:.3f}, {start_pos[1]:.3f}, {start_pos[2]:.3f}]")
-                                        print(f"   Movement: {movement:.3f}m, Samples: {len(self.calibration_positions)}")
-                            else:
+                                        movement = np.linalg.norm(raw_pos - start_pos)
+                                        print(f"{prefix}   Start pos: [{start_pos[0]:.6f}, {start_pos[1]:.6f}, {start_pos[2]:.6f}]")
+                                        print(f"{prefix}   Movement: {movement:.6f}m, Samples: {len(self.calibration_positions)}")
+                            elif self.debug:
                                 print(f"   🔴 TELEOPERATION: INACTIVE (Hold grip button to enable)")
                             
                             # Show gripper status even when not moving
-                            trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
-                            if trigger_value > 0.1:
-                                gripper_status = f"🔴 CLOSED"
-                            else:
-                                gripper_status = f"🟢 OPEN"
-                            print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
+                            if self.debug:
+                                trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
+                                if trigger_value > 0.1:
+                                    gripper_status = f"🔴 CLOSED"
+                                else:
+                                    gripper_status = f"🟢 OPEN"
+                                print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
                             
                             last_debug_time = current_time
                     

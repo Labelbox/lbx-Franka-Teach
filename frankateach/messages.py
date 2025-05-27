@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple
 from scipy.spatial.transform import Rotation as R
 
 
@@ -11,8 +11,6 @@ class FrankaState:
     gripper: np.ndarray
     timestamp: float
     start_teleop: bool = False
-    joint_positions: Optional[np.ndarray] = None  # Added for joint state feedback
-    joint_velocities: Optional[np.ndarray] = None  # Added for joint state feedback
 
 
 @dataclass
@@ -22,8 +20,6 @@ class FrankaAction:
     gripper: np.ndarray
     reset: bool
     timestamp: float
-    joint_positions: Optional[np.ndarray] = None  # Added for joint control
-    control_mode: str = "CARTESIAN"  # "CARTESIAN" or "JOINT_POSITION"
 
 
 @dataclass

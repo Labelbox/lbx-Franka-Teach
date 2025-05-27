@@ -39,17 +39,12 @@ class FrankaServer:
     def get_state(self):
         quat, pos = self._robot.last_eef_quat_and_pos
         gripper = self._robot.last_gripper_action
-        joint_positions = self._robot.last_q
-        joint_velocities = self._robot.last_dq
-        
         if quat is not None and pos is not None and gripper is not None:
             state = FrankaState(
                 pos=pos.flatten().astype(np.float32),
                 quat=quat.flatten().astype(np.float32),
                 gripper=gripper,
                 timestamp=time.time(),
-                joint_positions=joint_positions.astype(np.float32) if joint_positions is not None else None,
-                joint_velocities=joint_velocities.astype(np.float32) if joint_velocities is not None else None,
             )
             return bytes(pickle.dumps(state, protocol=-1))
         else:
@@ -65,33 +60,14 @@ class FrankaServer:
                 else:
                     franka_control: FrankaAction = pickle.loads(command)
                     if franka_control.reset:
-                        # Handle reset with joint control if specified
-                        if hasattr(franka_control, 'control_mode') and franka_control.control_mode == "JOINT_POSITION" and hasattr(franka_control, 'joint_positions') and franka_control.joint_positions is not None:
-                            self._robot.reset_to_joint_positions(
-                                franka_control.joint_positions,
-                                gripper_open=franka_control.gripper
-                            )
-                        else:
-                            self._robot.reset_joints(gripper_open=franka_control.gripper)
+                        self._robot.reset_joints(gripper_open=franka_control.gripper)
                         time.sleep(1)
                     else:
-                        # Check control mode
-                        if hasattr(franka_control, 'control_mode') and franka_control.control_mode == "JOINT_POSITION":
-                            # Joint control mode
-                            if hasattr(franka_control, 'joint_positions') and franka_control.joint_positions is not None:
-                                self._robot.joint_move(
-                                    franka_control.joint_positions,
-                                    franka_control.gripper,
-                                )
-                            else:
-                                print("Warning: Joint control requested but no joint positions provided")
-                        else:
-                            # Default cartesian control
-                            self._robot.osc_move(
-                                franka_control.pos,
-                                franka_control.quat,
-                                franka_control.gripper,
-                            )
+                        self._robot.osc_move(
+                            franka_control.pos,
+                            franka_control.quat,
+                            franka_control.gripper,
+                        )
                     self.action_socket.send(self.get_state())
         except KeyboardInterrupt:
             pass
@@ -112,11 +88,6 @@ class Robot(FrankaInterface):
         self.velocity_controller_cfg = verify_controller_config(
             YamlConfig(
                 os.path.join(CONFIG_ROOT, "osc-pose-controller.yml")
-            ).as_easydict()
-        )
-        self.joint_controller_cfg = verify_controller_config(
-            YamlConfig(
-                os.path.join(CONFIG_ROOT, "joint-position-controller.yml")
             ).as_easydict()
         )
         self.last_gripper_dim = 6
@@ -161,60 +132,6 @@ class Robot(FrankaInterface):
                 action=action,
                 controller_cfg=self.velocity_controller_cfg,
             )
-
-    def joint_move(self, target_joint_positions, gripper_state):
-        """Move robot to target joint positions"""
-        # Ensure we have 7 joint values
-        if len(target_joint_positions) != 7:
-            print(f"Warning: Expected 7 joint positions, got {len(target_joint_positions)}")
-            return
-        
-        # Convert gripper state from GRIPPER_OPEN/CLOSE to -1/1
-        if gripper_state < 0.5:  # GRIPPER_OPEN = 0
-            gripper_action = -1
-        else:  # GRIPPER_CLOSE = 1
-            gripper_action = 1
-        
-        action = target_joint_positions.tolist() + [gripper_action]
-        
-        self.control(
-            controller_type="JOINT_POSITION",
-            action=action,
-            controller_cfg=self.joint_controller_cfg,
-        )
-
-    def reset_to_joint_positions(self, joint_positions, gripper_open=False, timeout=7):
-        """Reset robot to specific joint positions"""
-        assert len(joint_positions) == 7, f"Expected 7 joint positions, got {len(joint_positions)}"
-        
-        controller_cfg = get_default_controller_config(controller_type="JOINT_POSITION")
-        
-        if gripper_open:
-            gripper_action = -1
-        else:
-            gripper_action = 1
-        
-        action = joint_positions.tolist() + [gripper_action]
-        start_time = time.time()
-        
-        while True:
-            if self.received_states and self.check_nonzero_configuration():
-                if (
-                    np.max(np.abs(np.array(self.last_q) - np.array(joint_positions)))
-                    < 1e-3
-                ):
-                    break
-            self.control(
-                controller_type="JOINT_POSITION",
-                action=action,
-                controller_cfg=controller_cfg,
-            )
-            end_time = time.time()
-            
-            # Add timeout
-            if end_time - start_time > timeout:
-                break
-        return True
 
     def reset_joints(
         self,

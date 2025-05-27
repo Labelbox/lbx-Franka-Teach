@@ -3,6 +3,21 @@
 Oculus VR Server - Implements VRPolicy-style teleoperation control
 Based on droid/controllers/oculus_controller.py
 
+VR-to-Robot Control Pipeline:
+1. VR Data Capture: Raw poses from Oculus Reader (50Hz internal thread)
+2. Coordinate Transform: Apply calibrated transformation [X,Y,Z] → [Y,X,Z]
+3. Velocity Calculation: Position/rotation offsets with gains (pos=5, rot=2)
+4. Velocity Limiting: Clip to [-1, 1] range
+5. Delta Conversion: Scale by max_delta (0.075m linear, 0.15rad angular)
+6. Position Target: Add deltas to current position/orientation
+7. Deoxys Command: Send position + quaternion targets (15Hz)
+
+Key Differences from DROID:
+- DROID uses Polymetis (euler angles) vs our Deoxys (quaternions)
+- We skip IK solver (Deoxys handles internally)
+- Direct quaternion calculation for accurate rotation control
+- Calibrated axis mapping: VR [Roll=Y, Pitch=X, Yaw=Z]
+
 Features:
 - Velocity-based control with DROID-exact parameters
 - Intuitive forward direction calibration (hold joystick + move forward)
@@ -123,6 +138,10 @@ class OculusVRServer:
         self.gripper_action_gain = 3.0
         self.control_hz = 15
         self.control_interval = 1.0 / self.control_hz
+        
+        # DROID IK solver parameters for velocity-to-delta conversion
+        self.max_lin_delta = 0.075  # Maximum linear movement per control cycle
+        self.max_rot_delta = 0.15   # Maximum rotation per control cycle (radians)
         
         # Coordinate transformation
         # Default: DROID exact from oculus_controller.py: rmat_reorder: list = [-2, -1, -3, 4]
@@ -665,17 +684,33 @@ class OculusVRServer:
     def velocity_to_position_target(self, velocity_action, current_pos, current_quat, action_info=None):
         """Convert velocity action to position target for deoxys control
         
-        This is the key difference from DROID - Deoxys expects quaternions directly,
-        while DROID's Polymetis converts euler angles to quaternions internally.
+        This implements DROID-style velocity-to-delta conversion:
+        - Velocities are normalized to [-1, 1] range
+        - Scaled by max_delta parameters (not just dt)
+        - Matches DROID's IK solver behavior
         """
         # Extract components
         lin_vel = velocity_action[:3]
         rot_vel = velocity_action[3:6]
         gripper_vel = velocity_action[6]
         
-        # Calculate position delta (velocity * dt)
-        pos_delta = lin_vel * self.control_interval
-        rot_delta = rot_vel * self.control_interval
+        # DROID-style velocity to delta conversion
+        # Velocities are already clipped to [-1, 1] and represent fraction of max velocity
+        # Scale by max_delta (which incorporates the control frequency)
+        lin_vel_norm = np.linalg.norm(lin_vel)
+        rot_vel_norm = np.linalg.norm(rot_vel)
+        
+        # Apply DROID's scaling
+        if lin_vel_norm > 1:
+            lin_vel = lin_vel / lin_vel_norm
+        if rot_vel_norm > 1:
+            rot_vel = rot_vel / rot_vel_norm
+            
+        # Convert to position delta using DROID's max_delta parameters
+        pos_delta = lin_vel * self.max_lin_delta
+        rot_delta = rot_vel * self.max_rot_delta
+        
+        # Gripper uses simple scaling
         gripper_delta = gripper_vel * self.control_interval
         
         # Calculate target position

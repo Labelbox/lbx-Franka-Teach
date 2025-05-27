@@ -1,201 +1,206 @@
 # Franka-Teach
 
-Bi-Manual Franka 3 robot setup.
+A comprehensive teleoperation and data collection system for Franka robots, featuring VR control via Meta Quest, MCAP data recording, and simulation support.
 
-## NUC Setup
+## Features
 
-1. Install Ubuntu 22.04 and a real-time kernel
-2. Make sure the NUC is booted with the real-time kernel [[link](https://frankaemika.github.io/docs/installation_linux.html#setting-up-the-real-time-kernel)].
+- **VR Teleoperation**: Full 6DOF control using Meta Quest/Oculus controllers
+- **MCAP Recording**: DROID-compatible data format for robot learning
+- **Multi-Camera Support**: Intel RealSense and ZED camera integration
+- **Simulation Mode**: Test without hardware using FR3 robot simulation
+- **Real-time Control**: 15-30Hz control loop with safety features
 
-## Lambda Machine Setup
+## Table of Contents
 
-todo: how to setup network, etc.
+- [System Requirements](#system-requirements)
+- [Installation](#installation)
+  - [NUC Setup](#nuc-setup)
+  - [Lambda Machine Setup](#lambda-machine-setup)
+- [Quick Start](#quick-start)
+- [VR Teleoperation](#vr-teleoperation)
+- [Data Recording](#data-recording)
+- [Camera Setup](#camera-setup)
+- [Simulation Mode](#simulation-mode)
+- [Troubleshooting](#troubleshooting)
+- [Additional Documentation](#additional-documentation)
 
-1. Setup deoxys_control. NOTE: When doing `./InstallPackage`, select `0.13.3` for installing libfranka:
+## System Requirements
+
+### Hardware
+- Franka Emika Robot (FR3 or Panda)
+- NUC computer with real-time kernel
+- Lambda workstation or similar
+- Meta Quest 2/3 or Oculus headset
+- Intel RealSense or ZED cameras (optional)
+
+### Software
+- Ubuntu 22.04 (NUC) / Ubuntu 20.04+ (Lambda)
+- CUDA-capable GPU (for Lambda machine)
+- Python 3.10+
+- Real-time kernel (NUC only)
+
+## Installation
+
+### NUC Setup
+
+1. **Install Ubuntu 22.04 with real-time kernel**
+   ```bash
+   # Follow instructions at:
+   # https://frankaemika.github.io/docs/installation_linux.html#setting-up-the-real-time-kernel
+   ```
+
+2. **Configure network settings**
+   - Set static IP for robot network interface
+   - Ensure NUC can communicate with robot at 172.16.0.4 (right) and 172.16.1.4 (left)
+
+### Lambda Machine Setup
+
+1. **Clone and setup deoxys_control**
+   ```bash
+   git clone git@github.com:NYU-robot-learning/deoxys_control.git
+   cd deoxys_control/deoxys
+   
+   # Create conda environment
+   mamba create -n "franka_teach" python=3.10
+   conda activate franka_teach
+   
+   # Install deoxys (select version 0.13.3 for libfranka when prompted)
+   ./InstallPackage
+   make -j build_deoxys=1
+   pip install -U -r requirements.txt
+   ```
+
+2. **Clone and setup Franka-Teach**
+   ```bash
+   git clone <your-franka-teach-repo>
+   cd Franka-Teach
+   pip install -r requirements.txt
+   ```
+
+3. **Install ReSkin sensor library (optional)**
+   ```bash
+   git clone git@github.com:NYU-robot-learning/reskin_sensor.git
+   cd reskin_sensor
+   pip install -e .
+   ```
+
+4. **Setup Oculus Reader for VR control**
+   ```bash
+   cd oculus_reader_app
+   # Follow instructions in oculus_reader_app/README.md
+   ```
+
+### Network Proxy Setup
+
+1. **Install FoxyProxy extension** in Chrome/Firefox
+
+2. **Configure SSH host** in `~/.ssh/config`:
+   ```
+   Host nuc
+       HostName 10.19.248.70
+       User robot-lab
+       LogLevel ERROR
+       DynamicForward 1337
+   ```
+
+3. **Configure FoxyProxy** to use SOCKS5 proxy on localhost:1337
+
+## Quick Start
+
+### 1. Connect to Robot
 
 ```bash
-git clone git@github.com:NYU-robot-learning/deoxys_control.git
-mamba create -n "franka_teach" python=3.10
-conda activate franka_teach
-cd deoxys_control/deoxys
-
-# Instructions from deoxys repo (this takes a while to build everything)
-./InstallPackage
-make -j build_deoxys=1
-pip install -U -r requirements.txt
-```
-
-2. Install the Franka-Teach requirements:
-
-```bash
-cd /path/to/Franka-Teach
-pip install -r requirements.txt
-```
-
-3. Install ReSkin sensor library:
-
-```bash
-git clone git@github.com:NYU-robot-learning/reskin_sensor.git
-cd reskin_sensor
-pip install -e .
-```
-
-## Proxy Setup
-
-1. Install FoxyProxy extension on Chrome or Firefox. Set up the proxy like this:
-
-![Foxy Proxy](./imgs/foxy_proxy.png)
-
-2. Setup NUC as an ssh host like this:
-
-```bash
-Host nuc
-    HostName 10.19.248.70
-    User robot-lab
-    LogLevel ERROR
-    DynamicForward 1337
-```
-
-## How to run the Franka-Teach environment
-
-1. Ssh into the nuc:
-
-```bash
+# SSH into NUC
 ssh nuc
+
+# Access Franka Desk interface via browser (with proxy enabled)
+# Right robot: http://172.16.0.4/desk
+# Left robot: http://172.16.1.4/desk
+# Username: GRAIL
+# Password: grail1234
 ```
 
-2. Go to `172.16.0.4/desk` for the Franka Desk interface for the right robot and `172.16.1.4/desk` for the left robot.
+### 2. Enable Robot
 
-The following credentials are used for the Franka Desk interface:
+In Franka Desk interface:
+1. Click "Unlock joints" (open brakes)
+2. Enable FCI mode
+3. If gripper issues: Settings → End Effector → Power cycle → Re-initialize
 
-```
-Username: GRAIL
-Password: grail1234
-```
-
-NOTE: Franka Desk is cursed. You might face all sorts of issues with it. General troubleshooting:
-
-- If it doesn't seem to connect, keep refreshing. If you lose all hope, reboot the robot.
-- If end-effector doesn't show as active, you can go to the settings page and do a power off/on for the end-effector. You need to re-initialize the gripper in the same page after doing a power cycle.
-- Two desk pages (for two robots) cannot be open at the same time. Close one tab and connect to the other one.
-
-3. Open the brakes for the robot:
-
-![open_brakes](./imgs/unlock_joints.png)
-
-4. Enable FCI mode:
-
-![fci](./imgs/fci.png)
-
-5. Start the deoxys control process on the NUC:
+### 3. Start Deoxys Control (on NUC)
 
 ```bash
+# Terminal 1: Start arm control
 cd /home/robot-lab/work/deoxys_control/deoxys
-./auto_scripts/auto_arm.sh config/franka_left.yml # franka_right.yml for the right robot
-./auto_scripts/auto_gripper.sh config/franka_left.yml # in a different terminal, if you want to use the gripper
+./auto_scripts/auto_arm.sh config/franka_right.yml  # or franka_left.yml
+
+# Terminal 2: Start gripper control (optional)
+./auto_scripts/auto_gripper.sh config/franka_right.yml
 ```
 
-6. From the Lambda, start servers:
+### 4. Start Servers (on Lambda)
 
 ```bash
-cd /path/to/Franka-Teach/
-python3 franka_server.py
-python3 camera_server.py # in a different terminal
+# Terminal 1: Start Franka server
+cd /path/to/Franka-Teach
+python franka_server.py
+
+# Terminal 2: Start camera server (optional)
+python camera_server.py --config camera_config_example.json
 ```
 
-7. TODO: run franka_env test script:
+### 5. Start VR Teleoperation with Recording
 
 ```bash
-cd /path/to/Franka-Teach/
-python3 test_franka_env.py
+# Terminal 3: Start Oculus VR server with MCAP recording
+python oculus_vr_server.py
+
+# Or with specific options:
+python oculus_vr_server.py --left-controller  # Use left controller
+python oculus_vr_server.py --simulation       # Test in simulation
+python oculus_vr_server.py --debug           # Debug mode (no robot control)
+python oculus_vr_server.py --no-recording    # Disable MCAP recording
 ```
 
-## How to teleoperate
+## VR Teleoperation
 
-1. Do the steps until 6 in the "How to run the Franka-Teach environment" section.
+### Controller Setup
 
-2. Choose your control method:
+1. **Connect Quest headset** via USB or WiFi
+2. **Test connection**: `python test_oculus_reader.py`
+3. **Calibrate forward direction**: Hold joystick + move controller forward
 
-### Option A: Mouse Control (Simple 2D)
+### Control Scheme
 
-For basic 2D control using mouse, see [mouse_control_readme.md](mouse_control_readme.md).
+#### Right Controller (default)
+- **Hold Grip**: Enable robot movement
+- **Release Grip**: Pause movement (robot stays in place)
+- **Hold Trigger**: Close gripper
+- **Release Trigger**: Open gripper
+- **Joystick Press**: Reset controller orientation
 
-### Option B: Oculus VR Control (Full 6DOF)
+#### Recording Controls (when enabled)
+- **A Button**: Start new recording / Reset current recording
+- **B Button**: Mark recording as successful and save
 
-For full 6DOF control using Meta Quest VR controllers:
+See [oculus_control_readme.md](oculus_control_readme.md) for detailed VR control instructions.
 
-```bash
-# First test the Oculus connection
-python3 test_oculus_reader.py
+## Data Recording
 
-# If test passes, start the Oculus VR server
-python3 oculus_vr_server.py
+The system supports MCAP data recording in Labelbox Robotics format:
+- Press **A button** to start/reset recording
+- Press **B button** to mark recording as successful and save
+- Recordings are saved to `~/recordings/success/` or `~/recordings/failure/`
+- See [MCAP_RECORDING_README.md](MCAP_RECORDING_README.md) for details
 
-# Or use debug mode to test without robot
-python3 oculus_vr_server.py --debug
-```
+### Visualizing Robot in Foxglove Studio
 
-See [oculus_control_readme.md](oculus_control_readme.md) for detailed setup and usage instructions.
+The MCAP recordings include the robot URDF model and joint states for visualization:
+- See [FOXGLOVE_ROBOT_VISUALIZATION.md](FOXGLOVE_ROBOT_VISUALIZATION.md) for setup instructions
+- Test with `python3 test_foxglove_robot.py` to create a sample file
 
-3. Start the teleoperation script. Set the teleop mode based on if you are collecting human or robot demonstrations:
+## Camera Setup
 
-```bash
-python3 teleop.py teleop_mode=<human/robot>
-```
+### Configure Cameras
 
-4. You can start the data collection by running the `collect_data.py` script. Set the `demo_num` to the number of demonstrations you want to collect and `collect_depth` to `True` if you want to collect depth data from the Intel realsense cameras.
-
-```bash
-python3 collect_data.py demo_num=0 collect_depth=<True/False>
-```
-
-5. Control methods:
-   - **Mouse Control**: Hold left-click and move mouse for 2D position control
-   - **Oculus VR**: Hold grip button and move controller for full 6DOF control, use trigger for gripper
-   - **Human Mode**: Use VR controller buttons to start/stop recording while manually moving the robot
-
-## Simulation Mode
-
-The Franka-Teach environment now includes a full FR3 robot simulation for testing and development without physical hardware.
-
-### Features
-
-- Accurate FR3 kinematics and joint limits
-- Real-time 3D visualization
-- Compatible with all control methods (mouse, VR)
-- Same network interface as real robot
-
-### Running in Simulation
-
-To use the Oculus VR control with simulated robot:
-
-```bash
-# Run with visualization window
-python3 oculus_vr_server.py --simulation
-
-# Run in debug mode (prints data without robot control)
-python3 oculus_vr_server.py --simulation --debug
-```
-
-To run just the simulation server:
-
-```bash
-# With visualization
-python3 -m simulation.fr3_sim_server
-
-# Without visualization (headless mode)
-python3 -m simulation.fr3_sim_server --no-viz
-```
-
-### Testing the Simulation
-
-Run the simulation test suite:
-
-```bash
-cd simulation
-python3 test_simulation.py
-```
-
-This will test forward kinematics, visualization, trajectory animation, and controller functionality.
-
-See [simulation/README.md](simulation/README.md) for detailed documentation about the simulation module.
+Edit `

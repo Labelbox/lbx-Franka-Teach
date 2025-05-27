@@ -28,6 +28,7 @@ Features:
 - Safety limiting and workspace bounds
 - Deoxys-compatible quaternion handling
 - FR3 robot simulation mode
+- MCAP data recording with Labelbox Robotics format
 """
 
 import zmq
@@ -57,6 +58,10 @@ from deoxys.utils import transform_utils
 
 # Import simulation components
 from simulation.fr3_sim_server import FR3SimServer
+
+# Import MCAP data recorder
+from frankateach.mcap_data_recorder import MCAPDataRecorder
+from frankateach.mcap_verifier import MCAPVerifier
 
 
 def vec_to_reorder_mat(vec):
@@ -112,7 +117,10 @@ class OculusVRServer:
                  simulation=False,
                  coord_transform=None,
                  rotation_mode="labelbox",
-                 performance_mode=False):
+                 performance_mode=False,
+                 enable_recording=True,
+                 camera_configs=None,
+                 verify_data=False):
         """
         Initialize the Oculus VR Server with DROID-exact VRPolicy control
         
@@ -124,11 +132,15 @@ class OculusVRServer:
             coord_transform: Custom coordinate transformation vector (default: adjusted for compatibility)
             rotation_mode: Rotation mapping mode - currently only "labelbox" is supported
             performance_mode: If True, enable performance optimizations
+            enable_recording: If True, enable MCAP data recording functionality
+            camera_configs: Camera configuration dictionary for recording
+            verify_data: If True, verify MCAP data after successful recording
         """
         self.debug = debug
         self.right_controller = right_controller
         self.simulation = simulation
         self.running = True
+        self.verify_data = verify_data
         
         # DROID VRPolicy exact parameters - no customization
         self.max_lin_vel = 1.0
@@ -249,6 +261,20 @@ class OculusVRServer:
                 print(f"❌ Failed to connect to robot: {e}")
                 sys.exit(1)
         
+        # Initialize MCAP data recorder
+        self.enable_recording = enable_recording
+        self.data_recorder = None
+        self.recording_active = False
+        self.prev_a_button = False  # For edge detection
+        
+        if self.enable_recording:
+            self.data_recorder = MCAPDataRecorder(
+                camera_configs=camera_configs,
+                save_images=True,
+                save_depth=False
+            )
+            print("📹 MCAP data recording enabled")
+        
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
@@ -272,8 +298,15 @@ class OculusVRServer:
         print("   - RELEASE grip button: Pause teleoperation")
         print("   - PRESS trigger: Close gripper")
         print("   - RELEASE trigger: Open gripper")
-        print("   - A/X button: Mark success and exit")
-        print("   - B/Y button: Mark failure and exit")
+        
+        if self.enable_recording:
+            print("\n📹 Recording Controls:")
+            print("   - A button: Start/reset recording")
+            print("   - B button: Mark recording as successful and save")
+            print("   - Recordings saved to: ~/recordings/")
+        else:
+            print("   - A/X button: Mark success and exit")
+            print("   - B/Y button: Mark failure and exit")
         
         print("\n🧭 Forward Direction Calibration:")
         print("   - HOLD joystick button and MOVE controller forward")
@@ -357,6 +390,7 @@ class OculusVRServer:
         self.robot_quat = None
         self.robot_euler = None
         self.robot_gripper = 0.0
+        self.robot_joint_positions = None
         
         # Button state tracking for edge detection
         self.prev_joystick_state = False
@@ -736,7 +770,7 @@ class OculusVRServer:
         if self.debug:
             print("🔄 [DEBUG] Would reset robot to initial position")
             # Return simulated values
-            return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0])
+            return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0]), None
         
         print("🔄 Resetting robot to initial position...")
         action = FrankaAction(
@@ -754,7 +788,8 @@ class OculusVRServer:
         print(f"   Position: [{robot_state.pos[0]:.6f}, {robot_state.pos[1]:.6f}, {robot_state.pos[2]:.6f}]")
         print(f"   Quaternion: [{robot_state.quat[0]:.6f}, {robot_state.quat[1]:.6f}, {robot_state.quat[2]:.6f}, {robot_state.quat[3]:.6f}]")
         
-        return robot_state.pos, robot_state.quat
+        joint_positions = getattr(robot_state, 'joint_positions', None)
+        return robot_state.pos, robot_state.quat, joint_positions
     
     def velocity_to_position_target(self, velocity_action, current_pos, current_quat, action_info=None):
         """Convert velocity action to position target for deoxys control
@@ -865,22 +900,24 @@ class OculusVRServer:
                 
                 # Initialize robot on first frame
                 if self.is_first_frame:
-                    init_pos, init_quat = self.reset_robot()
+                    init_pos, init_quat, init_joint_positions = self.reset_robot()
                     self.robot_pos = init_pos
                     self.robot_quat = init_quat
                     self.robot_euler = quat_to_euler(init_quat)
                     self.robot_gripper = 0.0
+                    self.robot_joint_positions = init_joint_positions
                     self.is_first_frame = False
                 
                 # Handle robot reset after calibration
                 if hasattr(self, '_reset_robot_after_calibration') and self._reset_robot_after_calibration:
                     self._reset_robot_after_calibration = False
                     print("🤖 Executing robot reset after calibration...")
-                    reset_pos, reset_quat = self.reset_robot()
+                    reset_pos, reset_quat, reset_joint_positions = self.reset_robot()
                     self.robot_pos = reset_pos
                     self.robot_quat = reset_quat
                     self.robot_euler = quat_to_euler(reset_quat)
                     self.robot_gripper = 0.0
+                    self.robot_joint_positions = reset_joint_positions
                     # Clear any pending actions
                     self.reset_origin = True
                     print("✅ Robot is now at home position, ready for teleoperation")
@@ -892,20 +929,65 @@ class OculusVRServer:
                     # Get controller info
                     info = self.get_info()
                     
-                    # Check for success/failure buttons
-                    if info["success"]:
-                        print("\n✅ Success button pressed!")
-                        if not self.debug:
-                            # Send termination signal
-                            self.stop_server()
-                            break
-                    
-                    if info["failure"]:
-                        print("\n❌ Failure button pressed!")
-                        if not self.debug:
-                            # Send termination signal
-                            self.stop_server()
-                            break
+                    # Handle recording controls (only when recording is enabled)
+                    if self.enable_recording and self.data_recorder:
+                        # A button: Start/Reset recording
+                        current_a_button = info["success"]
+                        if current_a_button and not self.prev_a_button:  # Rising edge
+                            if self.recording_active:
+                                # Reset recording
+                                print("\n🔄 A button pressed - Resetting recording...")
+                                self.data_recorder.reset_recording()
+                                print("📹 Recording restarted")
+                            else:
+                                # Start recording
+                                print("\n▶️  A button pressed - Starting recording...")
+                                self.data_recorder.start_recording()
+                                self.recording_active = True
+                                print("📹 Recording started")
+                                print("   Press A again to reset/restart")
+                                print("   Press B to mark as successful and save")
+                        self.prev_a_button = current_a_button
+                        
+                        # B button: Mark as successful and stop
+                        if info["failure"] and self.recording_active:
+                            print("\n✅ B button pressed - Marking recording as successful...")
+                            saved_filepath = self.data_recorder.stop_recording(success=True)
+                            self.recording_active = False
+                            print("📹 Recording saved successfully")
+                            
+                            # Verify data if requested
+                            if self.verify_data and saved_filepath:
+                                print("\n🔍 Verifying recorded data...")
+                                try:
+                                    verifier = MCAPVerifier(saved_filepath)
+                                    results = verifier.verify(verbose=True)
+                                    
+                                    # Check if verification passed
+                                    if not results["summary"]["is_valid"]:
+                                        print("\n⚠️  WARNING: Data verification found issues!")
+                                        print("   The recording may not be suitable for training.")
+                                except Exception as e:
+                                    print(f"\n❌ Error during verification: {e}")
+                                    import traceback
+                                    traceback.print_exc()
+                            
+                            print("\n   Press A to start a new recording")
+                    else:
+                        # Original behavior when recording is disabled
+                        if info["success"]:
+                            print("\n✅ Success button pressed!")
+                            if not self.debug:
+                                # Send termination signal
+                                self.stop_server()
+                                break
+                        
+                        if info["failure"]:
+                            print("\n❌ Failure button pressed!")
+                            if not self.debug:
+                                # Send termination signal
+                                self.stop_server()
+                                break
                     
                     # Calculate action if movement is enabled
                     if info["movement_enabled"] and self._state["poses"]:
@@ -925,11 +1007,67 @@ class OculusVRServer:
                         # Update robot gripper state for tracking
                         self.robot_gripper = 1.0 if gripper_state == GRIPPER_CLOSE else 0.0
                         
+                        # Send action to robot (or simulate)
+                        if not self.debug:
+                            # Send action to robot - DEOXYS EXPECTS QUATERNIONS
+                            robot_action = FrankaAction(
+                                pos=target_pos.flatten().astype(np.float32),
+                                quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
+                                gripper=gripper_state,
+                                reset=False,
+                                timestamp=time.time(),
+                            )
+                            
+                            self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
+                            robot_state = pickle.loads(self.action_socket.recv())
+                            
+                            # Update robot state from actual feedback
+                            self.robot_pos = robot_state.pos
+                            self.robot_quat = robot_state.quat
+                            self.robot_euler = quat_to_euler(robot_state.quat)
+                            self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
+                            self.robot_joint_positions = getattr(robot_state, 'joint_positions', None)
+                        else:
+                            # In debug mode, simulate robot state update
+                            self.robot_pos = target_pos
+                            self.robot_quat = target_quat
+                            self.robot_euler = quat_to_euler(target_quat)
+                        
+                        # Record data if recording is active - Labelbox Robotics format timestep recording
+                        if self.recording_active and self.data_recorder:
+                            # Create timestep data structure in Labelbox Robotics format
+                            timestep = {
+                                "observation": {
+                                    "timestamp": {
+                                        "robot_state": {
+                                            "read_start": int(current_time * 1e9),  # Convert to nanoseconds
+                                            "read_end": int(current_time * 1e9)
+                                        }
+                                    },
+                                    "robot_state": {
+                                        "joint_positions": self.robot_joint_positions.tolist() if self.robot_joint_positions is not None else [],
+                                        "joint_velocities": [],
+                                        "joint_efforts": [],
+                                        "cartesian_position": np.concatenate([self.robot_pos, self.robot_euler]).tolist(),
+                                        "cartesian_velocity": [],
+                                        "gripper_position": self.robot_gripper,
+                                        "gripper_velocity": 0.0
+                                    },
+                                    "controller_info": info  # VR controller info
+                                },
+                                "action": action.tolist() if hasattr(action, 'tolist') else action  # The velocity action
+                            }
+                            
+                            # Write the complete timestep
+                            self.data_recorder.write_timestep(timestep, current_time)
+                        
                         if self.debug:
                             # Debug mode - print status for ACTIVE teleoperation
                             if current_time - last_debug_time > 0.5:
                                 print(f"\n📊 Debug Data [{message_count:04d}]:")
                                 print(f"   🟢 TELEOPERATION: ACTIVE")
+                                if self.recording_active:
+                                    print(f"   📹 RECORDING: ACTIVE")
                                 print(f"   Action (vel): [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}, "
                                       f"{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
                                 print(f"   Target Pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
@@ -1037,11 +1175,6 @@ class OculusVRServer:
                                     print(f"   ⚠️  Rotation velocity at limit!")
                                 
                                 last_debug_time = current_time
-                            
-                            # Simulate robot state update
-                            self.robot_pos = target_pos
-                            self.robot_quat = target_quat
-                            self.robot_euler = quat_to_euler(target_quat)
                         else:
                             # Send action to robot - DEOXYS EXPECTS QUATERNIONS
                             robot_action = FrankaAction(
@@ -1060,14 +1193,47 @@ class OculusVRServer:
                             self.robot_quat = robot_state.quat
                             self.robot_euler = quat_to_euler(robot_state.quat)
                             self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
+                            self.robot_joint_positions = getattr(robot_state, 'joint_positions', None)
                     else:
-                        # Not moving - show status periodically
+                        # Not moving but still record if recording is active
+                        if self.recording_active and self.data_recorder and self.robot_pos is not None:
+                            # Create timestep for non-movement
+                            timestep = {
+                                "observation": {
+                                    "timestamp": {
+                                        "robot_state": {
+                                            "read_start": int(current_time * 1e9),
+                                            "read_end": int(current_time * 1e9)
+                                        }
+                                    },
+                                    "robot_state": {
+                                        "joint_positions": self.robot_joint_positions.tolist() if self.robot_joint_positions is not None else [],
+                                        "joint_velocities": [],
+                                        "joint_efforts": [],
+                                        "cartesian_position": np.concatenate([self.robot_pos, self.robot_euler]).tolist(),
+                                        "cartesian_velocity": [],
+                                        "gripper_position": self.robot_gripper,
+                                        "gripper_velocity": 0.0
+                                    },
+                                    "controller_info": info
+                                },
+                                "action": np.zeros(7).tolist()  # Zero action when not moving
+                            }
+                            
+                            # Write the timestep
+                            self.data_recorder.write_timestep(timestep, current_time)
+                        
+                        # Show status periodically
                         if current_time - last_debug_time > 0.5:
                             if self.calibrating_forward:
                                 if self.debug:
                                     print(f"\n📊 Debug Data [{message_count:04d}]:")
                                     print(f"   🎯 CALIBRATING FORWARD - Keep moving controller forward!")
                                 # Status is printed in the state update thread
+                            elif self.recording_active and self.debug:
+                                print(f"\n📊 Debug Data [{message_count:04d}]:")
+                                print(f"   🔴 TELEOPERATION: PAUSED (grip not held)")
+                                print(f"   📹 RECORDING: ACTIVE")
                             
                             last_debug_time = current_time
                     
@@ -1100,6 +1266,12 @@ class OculusVRServer:
             
         print("🛑 Stopping Oculus VR Server...")
         self.running = False
+        
+        # Stop any active recording
+        if self.recording_active and self.data_recorder:
+            print("📹 Stopping active recording...")
+            self.data_recorder.stop_recording(success=False)
+            self.recording_active = False
         
         # Stop state thread
         if hasattr(self, '_state_thread'):
@@ -1143,12 +1315,18 @@ Features:
   - Intuitive forward direction calibration (hold joystick + move)
   - Deoxys-compatible quaternion handling
   - Origin recalibration on grip press/release
+  - MCAP data recording in DROID-compatible format
 
 Calibration:
   - Hold joystick button and move controller forward (at least 3mm)
   - The direction you move defines "forward" for the robot
   - Release joystick to complete calibration
   - Falls back to DROID-style calibration if no movement detected
+
+Recording (when enabled):
+  - Press A button to start/reset recording
+  - Press B button to mark recording as successful and save
+  - Recordings are saved in ~/recordings/success or ~/recordings/failure
 
 Note: This version is adapted for Deoxys control (quaternion-based) instead of
 Polymetis (euler angle-based). The rotation handling has been adjusted accordingly.
@@ -1172,6 +1350,12 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
                         help='Enable hot reload mode (auto-restart on file changes)')
     parser.add_argument('--performance', action='store_true',
                         help='Enable performance mode for tighter tracking (2x frequency, higher gains)')
+    parser.add_argument('--no-recording', action='store_true',
+                        help='Disable MCAP data recording functionality')
+    parser.add_argument('--camera-config', type=str, default=None,
+                        help='Path to camera configuration JSON file')
+    parser.add_argument('--verify-data', action='store_true',
+                        help='Verify MCAP data integrity after successful recording')
     
     args = parser.parse_args()
     
@@ -1198,6 +1382,18 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
             print("\n✅ Hot reload stopped")
         sys.exit(0)
     
+    # Load camera configuration if provided
+    camera_configs = None
+    if args.camera_config:
+        try:
+            import json
+            with open(args.camera_config, 'r') as f:
+                camera_configs = json.load(f)
+            print(f"📷 Loaded camera configuration from {args.camera_config}")
+        except Exception as e:
+            print(f"⚠️  Failed to load camera config: {e}")
+            print("   Continuing without camera configuration")
+    
     # Normal execution (no hot reload)
     # Create and start server with DROID-exact parameters
     coord_transform = args.coord_transform
@@ -1208,7 +1404,10 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
         simulation=args.simulation,
         coord_transform=coord_transform,
         rotation_mode=args.rotation_mode,
-        performance_mode=args.performance
+        performance_mode=args.performance,
+        enable_recording=not args.no_recording,
+        camera_configs=camera_configs,
+        verify_data=args.verify_data
     )
     
     try:

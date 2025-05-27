@@ -39,12 +39,15 @@ class FrankaServer:
     def get_state(self):
         quat, pos = self._robot.last_eef_quat_and_pos
         gripper = self._robot.last_gripper_action
+        joint_positions = self._robot.last_q  # Get joint positions
+        
         if quat is not None and pos is not None and gripper is not None:
             state = FrankaState(
                 pos=pos.flatten().astype(np.float32),
                 quat=quat.flatten().astype(np.float32),
                 gripper=gripper,
                 timestamp=time.time(),
+                joint_positions=np.array(joint_positions).astype(np.float32) if joint_positions is not None else None,
             )
             return bytes(pickle.dumps(state, protocol=-1))
         else:

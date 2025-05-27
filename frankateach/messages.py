@@ -10,6 +10,7 @@ class FrankaState:
     quat: np.ndarray
     gripper: np.ndarray
     timestamp: float
+    joint_positions: np.ndarray = None  # 7-DOF joint positions
     start_teleop: bool = False
 
 

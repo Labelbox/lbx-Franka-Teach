@@ -445,6 +445,10 @@ class OculusVRServer:
         self._robot_control_thread = None
         self._control_paused = False  # Flag to pause control during reset
         
+        # Recording at independent frequency
+        self.recording_hz = self.control_hz  # Record at same rate as control target
+        self.recording_interval = 1.0 / self.recording_hz
+        
     def reset_state(self):
         """Reset internal state - matches DROID exactly"""
         self._state = {
@@ -488,6 +492,9 @@ class OculusVRServer:
         
         # Position filtering state
         self._last_vr_pos = None
+        
+        # Last action for recording thread
+        self._last_action = np.zeros(7)
         
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
@@ -1011,6 +1018,13 @@ class OculusVRServer:
             self._mcap_writer_thread.start()
             self._threads.append(self._mcap_writer_thread)
             print("✅ MCAP writer thread started")
+            
+            # Start data recording thread
+            self._data_recording_thread = threading.Thread(target=self._data_recording_worker)
+            self._data_recording_thread.daemon = True
+            self._data_recording_thread.start()
+            self._threads.append(self._data_recording_thread)
+            print("✅ Data recording thread started")
         
         self._robot_control_thread = threading.Thread(target=self._robot_control_worker)
         self._robot_control_thread.daemon = True
@@ -1202,8 +1216,12 @@ class OculusVRServer:
     def _robot_control_worker(self):
         """Asynchronous robot control thread - sends commands at control frequency"""
         print("🤖 Robot control thread started")
+        print(f"   Target control frequency: {self.control_hz}Hz")
+        print(f"   Control interval: {self.control_interval*1000:.1f}ms")
         
         last_control_time = time.time()
+        control_count = 0
+        freq_check_time = time.time()
         
         while self.running:
             try:
@@ -1227,8 +1245,17 @@ class OculusVRServer:
                     if vr_state and robot_state:
                         # Process control command
                         self._process_control_cycle(vr_state, robot_state, current_time)
+                        control_count += 1
                     
                     last_control_time = current_time
+                    
+                    # Print actual frequency every second
+                    if current_time - freq_check_time >= 1.0:
+                        actual_freq = control_count / (current_time - freq_check_time)
+                        if self.recording_active:
+                            print(f"⚡ Control frequency: {actual_freq:.1f}Hz (target: {self.control_hz}Hz)")
+                        control_count = 0
+                        freq_check_time = current_time
                 
                 # Small sleep to prevent CPU spinning
                 time.sleep(0.001)
@@ -1241,6 +1268,86 @@ class OculusVRServer:
                     time.sleep(0.1)
         
         print("🤖 Robot control thread stopped")
+
+    def _data_recording_worker(self):
+        """Records data at target frequency independent of robot control"""
+        print("📊 Data recording thread started")
+        print(f"   Target recording frequency: {self.recording_hz}Hz")
+        
+        last_record_time = time.time()
+        record_count = 0
+        freq_check_time = time.time()
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Record at specified frequency
+                if current_time - last_record_time >= self.recording_interval:
+                    # Only record if recording is active
+                    if self.recording_active and self.data_recorder:
+                        # Get latest states
+                        with self._vr_state_lock:
+                            vr_state = self._latest_vr_state.copy() if self._latest_vr_state else None
+                        
+                        with self._robot_state_lock:
+                            robot_state = self._latest_robot_state.copy() if self._latest_robot_state else None
+                        
+                        if vr_state and robot_state:
+                            # Get current action (may be zero if not moving)
+                            info = {
+                                "success": vr_state.buttons.get("A", False) if self.controller_id == 'r' else vr_state.buttons.get("X", False),
+                                "failure": vr_state.buttons.get("B", False) if self.controller_id == 'r' else vr_state.buttons.get("Y", False),
+                                "movement_enabled": vr_state.movement_enabled,
+                                "controller_on": vr_state.controller_on,
+                                "poses": vr_state.poses,
+                                "buttons": vr_state.buttons
+                            }
+                            
+                            # Calculate action if movement is enabled
+                            action = np.zeros(7)  # Default no movement
+                            if vr_state.movement_enabled and hasattr(self, 'vr_state') and self.vr_state:
+                                # Use the last calculated action if available
+                                if hasattr(self, '_last_action'):
+                                    action = self._last_action
+                            
+                            # Create timestep data
+                            timestep_data = TimestepData(
+                                timestamp=current_time,
+                                vr_state=vr_state,
+                                robot_state=robot_state,
+                                action=action.copy(),
+                                info=copy.deepcopy(info)
+                            )
+                            
+                            # Queue for MCAP writer
+                            try:
+                                self.mcap_queue.put_nowait(timestep_data)
+                                record_count += 1
+                            except queue.Full:
+                                print("⚠️  MCAP queue full, dropping frame")
+                    
+                    last_record_time = current_time
+                    
+                    # Print actual frequency every second
+                    if current_time - freq_check_time >= 1.0:
+                        if self.recording_active:
+                            actual_freq = record_count / (current_time - freq_check_time)
+                            print(f"📊 Recording frequency: {actual_freq:.1f}Hz (target: {self.recording_hz}Hz)")
+                        record_count = 0
+                        freq_check_time = current_time
+                
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.001)
+                
+            except Exception as e:
+                if self.running:
+                    print(f"❌ Error in data recording: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(0.1)
+        
+        print("📊 Data recording thread stopped")
 
     def _process_control_cycle(self, vr_state: VRState, robot_state: RobotState, current_time: float):
         """Process a single control cycle with given VR and robot states"""
@@ -1328,6 +1435,9 @@ class OculusVRServer:
         if info["movement_enabled"] and self._state["poses"]:
             action, action_info = self._calculate_action()
             
+            # Store last action for recording thread
+            self._last_action = action.copy()
+            
             # Convert velocity to position target
             target_pos, target_quat, target_gripper = self.velocity_to_position_target(
                 action, self.robot_pos, self.robot_quat, action_info
@@ -1351,10 +1461,16 @@ class OculusVRServer:
                     timestamp=time.time(),
                 )
                 
-                # Thread-safe robot communication
+                # Thread-safe robot communication with timing
+                comm_start = time.time()
                 with self._robot_comm_lock:
                     self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
                     franka_state = pickle.loads(self.action_socket.recv())
+                comm_time = time.time() - comm_start
+                
+                # Log slow communications
+                if comm_time > 0.020:  # More than 20ms
+                    print(f"⚠️  Slow robot comm: {comm_time*1000:.1f}ms")
                 
                 # Update robot state from actual feedback
                 new_robot_state = RobotState(
@@ -1366,7 +1482,6 @@ class OculusVRServer:
                     joint_positions=getattr(franka_state, 'joint_positions', None)
                 )
                 
-                # Update thread-safe robot state
                 with self._robot_state_lock:
                     self._latest_robot_state = new_robot_state
                 
@@ -1375,6 +1490,7 @@ class OculusVRServer:
                 self.robot_quat = new_robot_state.quat
                 self.robot_euler = new_robot_state.euler
                 self.robot_gripper = new_robot_state.gripper
+                self.robot_joint_positions = new_robot_state.joint_positions
             else:
                 # In debug mode, simulate robot state update
                 new_robot_state = RobotState(
@@ -1396,22 +1512,11 @@ class OculusVRServer:
         else:
             # Not moving - use current robot state
             new_robot_state = robot_state
+            # Clear last action when not moving
+            self._last_action = np.zeros(7)
         
-        # Queue data for MCAP recording if active
-        if self.recording_active and self.data_recorder:
-            timestep_data = TimestepData(
-                timestamp=current_time,
-                vr_state=vr_state.copy(),
-                robot_state=new_robot_state.copy(),
-                action=action.copy(),
-                info=copy.deepcopy(info)
-            )
-            
-            # Non-blocking queue put
-            try:
-                self.mcap_queue.put_nowait(timestep_data)
-            except queue.Full:
-                print("⚠️  MCAP queue full, dropping frame")
+        # Note: Data recording is now handled by the dedicated recording thread
+        # which runs at the target frequency independent of robot control
 
 
 def main():

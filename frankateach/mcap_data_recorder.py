@@ -1107,10 +1107,7 @@ class MCAPDataRecorder:
                 schema_id=self._schemas["transform"]
             )
         
-        # Note: We only publish static transforms for base links here.
-        # Foxglove should compute the remaining transforms from the URDF and joint states.
-        # If you see warnings about missing transforms for fr3_link1-8, etc., this is expected.
-        # The robot visualization should still work correctly using the joint states.
+        # Start with base transforms
         transforms = [
             # World to base
             {
@@ -1137,6 +1134,133 @@ class MCAPDataRecorder:
                 }
             }
         ]
+        
+        # If we have joint positions, compute and publish transforms for all links
+        if joint_positions and len(joint_positions) >= 7:
+            # FR3 DH parameters and joint configurations
+            # These are simplified - for exact values, we'd need to parse the URDF
+            
+            # Link 0 to Link 1 (Joint 1 - Z rotation)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link0"
+                },
+                "child_frame_id": "fr3_link1",
+                "transform": {
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.333},
+                    "rotation": self._axis_angle_to_quaternion([0, 0, 1], joint_positions[0])
+                }
+            })
+            
+            # Link 1 to Link 2 (Joint 2 - Y rotation, rotated -90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link1"
+                },
+                "child_frame_id": "fr3_link2",
+                "transform": {
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], -np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[1])
+                    )
+                }
+            })
+            
+            # Link 2 to Link 3 (Joint 3 - Z rotation, rotated 90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link2"
+                },
+                "child_frame_id": "fr3_link3",
+                "transform": {
+                    "translation": {"x": 0.0, "y": -0.316, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[2])
+                    )
+                }
+            })
+            
+            # Link 3 to Link 4 (Joint 4 - Z rotation, rotated 90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link3"
+                },
+                "child_frame_id": "fr3_link4",
+                "transform": {
+                    "translation": {"x": 0.0825, "y": 0.0, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[3])
+                    )
+                }
+            })
+            
+            # Link 4 to Link 5 (Joint 5 - Z rotation, rotated -90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link4"
+                },
+                "child_frame_id": "fr3_link5",
+                "transform": {
+                    "translation": {"x": -0.0825, "y": 0.384, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], -np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[4])
+                    )
+                }
+            })
+            
+            # Link 5 to Link 6 (Joint 6 - Z rotation, rotated 90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link5"
+                },
+                "child_frame_id": "fr3_link6",
+                "transform": {
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[5])
+                    )
+                }
+            })
+            
+            # Link 6 to Link 7 (Joint 7 - Z rotation, rotated 90 deg)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link6"
+                },
+                "child_frame_id": "fr3_link7",
+                "transform": {
+                    "translation": {"x": 0.088, "y": 0.0, "z": 0.0},
+                    "rotation": self._combine_rotations(
+                        self._axis_angle_to_quaternion([1, 0, 0], np.pi/2),
+                        self._axis_angle_to_quaternion([0, 0, 1], joint_positions[6])
+                    )
+                }
+            })
+            
+            # Link 7 to Hand (fixed)
+            transforms.append({
+                "header": {
+                    "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                    "frame_id": "fr3_link7"
+                },
+                "child_frame_id": "fr3_hand",
+                "transform": {
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.107},
+                    "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                }
+            })
         
         # Write all transforms in a single TFMessage
         msg = {"transforms": transforms}
@@ -1214,4 +1338,36 @@ class MCAPDataRecorder:
             log_time=initial_time_ns,
             publish_time=initial_time_ns,
             data=json.dumps(static_transforms).encode("utf-8")
-        ) 
+        )
+        
+    def _axis_angle_to_quaternion(self, axis: list, angle: float) -> dict:
+        """Convert axis-angle representation to quaternion"""
+        # Normalize axis
+        axis = np.array(axis)
+        axis = axis / np.linalg.norm(axis)
+        
+        # Convert to quaternion
+        half_angle = angle / 2.0
+        sin_half = np.sin(half_angle)
+        cos_half = np.cos(half_angle)
+        
+        return {
+            "x": axis[0] * sin_half,
+            "y": axis[1] * sin_half,
+            "z": axis[2] * sin_half,
+            "w": cos_half
+        }
+    
+    def _combine_rotations(self, q1: dict, q2: dict) -> dict:
+        """Combine two quaternions (q1 * q2)"""
+        # Extract components
+        x1, y1, z1, w1 = q1["x"], q1["y"], q1["z"], q1["w"]
+        x2, y2, z2, w2 = q2["x"], q2["y"], q2["z"], q2["w"]
+        
+        # Quaternion multiplication
+        return {
+            "x": w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            "y": w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            "z": w1*z2 + x1*y2 - y1*x2 + z1*w2,
+            "w": w1*w2 - x1*x2 - y1*y2 - z1*z2
+        } 

@@ -8,3 +8,5 @@ h5py
 pre-commit
 pure-python-adb
 pyyaml
+pybullet
+numpy

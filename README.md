@@ -2,17 +2,14 @@
 
 Bi-Manual Franka 3 robot setup.
 
-
 ## NUC Setup
 
 1. Install Ubuntu 22.04 and a real-time kernel
 2. Make sure the NUC is booted with the real-time kernel [[link](https://frankaemika.github.io/docs/installation_linux.html#setting-up-the-real-time-kernel)].
 
-
 ## Lambda Machine Setup
 
 todo: how to setup network, etc.
-
 
 1. Setup deoxys_control. NOTE: When doing `./InstallPackage`, select `0.13.3` for installing libfranka:
 
@@ -43,7 +40,6 @@ cd reskin_sensor
 pip install -e .
 ```
 
-
 ## Proxy Setup
 
 1. Install FoxyProxy extension on Chrome or Firefox. Set up the proxy like this:
@@ -59,7 +55,6 @@ Host nuc
     LogLevel ERROR
     DynamicForward 1337
 ```
-
 
 ## How to run the Franka-Teach environment
 
@@ -122,9 +117,11 @@ python3 test_franka_env.py
 2. Choose your control method:
 
 ### Option A: Mouse Control (Simple 2D)
+
 For basic 2D control using mouse, see [mouse_control_readme.md](mouse_control_readme.md).
 
-### Option B: Oculus VR Control (Full 6DOF) 
+### Option B: Oculus VR Control (Full 6DOF)
+
 For full 6DOF control using Meta Quest VR controllers:
 
 ```bash
@@ -156,3 +153,49 @@ python3 collect_data.py demo_num=0 collect_depth=<True/False>
    - **Mouse Control**: Hold left-click and move mouse for 2D position control
    - **Oculus VR**: Hold grip button and move controller for full 6DOF control, use trigger for gripper
    - **Human Mode**: Use VR controller buttons to start/stop recording while manually moving the robot
+
+## Simulation Mode
+
+The Franka-Teach environment now includes a full FR3 robot simulation for testing and development without physical hardware.
+
+### Features
+
+- Accurate FR3 kinematics and joint limits
+- Real-time 3D visualization
+- Compatible with all control methods (mouse, VR)
+- Same network interface as real robot
+
+### Running in Simulation
+
+To use the Oculus VR control with simulated robot:
+
+```bash
+# Run with visualization window
+python3 oculus_vr_server.py --simulation
+
+# Run in debug mode (prints data without robot control)
+python3 oculus_vr_server.py --simulation --debug
+```
+
+To run just the simulation server:
+
+```bash
+# With visualization
+python3 -m simulation.fr3_sim_server
+
+# Without visualization (headless mode)
+python3 -m simulation.fr3_sim_server --no-viz
+```
+
+### Testing the Simulation
+
+Run the simulation test suite:
+
+```bash
+cd simulation
+python3 test_simulation.py
+```
+
+This will test forward kinematics, visualization, trajectory animation, and controller functionality.
+
+See [simulation/README.md](simulation/README.md) for detailed documentation about the simulation module.

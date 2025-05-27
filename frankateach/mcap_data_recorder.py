@@ -847,7 +847,20 @@ class MCAPDataRecorder:
                 
                 # Write transforms for all robot links
                 joint_positions = timestep["observation"]["robot_state"].get("joint_positions", [])
-                self._write_robot_transforms(joint_positions, ts_sec, ts_nsec, time_ns)
+                
+                # If we have joint positions, append gripper data
+                if joint_positions and len(joint_positions) >= 7:
+                    joint_positions = list(joint_positions[:7])  # Get first 7 joints
+                    
+                    # Add gripper positions (same logic as in _write_joint_state_for_visualization)
+                    gripper_pos = timestep["observation"]["robot_state"].get("gripper_position", 0.0)
+                    finger_joint_pos = (1.0 - gripper_pos) * 0.04  # Invert: 0->0.04, 1->0.0
+                    joint_positions_with_gripper = joint_positions + [finger_joint_pos, finger_joint_pos]
+                    
+                    self._write_robot_transforms(joint_positions_with_gripper, ts_sec, ts_nsec, time_ns)
+                else:
+                    # No joint data, just write base transforms
+                    self._write_robot_transforms([], ts_sec, ts_nsec, time_ns)
         
         # Write action
         if "action" in timestep:
@@ -950,8 +963,10 @@ class MCAPDataRecorder:
         
         # Add gripper joints (convert 0-1 to joint angles)
         gripper_pos = state.get("gripper_position", 0.0)
-        # FR3 gripper: 0 = closed (0.0 rad), 1 = open (0.04 rad per finger)
-        finger_joint_pos = gripper_pos * 0.04
+        # FR3 gripper: 0 = open (0.04 rad per finger), 1 = closed (0.0 rad)
+        # Note: gripper_position is 0 when open, 1 when closed
+        # Each finger can move 0.04 meters (not radians)
+        finger_joint_pos = (1.0 - gripper_pos) * 0.04  # Invert: 0->0.04, 1->0.0
         joint_positions = list(joint_positions) + [finger_joint_pos, finger_joint_pos]
         
         # Create ROS2 JointState message
@@ -1261,6 +1276,61 @@ class MCAPDataRecorder:
                     "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
                 }
             })
+            
+            # Add gripper finger transforms if we have enough joint data
+            if len(joint_positions) >= 9:
+                # Left finger (fr3_finger_joint1)
+                finger_pos = joint_positions[7]  # This is the linear position in meters
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": "fr3_hand"
+                    },
+                    "child_frame_id": "fr3_leftfinger",
+                    "transform": {
+                        "translation": {"x": 0.0, "y": 0.04 - finger_pos, "z": 0.05},  # Move inward as it closes
+                        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    }
+                })
+                
+                # Right finger (fr3_finger_joint2)
+                finger_pos = joint_positions[8]  # This is the linear position in meters
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": "fr3_hand"
+                    },
+                    "child_frame_id": "fr3_rightfinger",
+                    "transform": {
+                        "translation": {"x": 0.0, "y": -0.04 + finger_pos, "z": 0.05},  # Move inward as it closes
+                        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    }
+                })
+            else:
+                # Default open position for fingers
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": "fr3_hand"
+                    },
+                    "child_frame_id": "fr3_leftfinger",
+                    "transform": {
+                        "translation": {"x": 0.0, "y": 0.04, "z": 0.05},
+                        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    }
+                })
+                
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": "fr3_hand"
+                    },
+                    "child_frame_id": "fr3_rightfinger",
+                    "transform": {
+                        "translation": {"x": 0.0, "y": -0.04, "z": 0.05},
+                        "rotation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    }
+                })
         
         # Write all transforms in a single TFMessage
         msg = {"transforms": transforms}

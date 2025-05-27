@@ -95,7 +95,8 @@ class OculusVRServer:
                  right_controller=True, 
                  ip_address=None,
                  simulation=False,
-                 coord_transform=None):
+                 coord_transform=None,
+                 rotation_mode="labelbox"):
         """
         Initialize the Oculus VR Server with DROID-exact VRPolicy control
         
@@ -104,7 +105,8 @@ class OculusVRServer:
             right_controller: If True, use right controller for robot control
             ip_address: IP address of Quest device (None for USB connection)
             simulation: If True, use simulated FR3 robot instead of real hardware
-            coord_transform: Custom coordinate transformation vector (default: DROID's [-2, -1, -3, 4])
+            coord_transform: Custom coordinate transformation vector (default: adjusted for compatibility)
+            rotation_mode: Rotation mapping mode - currently only "labelbox" is supported
         """
         self.debug = debug
         self.right_controller = right_controller
@@ -138,10 +140,16 @@ class OculusVRServer:
             
         self.global_to_env_mat = vec_to_reorder_mat(rmat_reorder)
         
+        # Rotation transformation matrix (separate from position)
+        self.rotation_mode = rotation_mode
+        # For labelbox mode, we apply euler angle transformations directly in _process_reading
+        # to avoid creating invalid rotation matrices
+        
         if self.debug or coord_transform is not None:
             print("\n🔍 Coordinate Transformation:")
-            print(f"   Reorder vector: {rmat_reorder}")
-            print("   Transformation Matrix:")
+            print(f"   Position reorder vector: {rmat_reorder}")
+            print(f"   Rotation mode: {rotation_mode}")
+            print("   Position Transformation Matrix:")
             for i in range(4):
                 row = self.global_to_env_mat[i]
                 print(f"   [{row[0]:6.1f}, {row[1]:6.1f}, {row[2]:6.1f}, {row[3]:6.1f}]")
@@ -152,7 +160,7 @@ class OculusVRServer:
                 ([0, 1, 0, 1], "VR up (+Y)"),
                 ([0, 0, 1, 1], "VR forward (+Z)"),
             ]
-            print("\n   Mapping:")
+            print("\n   Position Mapping:")
             for vec, name in test_vecs:
                 transformed = self.global_to_env_mat @ np.array(vec)
                 direction = ""
@@ -163,6 +171,13 @@ class OculusVRServer:
                 elif abs(transformed[2]) > 0.5:
                     direction = f"Robot {'up' if transformed[2] > 0 else 'down'} (Z)"
                 print(f"   {name} → {direction}")
+            
+            # Show rotation mapping
+            print("\n   Rotation Mapping (Labelbox mode):")
+            print("   VR Roll (Y-axis) → Robot Pitch (Y-axis)")
+            print("   VR Pitch (X-axis) → Robot Roll (X-axis)")
+            print("   VR Yaw (Z-axis) → Robot Yaw (Z-axis)")
+            print("   Axis transform: [X, Y, Z] → [Y, X, Z]")
         
         # Initialize transformation matrices
         self.vr_to_global_mat = np.eye(4)
@@ -289,12 +304,16 @@ class OculusVRServer:
         self.calibrating_forward = False
         self.calibration_start_pose = None
         self.calibration_start_time = None
+        self.vr_neutral_pose = None  # Neutral controller orientation
         
         # First frame flag
         self.is_first_frame = True
         
         # Flag to reset robot after calibration
         self._reset_robot_after_calibration = False
+        
+        # Added for rotation tracking
+        self._last_controller_rot = None
         
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
@@ -407,6 +426,11 @@ class OculusVRServer:
                             
                             self.reset_orientation = False  # Calibration complete
                             
+                            # Store the current controller pose as the neutral reference
+                            # Store the raw pose, not transformed
+                            self.vr_neutral_pose = np.asarray(self._state["poses"][self.controller_id]).copy()
+                            print("📐 Stored neutral controller orientation")
+                            
                             # Reset robot to home position after calibration
                             if not self.debug and not self.reset_orientation:
                                 print("🏠 Moving robot to reset position after calibration...")
@@ -444,6 +468,11 @@ class OculusVRServer:
                     self.vr_to_global_mat = rot_mat
                     print("📐 Orientation reset (DROID-style)")
                     
+                    # Store the current controller pose as the neutral reference
+                    # Store the raw pose, not transformed
+                    self.vr_neutral_pose = np.asarray(self._state["poses"][self.controller_id]).copy()
+                    print("📐 Stored neutral controller orientation")
+                    
                     # Reset robot to home position after calibration
                     if not self.debug and not self.reset_orientation:
                         print("🏠 Moving robot to reset position after calibration...")
@@ -456,9 +485,49 @@ class OculusVRServer:
     def _process_reading(self):
         """Apply coordinate transformations to VR controller pose - DROID exact"""
         rot_mat = np.asarray(self._state["poses"][self.controller_id])
-        rot_mat = self.global_to_env_mat @ self.vr_to_global_mat @ rot_mat
-        vr_pos = self.spatial_coeff * rot_mat[:3, 3]
-        vr_quat = rmat_to_quat(rot_mat[:3, :3])
+        
+        # Apply position transformation
+        transformed_mat = self.global_to_env_mat @ self.vr_to_global_mat @ rot_mat
+        vr_pos = self.spatial_coeff * transformed_mat[:3, 3]
+        
+        # Handle rotation
+        if hasattr(self, 'vr_neutral_pose') and self.vr_neutral_pose is not None:
+            # Calculate relative rotation from neutral pose using quaternions
+            neutral_rot = R.from_matrix(self.vr_neutral_pose[:3, :3])
+            current_rot = R.from_matrix(rot_mat[:3, :3])
+            
+            # Get relative rotation as quaternion
+            relative_rot = neutral_rot.inv() * current_rot
+            
+            # Convert to axis-angle to apply transformation
+            rotvec = relative_rot.as_rotvec()
+            angle = np.linalg.norm(rotvec)
+            
+            if angle > 0:
+                axis = rotvec / angle  # Normalize to get unit axis
+                
+                # Transform the rotation axis according to labelbox mapping
+                # VR axes (confirmed by calibration): X=pitch, Y=roll, Z=yaw
+                # Robot axes: X=roll, Y=pitch, Z=yaw
+                # Desired mapping:
+                # VR Roll (Y-axis) → Robot Pitch (Y-axis) 
+                # VR Pitch (X-axis) → Robot Roll (X-axis)
+                # VR Yaw (Z-axis) → Robot Yaw (Z-axis)
+                # We need to swap X and Y components to achieve this
+                transformed_axis = np.array([axis[1], axis[0], axis[2]])
+                
+                # Create new rotation from transformed axis and same angle
+                transformed_rotvec = transformed_axis * angle
+                transformed_rot = R.from_rotvec(transformed_rotvec)
+                vr_quat = transformed_rot.as_quat()
+            else:
+                # No rotation
+                vr_quat = np.array([0, 0, 0, 1])
+        else:
+            # No neutral pose yet, apply standard transformation
+            transformed_rot_mat = self.global_to_env_mat[:3, :3] @ self.vr_to_global_mat[:3, :3] @ rot_mat[:3, :3]
+            vr_quat = rmat_to_quat(transformed_rot_mat)
+        
         vr_gripper = self._state["buttons"]["rightTrig" if self.controller_id == "r" else "leftTrig"][0]
         
         self.vr_state = {"pos": vr_pos, "quat": vr_quat, "gripper": vr_gripper}
@@ -633,11 +702,44 @@ class OculusVRServer:
             current_euler = quat_to_euler(current_quat, degrees=True)
             target_euler = quat_to_euler(target_quat, degrees=True)
             print(f"\n🔄 Rotation Debug:")
-            print(f"   Current Euler: [R:{current_euler[0]:6.1f}, P:{current_euler[1]:6.1f}, Y:{current_euler[2]:6.1f}]")
-            print(f"   Rot Delta (deg): [R:{np.degrees(rot_delta[0]):6.1f}, P:{np.degrees(rot_delta[1]):6.1f}, Y:{np.degrees(rot_delta[2]):6.1f}]")
-            print(f"   Target Euler: [R:{target_euler[0]:6.1f}, P:{target_euler[1]:6.1f}, Y:{target_euler[2]:6.1f}]")
-            print(f"   Current Quat: [{current_quat[0]:.3f}, {current_quat[1]:.3f}, {current_quat[2]:.3f}, {current_quat[3]:.3f}]")
-            print(f"   Target Quat: [{target_quat[0]:.3f}, {target_quat[1]:.3f}, {target_quat[2]:.3f}, {target_quat[3]:.3f}]")
+            
+            # VR Controller Data
+            print(f"   === VR CONTROLLER ===")
+            if hasattr(self, 'vr_state') and self.vr_state:
+                vr_euler = quat_to_euler(self.vr_state['quat'], degrees=True)
+                print(f"   VR Quat (transformed): [{self.vr_state['quat'][0]:.3f}, {self.vr_state['quat'][1]:.3f}, {self.vr_state['quat'][2]:.3f}, {self.vr_state['quat'][3]:.3f}]")
+                print(f"   VR Euler (transformed): [R:{vr_euler[0]:6.1f}, P:{vr_euler[1]:6.1f}, Y:{vr_euler[2]:6.1f}]")
+            
+            # Show raw VR data if available
+            if hasattr(self, '_state') and self._state.get('poses') and self.controller_id in self._state['poses']:
+                raw_pose = np.asarray(self._state['poses'][self.controller_id])
+                raw_rot = R.from_matrix(raw_pose[:3, :3])
+                raw_quat = raw_rot.as_quat()
+                raw_euler = raw_rot.as_euler('xyz', degrees=True)
+                print(f"   VR Raw Quat: [{raw_quat[0]:.3f}, {raw_quat[1]:.3f}, {raw_quat[2]:.3f}, {raw_quat[3]:.3f}]")
+                print(f"   VR Raw Euler: [R:{raw_euler[0]:6.1f}, P:{raw_euler[1]:6.1f}, Y:{raw_euler[2]:6.1f}]")
+                
+                # Show relative rotation if neutral pose exists
+                if hasattr(self, 'vr_neutral_pose') and self.vr_neutral_pose is not None:
+                    neutral_rot = R.from_matrix(self.vr_neutral_pose[:3, :3])
+                    relative_rot = neutral_rot.inv() * raw_rot
+                    rotvec = relative_rot.as_rotvec()
+                    angle = np.linalg.norm(rotvec)
+                    if angle > 0:
+                        axis_norm = rotvec / angle
+                        print(f"   VR Rotation from neutral: {np.degrees(angle):.1f}° around [{axis_norm[0]:.2f}, {axis_norm[1]:.2f}, {axis_norm[2]:.2f}]")
+                    
+                    # Also show euler angle changes from neutral
+                    neutral_euler = neutral_rot.as_euler('xyz', degrees=True)
+                    euler_diff = raw_euler - neutral_euler
+                    print(f"   VR Euler change from neutral: [ΔR:{euler_diff[0]:6.1f}, ΔP:{euler_diff[1]:6.1f}, ΔY:{euler_diff[2]:6.1f}]")
+            
+            print(f"   === ROBOT ===")
+            print(f"   Robot Current Euler: [R:{current_euler[0]:6.1f}, P:{current_euler[1]:6.1f}, Y:{current_euler[2]:6.1f}]")
+            print(f"   Robot Rot Delta (deg): [R:{np.degrees(rot_delta[0]):6.1f}, P:{np.degrees(rot_delta[1]):6.1f}, Y:{np.degrees(rot_delta[2]):6.1f}]")
+            print(f"   Robot Target Euler: [R:{target_euler[0]:6.1f}, P:{target_euler[1]:6.1f}, Y:{target_euler[2]:6.1f}]")
+            print(f"   Robot Current Quat: [{current_quat[0]:.3f}, {current_quat[1]:.3f}, {current_quat[2]:.3f}, {current_quat[3]:.3f}]")
+            print(f"   Robot Target Quat: [{target_quat[0]:.3f}, {target_quat[1]:.3f}, {target_quat[2]:.3f}, {target_quat[3]:.3f}]")
         
         return target_pos, target_quat, target_gripper
     
@@ -725,7 +827,87 @@ class OculusVRServer:
                                 print(f"   Target Rot (deg): [R:{target_euler_deg[0]:.1f}, P:{target_euler_deg[1]:.1f}, Y:{target_euler_deg[2]:.1f}]")
                                 
                                 # Show VR controller rotation for debugging
-                                if hasattr(self, 'vr_state') and self.vr_state:
+                                if hasattr(self, 'vr_neutral_pose') and self.vr_neutral_pose is not None:
+                                    # Get current controller pose (raw)
+                                    current_pose = np.asarray(self._state["poses"][self.controller_id])
+                                    
+                                    neutral_rot = R.from_matrix(self.vr_neutral_pose[:3, :3])
+                                    current_rot = R.from_matrix(current_pose[:3, :3])
+                                    
+                                    # Calculate relative rotation from neutral
+                                    relative_rot = neutral_rot.inv() * current_rot
+                                    
+                                    # Get axis-angle representation for clearer understanding
+                                    rotvec = relative_rot.as_rotvec()
+                                    angle = np.linalg.norm(rotvec)
+                                    angle_deg = np.degrees(angle)
+                                    
+                                    if angle_deg > 1.0:  # Only show if there's significant rotation
+                                        axis_norm = rotvec / angle
+                                        print(f"   VR Rotation: {angle_deg:.1f}° around [{axis_norm[0]:.2f}, {axis_norm[1]:.2f}, {axis_norm[2]:.2f}]")
+                                        print(f"   Raw axis components: X={axis_norm[0]:.3f}, Y={axis_norm[1]:.3f}, Z={axis_norm[2]:.3f}")
+                                        
+                                        # Calculate absolute values for dominant axis detection
+                                        abs_axis = np.abs(axis_norm)
+                                        print(f"   Dominant axis: ", end="")
+                                        if abs_axis[0] > abs_axis[1] and abs_axis[0] > abs_axis[2]:
+                                            print("X-axis")
+                                        elif abs_axis[1] > abs_axis[0] and abs_axis[1] > abs_axis[2]:
+                                            print("Y-axis")
+                                        else:
+                                            print("Z-axis")
+                                        
+                                        # Identify primary rotation in VR space (before transformation)
+                                        vr_motion = ""
+                                        # Based on calibration results (confirmed):
+                                        # Roll is around Y-axis, Pitch is around X-axis, Yaw is around Z-axis
+                                        # Using 45-degree threshold (cos(45°) ≈ 0.707)
+                                        threshold = 0.707  # 45 degrees
+                                        
+                                        # Debug: show which physical motion this represents based on the axis
+                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
+                                            direction = "LEFT" if axis_norm[1] > 0 else "RIGHT"
+                                            vr_motion = f"Rolling {direction}"
+                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
+                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
+                                            vr_motion = f"Pitching {direction}"
+                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
+                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"  # Note: signs from calibration
+                                            vr_motion = f"Yawing {direction}"
+                                        else:
+                                            vr_motion = "Combined rotation"
+                                        
+                                        print(f"   🎮 VR Motion: {vr_motion}")
+                                        
+                                        # Apply transformation to show expected robot motion
+                                        # Transform: [X, Y, Z] → [Y, X, Z] (swap X and Y)
+                                        transformed_axis = np.array([axis_norm[1], axis_norm[0], axis_norm[2]])
+                                        abs_transformed = np.abs(transformed_axis)
+                                        
+                                        robot_motion = ""
+                                        if abs_transformed[0] > threshold:  # Robot Roll (X-axis)
+                                            direction = "RIGHT" if transformed_axis[0] > 0 else "LEFT"
+                                            robot_motion = f"Roll {direction}"
+                                        elif abs_transformed[1] > threshold:  # Robot Pitch (Y-axis)
+                                            direction = "DOWN" if transformed_axis[1] > 0 else "UP"
+                                            robot_motion = f"Pitch {direction}"
+                                        elif abs_transformed[2] > threshold:  # Robot Yaw (Z-axis)
+                                            direction = "LEFT" if transformed_axis[2] > 0 else "RIGHT"
+                                            robot_motion = f"Yaw {direction}"
+                                        else:
+                                            robot_motion = "Combined rotation"
+                                        
+                                        print(f"   🤖 Robot Motion: {robot_motion}")
+                                    
+                                    # For compatibility, still calculate euler angles but note their limitations
+                                    relative_euler_neutral = relative_rot.as_euler('xyz', degrees=True)
+                                    
+                                    # Show euler angles for reference (but note they have limitations)
+                                    print(f"   Euler angles from neutral: [R:{relative_euler_neutral[0]:.1f}, P:{relative_euler_neutral[1]:.1f}, Y:{relative_euler_neutral[2]:.1f}]")
+                                    
+                                    # Store current rotation for next frame
+                                    self._last_controller_rot = current_rot
+                                else:
                                     vr_euler = quat_to_euler(self.vr_state['quat'], degrees=True)
                                     print(f"   VR Controller Rot (deg): [R:{vr_euler[0]:.1f}, P:{vr_euler[1]:.1f}, Y:{vr_euler[2]:.1f}]")
                                 
@@ -773,24 +955,11 @@ class OculusVRServer:
                     else:
                         # Not moving - show status periodically
                         if current_time - last_debug_time > 0.5:
-                            if self.debug:
-                                print(f"\n📊 Debug Data [{message_count:04d}]:")
-                            
                             if self.calibrating_forward:
                                 if self.debug:
+                                    print(f"\n📊 Debug Data [{message_count:04d}]:")
                                     print(f"   🎯 CALIBRATING FORWARD - Keep moving controller forward!")
                                 # Status is printed in the state update thread
-                            elif self.debug:
-                                print(f"   🔴 TELEOPERATION: INACTIVE (Hold grip button to enable)")
-                            
-                            # Show gripper status even when not moving
-                            if self.debug:
-                                trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
-                                if trigger_value > 0.1:
-                                    gripper_status = f"🔴 CLOSED"
-                                else:
-                                    gripper_status = f"🟢 OPEN"
-                                print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
                             
                             last_debug_time = current_time
                     
@@ -888,6 +1057,9 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
                         help='Use simulated FR3 robot instead of real hardware')
     parser.add_argument('--coord-transform', nargs='+', type=float,
                         help='Custom coordinate transformation vector (format: x y z w)')
+    parser.add_argument('--rotation-mode', type=str, default='labelbox',
+                        choices=['labelbox'],
+                        help='Rotation mapping mode (default: labelbox)')
     parser.add_argument('--hot-reload', action='store_true',
                         help='Enable hot reload mode (auto-restart on file changes)')
     
@@ -924,7 +1096,8 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
         right_controller=not args.left_controller,
         ip_address=args.ip,
         simulation=args.simulation,
-        coord_transform=coord_transform
+        coord_transform=coord_transform,
+        rotation_mode=args.rotation_mode
     )
     
     try:

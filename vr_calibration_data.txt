@@ -1,0 +1,42 @@
+VR Controller Calibration Data
+============================================================
+Controller: Right
+Timestamp: 2025-05-26 20:56:06
+============================================================
+
+Averaged Data Per Orientation:
+--------------------------------------------------------------------------------
+
+NEUTRAL:
+  Euler (degrees): R=  56.67, P= -58.82, Y= -10.67
+  Quaternion:      x= 0.3715, y=-0.4688, z= 0.1608, w= 0.7851
+
+ROLL LEFT 90:
+  Euler (degrees): R=  -3.36, P= -12.13, Y= 103.49
+  Quaternion:      x= 0.0648, y=-0.0883, z= 0.7786, w= 0.6179
+  Change from neutral: ΔR= -60.03, ΔP=  46.70, ΔY= 114.16
+
+ROLL RIGHT 90:
+  Euler (degrees): R=  99.32, P=  -8.89, Y= -95.97
+  Quaternion:      x=-0.4713, y= 0.5982, z= 0.4399, w=-0.4758
+  Change from neutral: ΔR=  42.65, ΔP=  49.93, ΔY= -85.30
+
+PITCH UP 90:
+  Euler (degrees): R= 124.63, P= -64.87, Y= -14.17
+  Quaternion:      x= 0.7109, y=-0.3395, z= 0.4229, w= 0.4477
+  Change from neutral: ΔR=  67.96, ΔP=  -6.04, ΔY=  -3.50
+
+PITCH DOWN 90:
+  Euler (degrees): R= -67.97, P= -35.33, Y=   4.25
+  Quaternion:      x=-0.5229, y=-0.2712, z=-0.1402, w= 0.7958
+  Change from neutral: ΔR=-124.65, ΔP=  23.49, ΔY=  14.92
+
+YAW LEFT 90:
+  Euler (degrees): R=  30.58, P=  23.91, Y=  -0.85
+  Quaternion:      x= 0.2595, y= 0.1979, z=-0.0616, w= 0.9432
+  Change from neutral: ΔR= -26.09, ΔP=  82.74, ΔY=   9.82
+
+YAW RIGHT 90:
+  Euler (degrees): R=-145.34, P=  -9.30, Y= 165.61
+  Quaternion:      x= 0.0952, y= 0.9470, z=-0.2849, w=-0.1140
+  Change from neutral: ΔR=-202.01, ΔP=  49.52, ΔY= 176.28

@@ -386,6 +386,11 @@ class OculusVRServer:
         print("\n⚠️  Note: Using Deoxys control interface (quaternion-based)")
         print("   Rotations are handled differently than DROID's Polymetis interface")
         
+        print("\n💡 Hot Reload:")
+        print("   - Run with --hot-reload flag to enable automatic restart on code changes")
+        print("   - Use: ./run_server.sh --hot-reload")
+        print("   - The server will restart automatically when you save changes")
+        
         print("\nPress Ctrl+C to exit gracefully\n")
         
         # Performance tuning parameters (can be adjusted for responsiveness)
@@ -448,6 +453,11 @@ class OculusVRServer:
         # Recording at independent frequency
         self.recording_hz = self.control_hz  # Record at same rate as control target
         self.recording_interval = 1.0 / self.recording_hz
+        
+        # Async robot communication
+        self._robot_command_queue = queue.Queue(maxsize=2)  # Small buffer for commands
+        self._robot_response_queue = queue.Queue(maxsize=2)  # Responses from robot
+        self._robot_comm_thread = None
         
     def reset_state(self):
         """Reset internal state - matches DROID exactly"""
@@ -860,8 +870,13 @@ class OculusVRServer:
         
         return info
         
-    def reset_robot(self):
-        """Reset robot to initial position"""
+    def reset_robot(self, sync=True):
+        """Reset robot to initial position
+        
+        Args:
+            sync: If True, use synchronous communication (for initialization)
+                  If False, use async queues (not implemented for reset)
+        """
         if self.debug:
             print("🔄 [DEBUG] Would reset robot to initial position")
             # Return simulated values
@@ -876,6 +891,7 @@ class OculusVRServer:
             timestamp=time.time(),
         )
         
+        # For reset, we always use synchronous communication
         # Thread-safe robot communication
         with self._robot_comm_lock:
             self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
@@ -1026,6 +1042,14 @@ class OculusVRServer:
             self._threads.append(self._data_recording_thread)
             print("✅ Data recording thread started")
         
+        # Start robot communication thread (only if not in debug mode)
+        if not self.debug:
+            self._robot_comm_thread = threading.Thread(target=self._robot_comm_worker)
+            self._robot_comm_thread.daemon = True
+            self._robot_comm_thread.start()
+            self._threads.append(self._robot_comm_thread)
+            print("✅ Robot communication thread started")
+        
         self._robot_control_thread = threading.Thread(target=self._robot_control_worker)
         self._robot_control_thread.daemon = True
         self._robot_control_thread.start()
@@ -1128,6 +1152,10 @@ class OculusVRServer:
         if self._mcap_writer_thread and self._mcap_writer_thread.is_alive():
             self.mcap_queue.put(None)
         
+        # Send poison pill to robot comm thread
+        if self._robot_comm_thread and self._robot_comm_thread.is_alive():
+            self._robot_command_queue.put(None)
+        
         # Stop state thread
         if hasattr(self, '_state_thread'):
             self._state_thread.join(timeout=1.0)
@@ -1223,6 +1251,10 @@ class OculusVRServer:
         control_count = 0
         freq_check_time = time.time()
         
+        # Track prediction accuracy
+        prediction_errors = deque(maxlen=100)
+        using_predictions = False
+        
         while self.running:
             try:
                 current_time = time.time()
@@ -1243,6 +1275,17 @@ class OculusVRServer:
                         robot_state = self._latest_robot_state.copy() if self._latest_robot_state else None
                     
                     if vr_state and robot_state:
+                        # Check if we're using predictions
+                        state_age = current_time - robot_state.timestamp
+                        if state_age > self.control_interval * 2:
+                            if not using_predictions:
+                                print("⚡ Switching to predictive control mode")
+                                using_predictions = True
+                        else:
+                            if using_predictions:
+                                print("✅ Returned to real-time feedback mode")
+                                using_predictions = False
+                        
                         # Process control command
                         self._process_control_cycle(vr_state, robot_state, current_time)
                         control_count += 1
@@ -1253,7 +1296,8 @@ class OculusVRServer:
                     if current_time - freq_check_time >= 1.0:
                         actual_freq = control_count / (current_time - freq_check_time)
                         if self.recording_active:
-                            print(f"⚡ Control frequency: {actual_freq:.1f}Hz (target: {self.control_hz}Hz)")
+                            status = "PREDICTIVE" if using_predictions else "REAL-TIME"
+                            print(f"⚡ Control frequency: {actual_freq:.1f}Hz (target: {self.control_hz}Hz) - {status}")
                         control_count = 0
                         freq_check_time = current_time
                 
@@ -1348,6 +1392,58 @@ class OculusVRServer:
                     time.sleep(0.1)
         
         print("📊 Data recording thread stopped")
+
+    def _robot_comm_worker(self):
+        """Handles robot communication asynchronously to prevent blocking control thread"""
+        print("🔌 Robot communication thread started")
+        
+        comm_count = 0
+        total_comm_time = 0
+        
+        while self.running:
+            try:
+                # Get command from queue with timeout
+                command = self._robot_command_queue.get(timeout=0.01)
+                
+                if command is None:  # Poison pill
+                    break
+                
+                # Send command and receive response
+                comm_start = time.time()
+                with self._robot_comm_lock:
+                    self.action_socket.send(bytes(pickle.dumps(command, protocol=-1)))
+                    response = pickle.loads(self.action_socket.recv())
+                comm_time = time.time() - comm_start
+                
+                comm_count += 1
+                total_comm_time += comm_time
+                
+                # Log communication stats periodically
+                if comm_count % 10 == 0:
+                    avg_comm_time = total_comm_time / comm_count
+                    print(f"📡 Avg robot comm: {avg_comm_time*1000:.1f}ms")
+                
+                # Put response in queue
+                try:
+                    self._robot_response_queue.put_nowait(response)
+                except queue.Full:
+                    # Drop oldest response if queue is full
+                    try:
+                        self._robot_response_queue.get_nowait()
+                        self._robot_response_queue.put_nowait(response)
+                    except:
+                        pass
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                if self.running:
+                    print(f"❌ Error in robot communication: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(0.1)
+        
+        print("🔌 Robot communication thread stopped")
 
     def _process_control_cycle(self, vr_state: VRState, robot_state: RobotState, current_time: float):
         """Process a single control cycle with given VR and robot states"""
@@ -1461,36 +1557,61 @@ class OculusVRServer:
                     timestamp=time.time(),
                 )
                 
-                # Thread-safe robot communication with timing
-                comm_start = time.time()
-                with self._robot_comm_lock:
-                    self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
-                    franka_state = pickle.loads(self.action_socket.recv())
-                comm_time = time.time() - comm_start
+                # Queue command for async sending
+                try:
+                    self._robot_command_queue.put_nowait(robot_action)
+                except queue.Full:
+                    # Drop oldest command if queue is full
+                    try:
+                        self._robot_command_queue.get_nowait()
+                        self._robot_command_queue.put_nowait(robot_action)
+                    except:
+                        pass
                 
-                # Log slow communications
-                if comm_time > 0.020:  # More than 20ms
-                    print(f"⚠️  Slow robot comm: {comm_time*1000:.1f}ms")
-                
-                # Update robot state from actual feedback
-                new_robot_state = RobotState(
-                    timestamp=current_time,
-                    pos=franka_state.pos,
-                    quat=franka_state.quat,
-                    euler=quat_to_euler(franka_state.quat),
-                    gripper=1.0 if franka_state.gripper == GRIPPER_CLOSE else 0.0,
-                    joint_positions=getattr(franka_state, 'joint_positions', None)
-                )
-                
-                with self._robot_state_lock:
-                    self._latest_robot_state = new_robot_state
-                
-                # Update local state for next calculation
-                self.robot_pos = new_robot_state.pos
-                self.robot_quat = new_robot_state.quat
-                self.robot_euler = new_robot_state.euler
-                self.robot_gripper = new_robot_state.gripper
-                self.robot_joint_positions = new_robot_state.joint_positions
+                # Try to get latest response (non-blocking)
+                try:
+                    franka_state = self._robot_response_queue.get_nowait()
+                    
+                    # Update robot state from actual feedback
+                    new_robot_state = RobotState(
+                        timestamp=current_time,
+                        pos=franka_state.pos,
+                        quat=franka_state.quat,
+                        euler=quat_to_euler(franka_state.quat),
+                        gripper=1.0 if franka_state.gripper == GRIPPER_CLOSE else 0.0,
+                        joint_positions=getattr(franka_state, 'joint_positions', None)
+                    )
+                    
+                    with self._robot_state_lock:
+                        self._latest_robot_state = new_robot_state
+                    
+                    # Update local state for next calculation
+                    self.robot_pos = new_robot_state.pos
+                    self.robot_quat = new_robot_state.quat
+                    self.robot_euler = new_robot_state.euler
+                    self.robot_gripper = new_robot_state.gripper
+                    self.robot_joint_positions = new_robot_state.joint_positions
+                    
+                except queue.Empty:
+                    # No new response available, use predicted state
+                    # This allows control to continue at target frequency
+                    new_robot_state = RobotState(
+                        timestamp=current_time,
+                        pos=target_pos,  # Use target as prediction
+                        quat=target_quat,
+                        euler=quat_to_euler(target_quat),
+                        gripper=1.0 if gripper_state == GRIPPER_CLOSE else 0.0,
+                        joint_positions=self.robot_joint_positions  # Keep last known
+                    )
+                    
+                    with self._robot_state_lock:
+                        self._latest_robot_state = new_robot_state
+                    
+                    # Update predicted state
+                    self.robot_pos = target_pos
+                    self.robot_quat = target_quat
+                    self.robot_euler = quat_to_euler(target_quat)
+                    self.robot_gripper = new_robot_state.gripper
             else:
                 # In debug mode, simulate robot state update
                 new_robot_state = RobotState(

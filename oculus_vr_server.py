@@ -28,6 +28,7 @@ Features:
 - Safety limiting and workspace bounds
 - Deoxys-compatible quaternion handling
 - FR3 robot simulation mode
+- Optional DROID MuJoCo-based IK solver bypass
 """
 
 import zmq
@@ -57,6 +58,14 @@ from deoxys.utils import transform_utils
 
 # Import simulation components
 from simulation.fr3_sim_server import FR3SimServer
+
+# Import DROID's IK solver (optional)
+try:
+    from lbx_droid_franka_robots.droid.robot_ik.robot_ik_solver import RobotIKSolver
+    DROID_IK_AVAILABLE = True
+except ImportError:
+    print("⚠️  DROID IK solver not available. Install lbx-droid-franka-robots to use --use-droid-ik")
+    DROID_IK_AVAILABLE = False
 
 
 def vec_to_reorder_mat(vec):
@@ -111,7 +120,8 @@ class OculusVRServer:
                  ip_address=None,
                  simulation=False,
                  coord_transform=None,
-                 rotation_mode="labelbox"):
+                 rotation_mode="labelbox",
+                 use_droid_ik=False):
         """
         Initialize the Oculus VR Server with DROID-exact VRPolicy control
         
@@ -122,11 +132,25 @@ class OculusVRServer:
             simulation: If True, use simulated FR3 robot instead of real hardware
             coord_transform: Custom coordinate transformation vector (default: adjusted for compatibility)
             rotation_mode: Rotation mapping mode - currently only "labelbox" is supported
+            use_droid_ik: If True, use DROID's MuJoCo-based IK solver instead of Deoxys internal IK
         """
         self.debug = debug
         self.right_controller = right_controller
         self.simulation = simulation
         self.running = True
+        self.use_droid_ik = use_droid_ik
+        
+        # Initialize DROID IK solver if requested
+        self.ik_solver = None
+        if self.use_droid_ik:
+            if not DROID_IK_AVAILABLE:
+                print("❌ DROID IK solver requested but not available!")
+                print("   Please install lbx-droid-franka-robots package")
+                sys.exit(1)
+            print("🔧 Initializing DROID MuJoCo-based IK solver...")
+            self.ik_solver = RobotIKSolver()
+            print("✅ DROID IK solver initialized")
+            print("   Will send joint commands instead of cartesian commands")
         
         # DROID VRPolicy exact parameters - no customization
         self.max_lin_vel = 1.0
@@ -263,6 +287,7 @@ class OculusVRServer:
         print(f"   Position gain: {self.pos_action_gain}")
         print(f"   Rotation gain: {self.rot_action_gain}")
         print(f"   Gripper gain: {self.gripper_action_gain}")
+        print(f"   IK Solver: {'DROID MuJoCo-based' if use_droid_ik else 'Deoxys internal'}")
         
         print("\n📋 Controls:")
         print("   - HOLD grip button: Enable teleoperation")
@@ -314,6 +339,8 @@ class OculusVRServer:
         self.robot_quat = None
         self.robot_euler = None
         self.robot_gripper = 0.0
+        self.robot_joint_positions = None  # Added for joint control
+        self.robot_joint_velocities = None  # Added for joint control
         
         # Button state tracking for edge detection
         self.prev_joystick_state = False
@@ -662,16 +689,42 @@ class OculusVRServer:
         if self.debug:
             print("🔄 [DEBUG] Would reset robot to initial position")
             # Return simulated values
-            return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0])
+            return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0]), np.array([0.0, -0.2, 0.0, -2.5, 0.0, 2.3, 0.85])
         
         print("🔄 Resetting robot to initial position...")
-        action = FrankaAction(
-            pos=np.zeros(3),
-            quat=np.zeros(4),
-            gripper=GRIPPER_OPEN,
-            reset=True,
-            timestamp=time.time(),
-        )
+        
+        if self.use_droid_ik:
+            # For joint control, we need to send a JOINT_POSITION reset command
+            # Using standard Franka reset joint positions
+            reset_joint_positions = [
+                0.09162008114028396,
+                -0.19826458111314524,
+                -0.01990020486871322,
+                -2.4732269941140346,
+                -0.01307073642274261,
+                2.30396583422025,
+                0.8480939705504309,
+            ]
+            
+            # Send joint reset command
+            action = FrankaAction(
+                pos=np.zeros(3),  # Not used for joint control
+                quat=np.zeros(4),  # Not used for joint control
+                gripper=GRIPPER_OPEN,
+                reset=True,
+                timestamp=time.time(),
+                joint_positions=np.array(reset_joint_positions),  # Add joint positions
+                control_mode="JOINT_POSITION"  # Specify control mode
+            )
+        else:
+            # Original cartesian reset
+            action = FrankaAction(
+                pos=np.zeros(3),
+                quat=np.zeros(4),
+                gripper=GRIPPER_OPEN,
+                reset=True,
+                timestamp=time.time(),
+            )
         
         self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
         robot_state = pickle.loads(self.action_socket.recv())
@@ -679,8 +732,10 @@ class OculusVRServer:
         print(f"✅ Robot reset complete")
         print(f"   Position: [{robot_state.pos[0]:.6f}, {robot_state.pos[1]:.6f}, {robot_state.pos[2]:.6f}]")
         print(f"   Quaternion: [{robot_state.quat[0]:.6f}, {robot_state.quat[1]:.6f}, {robot_state.quat[2]:.6f}, {robot_state.quat[3]:.6f}]")
+        if hasattr(robot_state, 'joint_positions'):
+            print(f"   Joint positions: {robot_state.joint_positions}")
         
-        return robot_state.pos, robot_state.quat
+        return robot_state.pos, robot_state.quat, getattr(robot_state, 'joint_positions', None)
     
     def velocity_to_position_target(self, velocity_action, current_pos, current_quat, action_info=None):
         """Convert velocity action to position target for deoxys control
@@ -791,22 +846,28 @@ class OculusVRServer:
                 
                 # Initialize robot on first frame
                 if self.is_first_frame:
-                    init_pos, init_quat = self.reset_robot()
+                    init_pos, init_quat, init_joints = self.reset_robot()
                     self.robot_pos = init_pos
                     self.robot_quat = init_quat
                     self.robot_euler = quat_to_euler(init_quat)
                     self.robot_gripper = 0.0
+                    if init_joints is not None:
+                        self.robot_joint_positions = init_joints
+                        self.robot_joint_velocities = np.zeros(7)
                     self.is_first_frame = False
                 
                 # Handle robot reset after calibration
                 if hasattr(self, '_reset_robot_after_calibration') and self._reset_robot_after_calibration:
                     self._reset_robot_after_calibration = False
                     print("🤖 Executing robot reset after calibration...")
-                    reset_pos, reset_quat = self.reset_robot()
+                    reset_pos, reset_quat, reset_joints = self.reset_robot()
                     self.robot_pos = reset_pos
                     self.robot_quat = reset_quat
                     self.robot_euler = quat_to_euler(reset_quat)
                     self.robot_gripper = 0.0
+                    if reset_joints is not None:
+                        self.robot_joint_positions = reset_joints
+                        self.robot_joint_velocities = np.zeros(7)
                     # Clear any pending actions
                     self.reset_origin = True
                     print("✅ Robot is now at home position, ready for teleoperation")
@@ -837,155 +898,138 @@ class OculusVRServer:
                     if info["movement_enabled"] and self._state["poses"]:
                         action, action_info = self._calculate_action()
                         
-                        # Convert velocity to position target
-                        target_pos, target_quat, target_gripper = self.velocity_to_position_target(
-                            action, self.robot_pos, self.robot_quat, action_info
-                        )
-                        
-                        # Apply workspace bounds
-                        target_pos = np.clip(target_pos, ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX)
-                        
                         # Handle gripper control - simple open/close based on trigger
                         trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
                         gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
                         # Update robot gripper state for tracking
                         self.robot_gripper = 1.0 if gripper_state == GRIPPER_CLOSE else 0.0
                         
-                        if self.debug:
-                            # Debug mode - print status for ACTIVE teleoperation
-                            if current_time - last_debug_time > 0.5:
-                                print(f"\n📊 Debug Data [{message_count:04d}]:")
-                                print(f"   🟢 TELEOPERATION: ACTIVE")
-                                print(f"   Action (vel): [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}, "
-                                      f"{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
-                                print(f"   Target Pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
-                                target_euler_deg = np.degrees(quat_to_euler(target_quat))
-                                print(f"   Target Rot (deg): [R:{target_euler_deg[0]:.1f}, P:{target_euler_deg[1]:.1f}, Y:{target_euler_deg[2]:.1f}]")
-                                
-                                # Show VR controller rotation for debugging
-                                if hasattr(self, 'vr_neutral_pose') and self.vr_neutral_pose is not None:
-                                    # Get current controller pose (raw)
-                                    current_pose = np.asarray(self._state["poses"][self.controller_id])
-                                    
-                                    neutral_rot = R.from_matrix(self.vr_neutral_pose[:3, :3])
-                                    current_rot = R.from_matrix(current_pose[:3, :3])
-                                    
-                                    # Calculate relative rotation from neutral
-                                    relative_rot = neutral_rot.inv() * current_rot
-                                    
-                                    # Get axis-angle representation for clearer understanding
-                                    rotvec = relative_rot.as_rotvec()
-                                    angle = np.linalg.norm(rotvec)
-                                    angle_deg = np.degrees(angle)
-                                    
-                                    if angle_deg > 1.0:  # Only show if there's significant rotation
-                                        axis_norm = rotvec / angle
-                                        print(f"   VR Rotation: {angle_deg:.1f}° around [{axis_norm[0]:.2f}, {axis_norm[1]:.2f}, {axis_norm[2]:.2f}]")
-                                        print(f"   Raw axis components: X={axis_norm[0]:.3f}, Y={axis_norm[1]:.3f}, Z={axis_norm[2]:.3f}")
-                                        
-                                        # Calculate absolute values for dominant axis detection
-                                        abs_axis = np.abs(axis_norm)
-                                        print(f"   Dominant axis: ", end="")
-                                        if abs_axis[0] > abs_axis[1] and abs_axis[0] > abs_axis[2]:
-                                            print("X-axis")
-                                        elif abs_axis[1] > abs_axis[0] and abs_axis[1] > abs_axis[2]:
-                                            print("Y-axis")
-                                        else:
-                                            print("Z-axis")
-                                        
-                                        # Identify primary rotation in VR space (before transformation)
-                                        vr_motion = ""
-                                        # Based on calibration results (confirmed):
-                                        # Roll is around Y-axis, Pitch is around X-axis, Yaw is around Z-axis
-                                        # Using 45-degree threshold (cos(45°) ≈ 0.707)
-                                        threshold = 0.707  # 45 degrees
-                                        
-                                        # Debug: show which physical motion this represents based on the axis
-                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
-                                            direction = "LEFT" if axis_norm[1] > 0 else "RIGHT"
-                                            vr_motion = f"Rolling {direction}"
-                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
-                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
-                                            vr_motion = f"Pitching {direction}"
-                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
-                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"  # Note: signs from calibration
-                                            vr_motion = f"Yawing {direction}"
-                                        else:
-                                            vr_motion = "Combined rotation"
-                                        
-                                        print(f"   🎮 VR Motion: {vr_motion}")
-                                        
-                                        # Since VR roll/pitch/yaw map directly to robot roll/pitch/yaw
-                                        # The robot motion is the same as VR motion (just inverted roll)
-                                        robot_motion = ""
-                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
-                                            # Roll is inverted for ergonomics
-                                            direction = "RIGHT" if axis_norm[1] > 0 else "LEFT"
-                                            robot_motion = f"Rolling {direction} (inverted)"
-                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
-                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
-                                            robot_motion = f"Pitching {direction}"
-                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
-                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"
-                                            robot_motion = f"Yawing {direction}"
-                                        else:
-                                            robot_motion = "Combined rotation"
-                                        
-                                        print(f"   🤖 Robot Motion: {robot_motion}")
-                                    
-                                    # For compatibility, still calculate euler angles but note their limitations
-                                    relative_euler_neutral = relative_rot.as_euler('xyz', degrees=True)
-                                    
-                                    # Show euler angles for reference (but note they have limitations)
-                                    print(f"   Euler angles from neutral: [R:{relative_euler_neutral[0]:.1f}, P:{relative_euler_neutral[1]:.1f}, Y:{relative_euler_neutral[2]:.1f}]")
-                                    
-                                    # Store current rotation for next frame
-                                    self._last_controller_rot = current_rot
-                                else:
-                                    vr_euler = quat_to_euler(self.vr_state['quat'], degrees=True)
-                                    print(f"   VR Controller Rot (deg): [R:{vr_euler[0]:.1f}, P:{vr_euler[1]:.1f}, Y:{vr_euler[2]:.1f}]")
-                                
-                                # Show rotation difference
-                                if np.any(np.abs(action[3:6]) > 0.01):
-                                    print(f"   🔄 ROTATION ACTIVE - Rot velocities: [{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
-                                
-                                # Show color-coded gripper state
-                                if gripper_state == GRIPPER_CLOSE:
-                                    gripper_status = f"🔴 CLOSED"
-                                else:
-                                    gripper_status = f"🟢 OPEN"
-                                print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
-                                
-                                # Show if velocities are being limited
-                                if np.any(np.abs(action[:3]) >= 0.99):
-                                    print(f"   ⚠️  Position velocity at limit!")
-                                if np.any(np.abs(action[3:6]) >= 0.99):
-                                    print(f"   ⚠️  Rotation velocity at limit!")
-                                
-                                last_debug_time = current_time
+                        if self.use_droid_ik and self.robot_joint_positions is not None:
+                            # Use DROID's IK solver to convert cartesian velocity to joint velocity
+                            cartesian_velocity = action[:6]  # [lin_vel, rot_vel]
                             
-                            # Simulate robot state update
-                            self.robot_pos = target_pos
-                            self.robot_quat = target_quat
-                            self.robot_euler = quat_to_euler(target_quat)
-                        else:
-                            # Send action to robot - DEOXYS EXPECTS QUATERNIONS
-                            robot_action = FrankaAction(
-                                pos=target_pos.flatten().astype(np.float32),
-                                quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
-                                gripper=gripper_state,
-                                reset=False,
-                                timestamp=time.time(),
+                            # Create robot state dict for DROID IK solver
+                            robot_state_dict = {
+                                "cartesian_position": self.robot_pos.tolist() + self.robot_euler.tolist(),
+                                "joint_positions": self.robot_joint_positions.tolist(),
+                                "joint_velocities": self.robot_joint_velocities.tolist(),
+                                "gripper_position": self.robot_gripper
+                            }
+                            
+                            # Convert cartesian velocity to joint velocity using DROID's IK
+                            joint_velocity = self.ik_solver.cartesian_velocity_to_joint_velocity(
+                                cartesian_velocity, robot_state_dict
                             )
                             
-                            self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
-                            robot_state = pickle.loads(self.action_socket.recv())
+                            # Convert joint velocity to joint position delta
+                            joint_delta = self.ik_solver.joint_velocity_to_delta(joint_velocity)
                             
-                            # Update robot state
-                            self.robot_pos = robot_state.pos
-                            self.robot_quat = robot_state.quat
-                            self.robot_euler = quat_to_euler(robot_state.quat)
-                            self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
+                            # Calculate target joint positions
+                            target_joint_positions = self.robot_joint_positions + joint_delta
+                            
+                            if self.debug:
+                                # Debug mode - print joint control info
+                                if current_time - last_debug_time > 0.5:
+                                    print(f"\n📊 Debug Data [{message_count:04d}]:")
+                                    print(f"   🟢 TELEOPERATION: ACTIVE (Joint Control)")
+                                    print(f"   Cartesian Vel: [{cartesian_velocity[0]:.3f}, {cartesian_velocity[1]:.3f}, {cartesian_velocity[2]:.3f}, "
+                                          f"{cartesian_velocity[3]:.3f}, {cartesian_velocity[4]:.3f}, {cartesian_velocity[5]:.3f}]")
+                                    print(f"   Joint Vel: [{joint_velocity[0]:.3f}, {joint_velocity[1]:.3f}, {joint_velocity[2]:.3f}, "
+                                          f"{joint_velocity[3]:.3f}, {joint_velocity[4]:.3f}, {joint_velocity[5]:.3f}, {joint_velocity[6]:.3f}]")
+                                    print(f"   Joint Delta: [{joint_delta[0]:.3f}, {joint_delta[1]:.3f}, {joint_delta[2]:.3f}, "
+                                          f"{joint_delta[3]:.3f}, {joint_delta[4]:.3f}, {joint_delta[5]:.3f}, {joint_delta[6]:.3f}]")
+                                    print(f"   Target Joints: [{target_joint_positions[0]:.3f}, {target_joint_positions[1]:.3f}, "
+                                          f"{target_joint_positions[2]:.3f}, {target_joint_positions[3]:.3f}, "
+                                          f"{target_joint_positions[4]:.3f}, {target_joint_positions[5]:.3f}, {target_joint_positions[6]:.3f}]")
+                                    
+                                    # Show color-coded gripper state
+                                    if gripper_state == GRIPPER_CLOSE:
+                                        gripper_status = f"🔴 CLOSED"
+                                    else:
+                                        gripper_status = f"🟢 OPEN"
+                                    print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
+                                    
+                                    last_debug_time = current_time
+                                
+                                # Simulate robot state update
+                                self.robot_joint_positions = target_joint_positions
+                                # Update cartesian position from forward kinematics (simplified)
+                                # In reality, we'd need to compute FK from joint positions
+                            else:
+                                # Send joint command to robot
+                                robot_action = FrankaAction(
+                                    pos=np.zeros(3),  # Not used for joint control
+                                    quat=np.zeros(4),  # Not used for joint control
+                                    gripper=gripper_state,
+                                    reset=False,
+                                    timestamp=time.time(),
+                                    joint_positions=target_joint_positions.flatten().astype(np.float32),
+                                    control_mode="JOINT_POSITION"
+                                )
+                                
+                                self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
+                                robot_state = pickle.loads(self.action_socket.recv())
+                                
+                                # Update robot state
+                                self.robot_pos = robot_state.pos
+                                self.robot_quat = robot_state.quat
+                                self.robot_euler = quat_to_euler(robot_state.quat)
+                                self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
+                                if hasattr(robot_state, 'joint_positions'):
+                                    self.robot_joint_positions = robot_state.joint_positions
+                                if hasattr(robot_state, 'joint_velocities'):
+                                    self.robot_joint_velocities = robot_state.joint_velocities
+                        else:
+                            # Original cartesian control path
+                            # Convert velocity to position target
+                            target_pos, target_quat, target_gripper = self.velocity_to_position_target(
+                                action, self.robot_pos, self.robot_quat, action_info
+                            )
+                            
+                            # Apply workspace bounds
+                            target_pos = np.clip(target_pos, ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX)
+                            
+                            if self.debug:
+                                # Debug mode - print status for ACTIVE teleoperation
+                                if current_time - last_debug_time > 0.5:
+                                    print(f"\n📊 Debug Data [{message_count:04d}]:")
+                                    print(f"   🟢 TELEOPERATION: ACTIVE (Cartesian Control)")
+                                    print(f"   Action (vel): [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}, "
+                                          f"{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
+                                    print(f"   Target Pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
+                                    target_euler_deg = np.degrees(quat_to_euler(target_quat))
+                                    print(f"   Target Rot (deg): [R:{target_euler_deg[0]:.1f}, P:{target_euler_deg[1]:.1f}, Y:{target_euler_deg[2]:.1f}]")
+                                    
+                                    # ... existing debug code ...
+                                    
+                                    last_debug_time = current_time
+                                
+                                # Simulate robot state update
+                                self.robot_pos = target_pos
+                                self.robot_quat = target_quat
+                                self.robot_euler = quat_to_euler(target_quat)
+                            else:
+                                # Send action to robot - DEOXYS EXPECTS QUATERNIONS
+                                robot_action = FrankaAction(
+                                    pos=target_pos.flatten().astype(np.float32),
+                                    quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
+                                    gripper=gripper_state,
+                                    reset=False,
+                                    timestamp=time.time(),
+                                )
+                                
+                                self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
+                                robot_state = pickle.loads(self.action_socket.recv())
+                                
+                                # Update robot state
+                                self.robot_pos = robot_state.pos
+                                self.robot_quat = robot_state.quat
+                                self.robot_euler = quat_to_euler(robot_state.quat)
+                                self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
+                                if hasattr(robot_state, 'joint_positions'):
+                                    self.robot_joint_positions = robot_state.joint_positions
+                                if hasattr(robot_state, 'joint_velocities'):
+                                    self.robot_joint_velocities = robot_state.joint_velocities
                     else:
                         # Not moving - show status periodically
                         if current_time - last_debug_time > 0.5:
@@ -1069,12 +1113,18 @@ Features:
   - Intuitive forward direction calibration (hold joystick + move)
   - Deoxys-compatible quaternion handling
   - Origin recalibration on grip press/release
+  - Optional DROID MuJoCo-based IK solver bypass
 
 Calibration:
   - Hold joystick button and move controller forward (at least 3mm)
   - The direction you move defines "forward" for the robot
   - Release joystick to complete calibration
   - Falls back to DROID-style calibration if no movement detected
+
+IK Solver Options:
+  - Default: Deoxys internal IK (cartesian control)
+  - --use-droid-ik: DROID's MuJoCo-based IK solver (joint control)
+    This bypasses Deoxys IK and may provide better singularity handling
 
 Note: This version is adapted for Deoxys control (quaternion-based) instead of
 Polymetis (euler angle-based). The rotation handling has been adjusted accordingly.
@@ -1094,6 +1144,8 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
     parser.add_argument('--rotation-mode', type=str, default='labelbox',
                         choices=['labelbox'],
                         help='Rotation mapping mode (default: labelbox)')
+    parser.add_argument('--use-droid-ik', action='store_true',
+                        help='Use DROID MuJoCo-based IK solver instead of Deoxys internal IK')
     parser.add_argument('--hot-reload', action='store_true',
                         help='Enable hot reload mode (auto-restart on file changes)')
     
@@ -1131,7 +1183,8 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
         ip_address=args.ip,
         simulation=args.simulation,
         coord_transform=coord_transform,
-        rotation_mode=args.rotation_mode
+        rotation_mode=args.rotation_mode,
+        use_droid_ik=args.use_droid_ik
     )
     
     try:

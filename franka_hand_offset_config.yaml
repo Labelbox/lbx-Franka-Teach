@@ -1,0 +1,17 @@
+# Franka Hand Offset Configuration
+# This file contains the adjusted hand offset for a snug fit
+
+# Hand offset in meters (negative Z brings hand closer to arm)
+hand_z_offset: -0.11
+
+# Hand rotation in degrees (from default orientation)
+hand_z_rotation_deg: 30.0
+
+# To apply this offset, use one of these methods:
+# 1. Launch file: roslaunch franka_description fr3_with_snug_hand.launch hand_z_offset:=-0.11
+# 2. URDF parameter: xyz_ee:='0 0 -0.11' rpy_ee:='0 0 ${-pi/4 + 0.523599}'
+# 3. Modify franka_hand_arguments.xacro default value
+
+# Current configuration:
+#  Offset: 110mm closer to arm
+#  Rotation: 30.0° from default orientation (total: -15.0°)

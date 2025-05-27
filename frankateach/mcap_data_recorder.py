@@ -440,9 +440,9 @@ class MCAPDataRecorder:
         )
         
     def _get_fr3_urdf(self):
-        """Get the FR3 URDF content - use official franka_description URDF"""
-        # Use the official URDF from franka_description
-        urdf_path = Path(__file__).parent.parent / "franka_description" / "urdfs" / "fr3_franka_hand.urdf"
+        """Get the FR3 URDF content - use modified URDF with snug hand fit"""
+        # Use the modified URDF with hand offset from robot_urdf_models
+        urdf_path = Path(__file__).parent.parent / "robot_urdf_models" / "fr3_franka_hand_snug.urdf"
         
         if urdf_path.exists():
             with open(urdf_path, 'r') as f:
@@ -455,12 +455,13 @@ class MCAPDataRecorder:
                 github_base_url
             )
             
-            print(f"✅ Using official FR3 URDF with GitHub-hosted mesh files")
+            print(f"✅ Using modified FR3 URDF with snug hand fit (150mm closer)")
+            print(f"   URDF path: {urdf_path.relative_to(Path(__file__).parent.parent)}")
             print(f"   Meshes will be loaded from: {github_base_url}")
             return urdf_content
         else:
             # Fallback to simplified URDF
-            print(f"⚠️  Could not find official URDF, using simplified version")
+            print(f"⚠️  Could not find modified URDF at {urdf_path}, using simplified version")
             return self._get_simplified_fr3_urdf()
     
     def _get_simplified_fr3_urdf(self):

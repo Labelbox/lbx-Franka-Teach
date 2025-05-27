@@ -10,3 +10,4 @@ pure-python-adb
 pyyaml
 pybullet
 numpy
+watchdog

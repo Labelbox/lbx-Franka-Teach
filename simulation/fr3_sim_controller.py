@@ -46,11 +46,17 @@ class FR3SimController:
         # Cartesian state (computed from forward kinematics)
         self.ee_pos, self.ee_quat = self.robot_model.forward_kinematics(self.joint_angles)
         
-        # Control parameters
-        self.position_gain = 10.0  # P gain for position control
-        self.velocity_damping = 2.0  # D gain for velocity damping
-        self.max_joint_velocity = 2.0  # rad/s
+        # Control parameters - adjusted for better responsiveness
+        self.position_gain = 20.0  # Increased P gain for faster response
+        self.velocity_damping = 4.0  # Increased D gain for stability
+        self.max_joint_velocity = 2.5  # Increased max velocity
         self.gripper_speed = 5.0  # gripper units/s
+        
+        # IK parameters
+        self.ik_gain = 0.5  # Increased from 0.1 for better tracking
+        self.ik_iterations = 5  # Multiple iterations for better convergence
+        self.position_tolerance = 0.001  # 1mm tolerance
+        self.orientation_tolerance = 0.01  # radians
         
         # Simulation thread
         self.running = False
@@ -62,6 +68,10 @@ class FR3SimController:
         # Trajectory recording
         self.record_trajectory = False
         self.trajectory_history = []
+        
+        # Store target pose for better tracking
+        self.target_pos = self.ee_pos.copy()
+        self.target_quat = self.ee_quat.copy()
         
     def start(self):
         """Start the simulation thread"""
@@ -159,7 +169,7 @@ class FR3SimController:
     
     def set_target_pose(self, pos: np.ndarray, quat: np.ndarray, gripper: float):
         """
-        Set target end-effector pose (simplified - uses current joint config)
+        Set target end-effector pose with improved IK
         
         Args:
             pos: Target position
@@ -167,35 +177,65 @@ class FR3SimController:
             gripper: Target gripper state (0-1)
         """
         with self.state_lock:
-            # For simulation, we'll use a simplified approach
-            # In reality, this would use inverse kinematics
+            # Store target for tracking
+            self.target_pos = pos.copy()
+            self.target_quat = quat.copy()
             
-            # Compute position error
-            pos_error = pos - self.ee_pos
+            # Start from current joint configuration
+            joint_angles = self.joint_angles.copy()
             
-            # Compute orientation error
-            current_rot = R.from_quat(self.ee_quat)
-            target_rot = R.from_quat(quat)
-            rot_error = target_rot * current_rot.inv()
-            axis_angle = rot_error.as_rotvec()
-            
-            # Use Jacobian to compute joint velocities
-            J = self.robot_model.jacobian(self.joint_angles)
-            
-            # Stack position and orientation errors
-            cartesian_error = np.concatenate([pos_error, axis_angle])
-            
-            # Compute joint space error using pseudo-inverse
-            try:
-                J_pinv = np.linalg.pinv(J)
-                joint_error = J_pinv @ cartesian_error
+            # Iterative IK solver
+            for iteration in range(self.ik_iterations):
+                # Get current end-effector pose for these joint angles
+                current_pos, current_quat = self.robot_model.forward_kinematics(joint_angles)
                 
-                # Scale and add to current joint angles
-                self.target_joint_angles = self.joint_angles + 0.1 * joint_error
-                self.target_joint_angles = self.robot_model.clip_joint_angles(self.target_joint_angles)
-            except:
-                # If Jacobian is singular, maintain current position
-                pass
+                # Compute position error
+                pos_error = pos - current_pos
+                pos_error_norm = np.linalg.norm(pos_error)
+                
+                # Compute orientation error
+                current_rot = R.from_quat(current_quat)
+                target_rot = R.from_quat(quat)
+                rot_error = target_rot * current_rot.inv()
+                axis_angle = rot_error.as_rotvec()
+                rot_error_norm = np.linalg.norm(axis_angle)
+                
+                # Check if we're close enough
+                if pos_error_norm < self.position_tolerance and rot_error_norm < self.orientation_tolerance:
+                    break
+                
+                # Use Jacobian to compute joint velocities
+                J = self.robot_model.jacobian(joint_angles)
+                
+                # Stack position and orientation errors
+                cartesian_error = np.concatenate([pos_error, axis_angle])
+                
+                # Compute joint space error using damped least squares
+                try:
+                    # Damped least squares (more stable than pseudo-inverse)
+                    damping = 0.01
+                    JtJ = J.T @ J
+                    joint_error = J.T @ np.linalg.solve(JtJ + damping * np.eye(JtJ.shape[0]), cartesian_error)
+                    
+                    # Adaptive gain based on error magnitude
+                    adaptive_gain = self.ik_gain * min(1.0, pos_error_norm / 0.1)
+                    
+                    # Update joint angles
+                    joint_angles = joint_angles + adaptive_gain * joint_error
+                    joint_angles = self.robot_model.clip_joint_angles(joint_angles)
+                except:
+                    # If solver fails, use simple pseudo-inverse
+                    try:
+                        J_pinv = np.linalg.pinv(J)
+                        joint_error = J_pinv @ cartesian_error
+                        joint_angles = joint_angles + self.ik_gain * joint_error
+                        joint_angles = self.robot_model.clip_joint_angles(joint_angles)
+                    except:
+                        # If all else fails, maintain current position
+                        break
+            
+            # Set the computed joint angles as target
+            self.target_joint_angles = joint_angles
             
             # Set gripper target
             self.target_gripper_state = np.clip(gripper, 0.0, 1.0)
@@ -209,6 +249,8 @@ class FR3SimController:
         with self.state_lock:
             self.target_joint_angles = self.robot_model.rest_pose.copy()
             self.target_gripper_state = 0.0
+            self.target_pos = None
+            self.target_quat = None
             
         # Wait for robot to reach home position
         print("🏠 Resetting to home position...")

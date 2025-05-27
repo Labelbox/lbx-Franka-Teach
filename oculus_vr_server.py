@@ -25,6 +25,7 @@ import argparse
 import pickle
 from scipy.spatial.transform import Rotation as R
 from typing import Dict, Optional, Tuple
+import os
 
 # Import the Oculus Reader
 from oculus_reader.reader import OculusReader
@@ -93,7 +94,8 @@ class OculusVRServer:
                  debug=False, 
                  right_controller=True, 
                  ip_address=None,
-                 simulation=False):
+                 simulation=False,
+                 coord_transform=None):
         """
         Initialize the Oculus VR Server with DROID-exact VRPolicy control
         
@@ -102,6 +104,7 @@ class OculusVRServer:
             right_controller: If True, use right controller for robot control
             ip_address: IP address of Quest device (None for USB connection)
             simulation: If True, use simulated FR3 robot instead of real hardware
+            coord_transform: Custom coordinate transformation vector (default: DROID's [-2, -1, -3, 4])
         """
         self.debug = debug
         self.right_controller = right_controller
@@ -119,18 +122,47 @@ class OculusVRServer:
         self.control_hz = 15
         self.control_interval = 1.0 / self.control_hz
         
-        # DROID exact coordinate transformation
-        # From oculus_controller.py: rmat_reorder: list = [-2, -1, -3, 4]
-        rmat_reorder = [-2, -1, -3, 4]
+        # Coordinate transformation
+        # Default: DROID exact from oculus_controller.py: rmat_reorder: list = [-2, -1, -3, 4]
+        # But this might not be correct for all robot setups
+        if coord_transform is None:
+            # Try a more standard transformation that should work for most robots
+            # This maps: VR +Z (forward) → Robot +X (forward)
+            #           VR +X (right) → Robot -Y (right) 
+            #           VR +Y (up) → Robot +Z (up)
+            rmat_reorder = [-3, -1, 2, 4]  # More intuitive default
+            print("\n⚠️  Using adjusted coordinate transformation for better compatibility")
+            print("   If rotation is still incorrect, try --coord-transform with different values")
+        else:
+            rmat_reorder = coord_transform
+            
         self.global_to_env_mat = vec_to_reorder_mat(rmat_reorder)
         
-        if self.debug:
-            print("\n🔍 DEBUG: DROID-exact Coordinate Mapping:")
-            print("   Reorder vector: [-2, -1, -3, 4]")
+        if self.debug or coord_transform is not None:
+            print("\n🔍 Coordinate Transformation:")
+            print(f"   Reorder vector: {rmat_reorder}")
             print("   Transformation Matrix:")
             for i in range(4):
                 row = self.global_to_env_mat[i]
                 print(f"   [{row[0]:6.1f}, {row[1]:6.1f}, {row[2]:6.1f}, {row[3]:6.1f}]")
+            
+            # Show what this transformation does
+            test_vecs = [
+                ([1, 0, 0, 1], "VR right (+X)"),
+                ([0, 1, 0, 1], "VR up (+Y)"),
+                ([0, 0, 1, 1], "VR forward (+Z)"),
+            ]
+            print("\n   Mapping:")
+            for vec, name in test_vecs:
+                transformed = self.global_to_env_mat @ np.array(vec)
+                direction = ""
+                if abs(transformed[0]) > 0.5:
+                    direction = f"Robot {'forward' if transformed[0] > 0 else 'backward'} (X)"
+                elif abs(transformed[1]) > 0.5:
+                    direction = f"Robot {'left' if transformed[1] > 0 else 'right'} (Y)"
+                elif abs(transformed[2]) > 0.5:
+                    direction = f"Robot {'up' if transformed[2] > 0 else 'down'} (Z)"
+                print(f"   {name} → {direction}")
         
         # Initialize transformation matrices
         self.vr_to_global_mat = np.eye(4)
@@ -261,6 +293,9 @@ class OculusVRServer:
         # First frame flag
         self.is_first_frame = True
         
+        # Flag to reset robot after calibration
+        self._reset_robot_after_calibration = False
+        
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
         print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
@@ -371,6 +406,14 @@ class OculusVRServer:
                                 print("Warning: Could not invert calibration pose")
                             
                             self.reset_orientation = False  # Calibration complete
+                            
+                            # Reset robot to home position after calibration
+                            if not self.debug and not self.reset_orientation:
+                                print("🏠 Moving robot to reset position after calibration...")
+                                self._reset_robot_after_calibration = True
+                            elif self.debug:
+                                print("\n✅ Calibration complete! Ready for teleoperation.")
+                                print("   Hold grip button to start controlling the robot")
                         else:
                             print(f"\n⚠️  Not enough movement detected ({movement_distance*1000:.1f}mm)")
                             print(f"   Please move controller at least 3mm in your desired forward direction")
@@ -400,6 +443,11 @@ class OculusVRServer:
                         self.reset_orientation = True
                     self.vr_to_global_mat = rot_mat
                     print("📐 Orientation reset (DROID-style)")
+                    
+                    # Reset robot to home position after calibration
+                    if not self.debug and not self.reset_orientation:
+                        print("🏠 Moving robot to reset position after calibration...")
+                        self._reset_robot_after_calibration = True
             
             # Update previous button states for next iteration
             self.prev_grip_state = current_grip
@@ -457,7 +505,19 @@ class OculusVRServer:
         target_pos_offset = self.vr_state["pos"] - self.vr_origin["pos"]
         pos_action = target_pos_offset - robot_pos_offset
         
-        # Calculate Euler Action - DROID exact
+        # Calculate Rotation Action - CRITICAL FIX FOR DEOXYS
+        # DROID calculates euler velocities because Polymetis expects euler angles
+        # But Deoxys expects quaternions directly, so we need a different approach
+        
+        # Calculate the target quaternion directly
+        # VR controller's relative rotation from its origin
+        vr_relative_rot = R.from_quat(self.vr_origin["quat"]).inv() * R.from_quat(self.vr_state["quat"])
+        # Apply this relative rotation to the robot's origin orientation
+        target_rot = R.from_quat(self.robot_origin["quat"]) * vr_relative_rot
+        target_quat = target_rot.as_quat()
+        
+        # For velocity-based control, we still need to calculate the rotation difference
+        # But we'll use it differently than DROID
         robot_quat_offset = quat_diff(self.robot_quat, self.robot_origin["quat"])
         target_quat_offset = quat_diff(self.vr_state["quat"], self.vr_origin["quat"])
         quat_action = quat_diff(target_quat_offset, robot_quat_offset)
@@ -481,7 +541,12 @@ class OculusVRServer:
         lin_vel, rot_vel, gripper_vel = self._limit_velocity(pos_action, euler_action, gripper_action)
         
         # Prepare Return Values
-        info_dict = {"target_cartesian_position": target_cartesian, "target_gripper_position": target_gripper}
+        # Store the target quaternion for Deoxys
+        info_dict = {
+            "target_cartesian_position": target_cartesian, 
+            "target_gripper_position": target_gripper,
+            "target_quaternion": target_quat  # Add this for Deoxys
+        }
         action = np.concatenate([lin_vel, rot_vel, [gripper_vel]])
         action = action.clip(-1, 1)
         
@@ -528,7 +593,7 @@ class OculusVRServer:
         
         return robot_state.pos, robot_state.quat
     
-    def velocity_to_position_target(self, velocity_action, current_pos, current_quat):
+    def velocity_to_position_target(self, velocity_action, current_pos, current_quat, action_info=None):
         """Convert velocity action to position target for deoxys control
         
         This is the key difference from DROID - Deoxys expects quaternions directly,
@@ -547,19 +612,18 @@ class OculusVRServer:
         # Calculate target position
         target_pos = current_pos + pos_delta
         
-        # Calculate target orientation - CRITICAL DIFFERENCE
-        # DROID uses euler angles internally, but Deoxys needs quaternions
-        # We need to apply the rotation delta in quaternion space
-        
-        # Convert rotation velocity (euler angles) to quaternion delta
-        rot_delta_quat = euler_to_quat(rot_delta)
-        
-        # Apply quaternion multiplication to get target orientation
-        # target_quat = current_quat * rot_delta_quat
-        current_rot = R.from_quat(current_quat)
-        delta_rot = R.from_quat(rot_delta_quat)
-        target_rot = delta_rot * current_rot  # Order matters for quaternion multiplication
-        target_quat = target_rot.as_quat()
+        # Calculate target orientation - CRITICAL DIFFERENCE FOR DEOXYS
+        if action_info and "target_quaternion" in action_info:
+            # Use the pre-calculated target quaternion for Deoxys
+            target_quat = action_info["target_quaternion"]
+        else:
+            # Fallback: convert rotation velocity (euler angles) to quaternion
+            # This is less accurate for Deoxys but maintains compatibility
+            rot_delta_quat = euler_to_quat(rot_delta)
+            current_rot = R.from_quat(current_quat)
+            delta_rot = R.from_quat(rot_delta_quat)
+            target_rot = delta_rot * current_rot
+            target_quat = target_rot.as_quat()
         
         # Calculate target gripper
         target_gripper = np.clip(self.robot_gripper + gripper_delta, 0.0, 1.0)
@@ -596,6 +660,21 @@ class OculusVRServer:
                     self.robot_gripper = 0.0
                     self.is_first_frame = False
                 
+                # Handle robot reset after calibration
+                if hasattr(self, '_reset_robot_after_calibration') and self._reset_robot_after_calibration:
+                    self._reset_robot_after_calibration = False
+                    print("🤖 Executing robot reset after calibration...")
+                    reset_pos, reset_quat = self.reset_robot()
+                    self.robot_pos = reset_pos
+                    self.robot_quat = reset_quat
+                    self.robot_euler = quat_to_euler(reset_quat)
+                    self.robot_gripper = 0.0
+                    # Clear any pending actions
+                    self.reset_origin = True
+                    print("✅ Robot is now at home position, ready for teleoperation")
+                    print("   Hold grip button to start controlling the robot\n")
+                    continue  # Skip this control cycle
+                
                 # Control at specified frequency
                 if current_time - last_control_time >= self.control_interval:
                     # Get controller info
@@ -622,7 +701,7 @@ class OculusVRServer:
                         
                         # Convert velocity to position target
                         target_pos, target_quat, target_gripper = self.velocity_to_position_target(
-                            action, self.robot_pos, self.robot_quat
+                            action, self.robot_pos, self.robot_quat, action_info
                         )
                         
                         # Apply workspace bounds
@@ -644,6 +723,15 @@ class OculusVRServer:
                                 print(f"   Target Pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
                                 target_euler_deg = np.degrees(quat_to_euler(target_quat))
                                 print(f"   Target Rot (deg): [R:{target_euler_deg[0]:.1f}, P:{target_euler_deg[1]:.1f}, Y:{target_euler_deg[2]:.1f}]")
+                                
+                                # Show VR controller rotation for debugging
+                                if hasattr(self, 'vr_state') and self.vr_state:
+                                    vr_euler = quat_to_euler(self.vr_state['quat'], degrees=True)
+                                    print(f"   VR Controller Rot (deg): [R:{vr_euler[0]:.1f}, P:{vr_euler[1]:.1f}, Y:{vr_euler[2]:.1f}]")
+                                
+                                # Show rotation difference
+                                if np.any(np.abs(action[3:6]) > 0.01):
+                                    print(f"   🔄 ROTATION ACTIVE - Rot velocities: [{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
                                 
                                 # Show color-coded gripper state
                                 if gripper_state == GRIPPER_CLOSE:
@@ -798,15 +886,45 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
                         help='IP address of Quest device (default: USB connection)')
     parser.add_argument('--simulation', action='store_true',
                         help='Use simulated FR3 robot instead of real hardware')
+    parser.add_argument('--coord-transform', nargs='+', type=float,
+                        help='Custom coordinate transformation vector (format: x y z w)')
+    parser.add_argument('--hot-reload', action='store_true',
+                        help='Enable hot reload mode (auto-restart on file changes)')
     
     args = parser.parse_args()
     
+    # If hot reload is requested, launch the hot reload wrapper instead
+    if args.hot_reload:
+        import subprocess
+        import sys
+        
+        # Remove --hot-reload from args and pass the rest to the wrapper
+        new_args = [arg for arg in sys.argv[1:] if arg != '--hot-reload']
+        
+        print("🔥 Launching in hot reload mode...")
+        
+        # Check if hot reload script exists
+        if not os.path.exists('oculus_vr_server_hotreload.py'):
+            print("❌ Hot reload script not found!")
+            print("   Make sure oculus_vr_server_hotreload.py is in the same directory")
+            sys.exit(1)
+        
+        # Launch the hot reload wrapper
+        try:
+            subprocess.run([sys.executable, 'oculus_vr_server_hotreload.py'] + new_args)
+        except KeyboardInterrupt:
+            print("\n✅ Hot reload stopped")
+        sys.exit(0)
+    
+    # Normal execution (no hot reload)
     # Create and start server with DROID-exact parameters
+    coord_transform = args.coord_transform
     server = OculusVRServer(
         debug=args.debug,
         right_controller=not args.left_controller,
         ip_address=args.ip,
-        simulation=args.simulation
+        simulation=args.simulation,
+        coord_transform=coord_transform
     )
     
     try:

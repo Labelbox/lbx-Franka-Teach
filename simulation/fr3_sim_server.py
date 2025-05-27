@@ -195,6 +195,17 @@ class FR3SimServer:
             # Convert gripper command to 0-1 range
             target_gripper = 1.0 if action.gripper == GRIPPER_CLOSE else 0.0
             
+            # Debug: Print received command
+            if hasattr(self, '_last_debug_time'):
+                if time.time() - self._last_debug_time > 0.5:  # Print every 0.5s
+                    print(f"\n📥 Received command:")
+                    print(f"   Target pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
+                    print(f"   Target quat: [{action.quat[0]:.3f}, {action.quat[1]:.3f}, {action.quat[2]:.3f}, {action.quat[3]:.3f}]")
+                    print(f"   Gripper: {'CLOSE' if target_gripper > 0.5 else 'OPEN'}")
+                    self._last_debug_time = time.time()
+            else:
+                self._last_debug_time = time.time()
+            
             # Send target to simulation controller
             self.sim_controller.set_target_pose(
                 target_pos,
@@ -207,6 +218,16 @@ class FR3SimServer:
             self.current_pos = pos
             self.current_quat = quat
             self.current_gripper = GRIPPER_CLOSE if gripper > 0.5 else GRIPPER_OPEN
+            
+            # Debug: Print actual state
+            if hasattr(self, '_last_state_debug_time'):
+                if time.time() - self._last_state_debug_time > 0.5:  # Print every 0.5s
+                    print(f"📤 Current state:")
+                    print(f"   Actual pos: [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
+                    print(f"   Pos error: {np.linalg.norm(target_pos - pos)*1000:.1f}mm")
+                    self._last_state_debug_time = time.time()
+            else:
+                self._last_state_debug_time = time.time()
             
         return self._get_current_state()
         

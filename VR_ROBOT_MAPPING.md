@@ -22,7 +22,7 @@ transformed_mat = global_to_env_mat @ vr_to_global_mat @ rot_mat
 ```
 - `global_to_env_mat`: Position reordering (default: [-3, -1, 2, 4])
 - `vr_to_global_mat`: Forward direction calibration
-- Rotation axis transform: [X, Y, Z] → [Y, X, Z] (swap X and Y)
+- Rotation axis transform: [X, Y, Z] → [-Y, X, Z] (roll inverted for ergonomics)
 
 ### 3. Velocity Calculation
 ```python
@@ -76,9 +76,11 @@ target_quat = target_rot.as_quat()
 - Prevents false rotation readings
 
 ### Motion Mapping
-- VR Roll (Y-axis) → Robot Pitch (Y-axis)
-- VR Pitch (X-axis) → Robot Roll (X-axis)
-- VR Yaw (Z-axis) → Robot Yaw (Z-axis)
+- VR Roll → Robot Roll (INVERTED for ergonomics)
+- VR Pitch → Robot Pitch
+- VR Yaw → Robot Yaw
+
+The inversion of roll makes the teleoperation more intuitive - rolling the controller left causes the robot to roll left from the operator's perspective.
 
 ## Control Parameters (DROID v1.1 Compatible)
 ```python

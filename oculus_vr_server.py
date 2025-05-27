@@ -5,7 +5,7 @@ Based on droid/controllers/oculus_controller.py
 
 VR-to-Robot Control Pipeline:
 1. VR Data Capture: Raw poses from Oculus Reader (50Hz internal thread)
-2. Coordinate Transform: Apply calibrated transformation [X,Y,Z] → [Y,X,Z]
+2. Coordinate Transform: Apply calibrated transformation [X,Y,Z] → [-Y,X,Z]
 3. Velocity Calculation: Position/rotation offsets with gains (pos=5, rot=2)
 4. Velocity Limiting: Clip to [-1, 1] range
 5. Delta Conversion: Scale by max_delta (0.075m linear, 0.15rad angular)
@@ -16,7 +16,7 @@ Key Differences from DROID:
 - DROID uses Polymetis (euler angles) vs our Deoxys (quaternions)
 - We skip IK solver (Deoxys handles internally)
 - Direct quaternion calculation for accurate rotation control
-- Calibrated axis mapping: VR [Roll=Y, Pitch=X, Yaw=Z]
+- VR motions map directly to robot motions (roll inverted for ergonomics)
 
 Features:
 - Velocity-based control with DROID-exact parameters
@@ -193,10 +193,10 @@ class OculusVRServer:
             
             # Show rotation mapping
             print("\n   Rotation Mapping (Labelbox mode):")
-            print("   VR Roll (Y-axis) → Robot Pitch (Y-axis)")
-            print("   VR Pitch (X-axis) → Robot Roll (X-axis)")
-            print("   VR Yaw (Z-axis) → Robot Yaw (Z-axis)")
-            print("   Axis transform: [X, Y, Z] → [Y, X, Z]")
+            print("   VR Roll → Robot Roll (INVERTED for ergonomics)")
+            print("   VR Pitch → Robot Pitch")
+            print("   VR Yaw → Robot Yaw")
+            print("   Axis transform: [X, Y, Z] → [-Y, X, Z]")
         
         # Initialize transformation matrices
         self.vr_to_global_mat = np.eye(4)
@@ -529,11 +529,12 @@ class OculusVRServer:
                 # VR axes (confirmed by calibration): X=pitch, Y=roll, Z=yaw
                 # Robot axes: X=roll, Y=pitch, Z=yaw
                 # Desired mapping:
-                # VR Roll (Y-axis) → Robot Pitch (Y-axis) 
+                # VR Roll (Y-axis) → Robot Pitch (Y-axis) - INVERTED for ergonomics
                 # VR Pitch (X-axis) → Robot Roll (X-axis)
                 # VR Yaw (Z-axis) → Robot Yaw (Z-axis)
                 # We need to swap X and Y components to achieve this
-                transformed_axis = np.array([axis[1], axis[0], axis[2]])
+                # Negate Y for inverted roll
+                transformed_axis = np.array([-axis[1], axis[0], axis[2]])
                 
                 # Create new rotation from transformed axis and same angle
                 transformed_rotvec = transformed_axis * angle
@@ -914,21 +915,19 @@ class OculusVRServer:
                                         
                                         print(f"   🎮 VR Motion: {vr_motion}")
                                         
-                                        # Apply transformation to show expected robot motion
-                                        # Transform: [X, Y, Z] → [Y, X, Z] (swap X and Y)
-                                        transformed_axis = np.array([axis_norm[1], axis_norm[0], axis_norm[2]])
-                                        abs_transformed = np.abs(transformed_axis)
-                                        
+                                        # Since VR roll/pitch/yaw map directly to robot roll/pitch/yaw
+                                        # The robot motion is the same as VR motion (just inverted roll)
                                         robot_motion = ""
-                                        if abs_transformed[0] > threshold:  # Robot Roll (X-axis)
-                                            direction = "RIGHT" if transformed_axis[0] > 0 else "LEFT"
-                                            robot_motion = f"Roll {direction}"
-                                        elif abs_transformed[1] > threshold:  # Robot Pitch (Y-axis)
-                                            direction = "DOWN" if transformed_axis[1] > 0 else "UP"
-                                            robot_motion = f"Pitch {direction}"
-                                        elif abs_transformed[2] > threshold:  # Robot Yaw (Z-axis)
-                                            direction = "LEFT" if transformed_axis[2] > 0 else "RIGHT"
-                                            robot_motion = f"Yaw {direction}"
+                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
+                                            # Roll is inverted for ergonomics
+                                            direction = "RIGHT" if axis_norm[1] > 0 else "LEFT"
+                                            robot_motion = f"Rolling {direction} (inverted)"
+                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
+                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
+                                            robot_motion = f"Pitching {direction}"
+                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
+                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"
+                                            robot_motion = f"Yawing {direction}"
                                         else:
                                             robot_motion = "Combined rotation"
                                         

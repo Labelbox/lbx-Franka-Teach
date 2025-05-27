@@ -1,0 +1,46 @@
+{
+  "realsense_hand": {
+    "enabled": true,
+    "type": "realsense",
+    "port_offset": 0,
+    "has_depth": true,
+    "serial": "123456",
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "description": "Hand-mounted Intel RealSense camera"
+  },
+  "realsense_side": {
+    "enabled": true,
+    "type": "realsense",
+    "port_offset": 1,
+    "has_depth": true,
+    "serial": "234567",
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "description": "Side-view Intel RealSense camera"
+  },
+  "zed_front": {
+    "enabled": false,
+    "type": "zed",
+    "port_offset": 2,
+    "has_depth": true,
+    "serial": "345678",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "description": "Front-view ZED stereo camera"
+  },
+  "zed_overhead": {
+    "enabled": false,
+    "type": "zed",
+    "port_offset": 3,
+    "has_depth": true,
+    "serial": "456789",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "description": "Overhead ZED stereo camera"
+  }
+} 

@@ -1,0 +1,74 @@
+# ZED Camera Configuration Template
+# This is a template for configuring ZED stereo cameras
+# Copy this file to cameras_zed.yaml and update with your camera details
+
+manufacturer: Stereolabs ZED
+cameras:
+  zed_0:
+    enabled: false
+    type: zed
+    serial_number: '12345'  # Replace with your ZED camera serial
+    port_offset: 0
+    config:
+      resolution: 'HD720'   # Options: HD2K, HD1080, HD720, VGA
+      fps: 30
+      enable_depth: true
+      depth_mode: 'ULTRA'   # Options: NONE, PERFORMANCE, QUALITY, ULTRA
+      coordinate_units: 'METER'
+      depth_minimum_distance: 0.3  # meters
+      depth_maximum_distance: 20.0  # meters
+      enable_positional_tracking: false
+      enable_spatial_mapping: false
+    description: 'ZED 2 Camera'
+    
+  zed_mini_0:
+    enabled: false
+    type: zed
+    serial_number: '67890'  # Replace with your ZED Mini serial
+    port_offset: 1
+    config:
+      resolution: 'HD720'
+      fps: 30
+      enable_depth: true
+      depth_mode: 'QUALITY'
+      coordinate_units: 'METER'
+      depth_minimum_distance: 0.1  # ZED Mini can go closer
+      depth_maximum_distance: 15.0
+      enable_imu: true  # ZED Mini has IMU
+    description: 'ZED Mini Camera'
+
+camera_settings:
+  jpeg_quality: 90
+  depth_encoding: '16UC1'
+  depth_scale: 0.001  # Convert to meters
+  enable_threading: true
+  buffer_size: 5
+  enable_sync: false
+  sync_tolerance_ms: 10
+  
+  # ZED-specific default settings
+  zed_defaults:
+    confidence_threshold: 100  # 0-100, higher = more confident depth
+    texture_confidence_threshold: 100
+    enable_fill_mode: true  # Fill holes in depth map
+    enable_right_side_measure: true  # Use right camera for depth
+    sensing_mode: 'STANDARD'  # Options: STANDARD, FILL
+    
+    # Camera controls
+    brightness: 4  # 0-8
+    contrast: 4    # 0-8
+    hue: 0         # 0-11
+    saturation: 4  # 0-8
+    sharpness: 4   # 0-8
+    gamma: 8       # 1-9
+    gain: -1       # -1 for auto, 0-100 manual
+    exposure: -1   # -1 for auto, 0-100 manual
+    auto_whitebalance: true
+    whitebalance_temperature: 4600  # 2800-6500K if manual
+
+# Notes:
+# - ZED SDK must be installed: https://www.stereolabs.com/developers/
+# - Run 'ZED_Explorer' tool to find camera serial numbers
+# - Higher resolutions and depth modes require more GPU/CPU resources
+# - ZED 2 has better depth range than ZED Mini
+# - ZED Mini has built-in IMU for better tracking 

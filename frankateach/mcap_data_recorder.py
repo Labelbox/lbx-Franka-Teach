@@ -40,7 +40,8 @@ class MCAPDataRecorder:
                  demo_name: str = None,
                  save_images: bool = True,
                  save_depth: bool = False,
-                 camera_configs: Dict = None):
+                 camera_configs: Dict = None,
+                 camera_manager=None):
         """
         Initialize MCAP data recorder
         
@@ -49,7 +50,8 @@ class MCAPDataRecorder:
             demo_name: Name for this demonstration
             save_images: Whether to save camera images
             save_depth: Whether to save depth images
-            camera_configs: Camera configuration dictionary
+            camera_configs: Camera configuration dictionary (deprecated, use camera_manager)
+            camera_manager: CameraManager instance for handling cameras
         """
         # Set up directories
         if base_dir is None:
@@ -74,6 +76,7 @@ class MCAPDataRecorder:
         self.save_images = save_images
         self.save_depth = save_depth
         self.camera_configs = camera_configs or {}
+        self.camera_manager = camera_manager
         
         # MCAP components
         self._writer = None
@@ -86,9 +89,9 @@ class MCAPDataRecorder:
         self._writer_thread = None
         self._running = False
         
-        # Camera subscribers
-        self._camera_subscribers = {}
-        self._depth_subscribers = {}
+        # Camera recording thread
+        self._camera_thread = None
+        self._camera_recording = False
         
         # Recording metadata
         self.metadata = {
@@ -257,6 +260,74 @@ class MCAPDataRecorder:
             }).encode("utf-8")
         )
         
+        # Raw image schema for depth data (proper Foxglove RawImage)
+        self._schemas["raw_image"] = self._writer.register_schema(
+            name="foxglove.RawImage",
+            encoding="jsonschema",
+            data=json.dumps({
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "object",
+                        "properties": {
+                            "sec": {"type": "integer"},
+                            "nanosec": {"type": "integer"}
+                        }
+                    },
+                    "frame_id": {"type": "string"},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "encoding": {"type": "string"},
+                    "step": {"type": "integer"},
+                    "data": {"type": "string", "contentEncoding": "base64"}
+                }
+            }).encode("utf-8")
+        )
+        
+        # Camera calibration schema (Foxglove standard)
+        self._schemas["camera_calibration"] = self._writer.register_schema(
+            name="foxglove.CameraCalibration",
+            encoding="jsonschema",
+            data=json.dumps({
+                "type": "object",
+                "properties": {
+                    "timestamp": {
+                        "type": "object",
+                        "properties": {
+                            "sec": {"type": "integer"},
+                            "nanosec": {"type": "integer"}
+                        }
+                    },
+                    "frame_id": {"type": "string"},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "distortion_model": {"type": "string"},
+                    "D": {
+                        "type": "array",
+                        "items": {"type": "number"}
+                    },
+                    "K": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 9,
+                        "maxItems": 9
+                    },
+                    "R": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 9,
+                        "maxItems": 9
+                    },
+                    "P": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 12,
+                        "maxItems": 12
+                    }
+                }
+            }).encode("utf-8")
+        )
+        
         # Transform schema for TF messages
         self._schemas["transform"] = self._writer.register_schema(
             name="tf2_msgs/msg/TFMessage",
@@ -353,11 +424,13 @@ class MCAPDataRecorder:
         self._writer_thread = threading.Thread(target=self._write_worker, daemon=True)
         self._writer_thread.start()
         
-        # Initialize camera subscribers if needed
-        if self.save_images:
-            self._init_camera_subscribers()
-            
+        # Set recording flag before starting camera thread to avoid race condition
         self.recording = True
+        
+        # Initialize camera recording thread
+        if self.save_images:
+            self._init_camera_recording()
+            
         notify_component_start("MCAP Data Recorder")
         print(f"📹 Started recording: {timestamp_str}")
         print(f"   Saving to: {self.filepath}")
@@ -681,14 +754,11 @@ class MCAPDataRecorder:
             
         self.recording = False
         
-        # Stop camera subscribers
-        for subscriber in self._camera_subscribers.values():
-            subscriber.stop()
-        for subscriber in self._depth_subscribers.values():
-            subscriber.stop()
-        self._camera_subscribers.clear()
-        self._depth_subscribers.clear()
-        
+        # Stop camera recording
+        self._camera_recording = False
+        if self._camera_thread:
+            self._camera_thread.join(timeout=5.0)
+            
         # Wait for queue to empty
         print("⏳ Flushing data queue...")
         while not self._data_queue.empty():
@@ -754,14 +824,12 @@ class MCAPDataRecorder:
         return self.start_recording()
         
     def write_timestep(self, timestep: Dict[str, Any], timestamp: Optional[float] = None):
-        """Write a complete timestep in Labelbox Robotics format to MCAP"""
+        """Queue timestep data for writing to MCAP"""
         if not self.recording:
             return
             
-        if timestamp is None:
-            timestamp = time.time()
-            
-        # Queue the timestep for writing
+        # Add type field for the new data format
+        timestep['type'] = 'timestep'
         self._data_queue.put(timestep)
         
     def write_robot_state(self, state: Dict[str, Any], timestamp: Optional[float] = None):
@@ -777,8 +845,8 @@ class MCAPDataRecorder:
         print("Warning: write_vr_controller is deprecated, use write_timestep instead")
         
     def write_camera_image(self, camera_id: str, image: np.ndarray, timestamp: Optional[float] = None):
-        """Write camera image to MCAP"""
-        if not self.recording or not self.save_images:
+        """Queue camera image for writing to MCAP"""
+        if not self.recording:
             return
             
         if timestamp is None:
@@ -786,35 +854,153 @@ class MCAPDataRecorder:
             
         data = {
             "type": "camera_image",
-            "timestamp": timestamp,
             "camera_id": camera_id,
-            "data": image
+            "image": image,
+            "timestamp": timestamp
         }
+        
         self._data_queue.put(data)
         
-    def _init_camera_subscribers(self):
-        """Initialize camera subscribers based on configuration"""
-        for cam_id, cam_config in self.camera_configs.items():
-            if cam_config.get("enabled", True):
-                # RGB subscriber
-                self._camera_subscribers[cam_id] = ZMQCameraSubscriber(
-                    HOST, CAM_PORT + cam_config.get("port_offset", cam_id), "RGB"
-                )
+    def write_depth_image(self, camera_id: str, depth_image: np.ndarray, timestamp: Optional[float] = None):
+        """Queue depth image for writing to MCAP"""
+        if not self.recording:
+            return
+            
+        if timestamp is None:
+            timestamp = time.time()
+            
+        data = {
+            "type": "depth_image",
+            "camera_id": camera_id,
+            "depth_image": depth_image,
+            "timestamp": timestamp
+        }
+        
+        self._data_queue.put(data)
+        
+    def write_camera_calibration(self, camera_id: str, intrinsics: Dict, timestamp: Optional[float] = None):
+        """Queue camera calibration for writing to MCAP"""
+        if not self.recording:
+            return
+            
+        if timestamp is None:
+            timestamp = time.time()
+            
+        data = {
+            "type": "camera_calibration",
+            "camera_id": camera_id,
+            "intrinsics": intrinsics,
+            "timestamp": timestamp
+        }
+        
+        self._data_queue.put(data)
+        
+    def _init_camera_recording(self):
+        """Initialize camera recording thread if camera manager is available"""
+        if not self.camera_manager:
+            print("⚠️  No camera manager provided, camera recording disabled")
+            return
+            
+        self._camera_recording = True
+        self._camera_thread = threading.Thread(
+            target=self._camera_recording_worker, 
+            daemon=True,
+            name="MCAP-Camera-Recorder"
+        )
+        self._camera_thread.start()
+        print("📷 Started camera recording thread")
+        
+    def _camera_recording_worker(self):
+        """Worker thread for recording camera frames to MCAP"""
+        print("📷 Camera recording thread started")
+        
+        # Track which cameras have had their calibration written
+        calibration_written = set()
+        
+        while self._camera_recording and self.recording:
+            try:
+                # Get frames from all cameras
+                frames = self.camera_manager.get_all_frames(timeout=0.1)
                 
-                # Depth subscriber if enabled
-                if self.save_depth and cam_config.get("has_depth", False):
-                    self._depth_subscribers[cam_id] = ZMQCameraSubscriber(
-                        HOST, CAM_PORT + DEPTH_PORT_OFFSET + cam_config.get("port_offset", cam_id), "Depth"
-                    )
-                    
+                if frames:
+                    # Process each camera frame
+                    for cam_id, frame in frames.items():
+                        # Use the frame's timestamp for better synchronization
+                        timestamp = frame.timestamp
+                        
+                        # Write camera calibration once per camera
+                        if cam_id not in calibration_written and frame.intrinsics:
+                            self.write_camera_calibration(cam_id, frame.intrinsics, timestamp)
+                            calibration_written.add(cam_id)
+                        
+                        # Write color image
+                        if frame.color_image is not None:
+                            self.write_camera_image(cam_id, frame.color_image, timestamp)
+                            
+                        # Write depth image if available and enabled
+                        if self.save_depth and frame.depth_image is not None:
+                            self.write_depth_image(cam_id, frame.depth_image, timestamp)
+                            
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.001)
+                
+            except Exception as e:
+                print(f"❌ Error in camera recording: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)
+                
+        print("📷 Camera recording thread stopped")
+        
     def _write_worker(self):
         """Worker thread for writing data to MCAP"""
         while self._running:
             try:
-                timestep = self._data_queue.get(timeout=0.1)
+                data = self._data_queue.get(timeout=0.1)
                 
-                # Write the complete timestep
-                self._write_timestep_to_mcap(timestep)
+                # Handle different data types
+                if isinstance(data, dict) and 'type' in data:
+                    data_type = data['type']
+                    
+                    if data_type == 'timestep':
+                        # Original timestep format
+                        self._write_timestep_to_mcap(data)
+                    elif data_type == 'camera_image':
+                        # Camera image data
+                        timestamp = data['timestamp']
+                        time_ns = int(timestamp * 1e9)
+                        ts_sec = int(time_ns // 1_000_000_000)
+                        ts_nsec = int(time_ns % 1_000_000_000)
+                        self._write_camera_image_mcap(
+                            data['camera_id'], 
+                            data['image'], 
+                            ts_sec, ts_nsec, time_ns
+                        )
+                    elif data_type == 'depth_image':
+                        # Depth image data
+                        timestamp = data['timestamp']
+                        time_ns = int(timestamp * 1e9)
+                        ts_sec = int(time_ns // 1_000_000_000)
+                        ts_nsec = int(time_ns % 1_000_000_000)
+                        self._write_depth_image_mcap(
+                            data['camera_id'], 
+                            data['depth_image'], 
+                            ts_sec, ts_nsec, time_ns
+                        )
+                    elif data_type == 'camera_calibration':
+                        # Camera calibration data
+                        timestamp = data['timestamp']
+                        time_ns = int(timestamp * 1e9)
+                        ts_sec = int(time_ns // 1_000_000_000)
+                        ts_nsec = int(time_ns % 1_000_000_000)
+                        self._write_camera_calibration_mcap(
+                            data['camera_id'], 
+                            data['intrinsics'], 
+                            ts_sec, ts_nsec, time_ns
+                        )
+                else:
+                    # Assume it's a timestep for backward compatibility
+                    self._write_timestep_to_mcap(data)
                     
             except Empty:
                 continue
@@ -1114,6 +1300,183 @@ class MCAPDataRecorder:
             data=json.dumps(msg).encode("utf-8")
         )
         
+    def _write_depth_image_mcap(self, camera_id: str, depth_image: np.ndarray, ts_sec: int, ts_nsec: int, timestamp_ns: int):
+        """Write depth image to MCAP"""
+        channel_name = f"depth_{camera_id}"
+        if channel_name not in self._channels:
+            self._channels[channel_name] = self._writer.register_channel(
+                topic=f"/camera/{camera_id}/depth",
+                message_encoding="json",
+                schema_id=self._schemas["raw_image"]
+            )
+        
+        # Encode depth data
+        # Convert to millimeters and clip to uint16 range
+        # Get depth scale from camera manager config if available
+        depth_scale = 0.001  # Default 1mm = 0.001m
+        if self.camera_manager and hasattr(self.camera_manager, 'config'):
+            depth_scale = self.camera_manager.config.get('camera_settings', {}).get('depth_scale', 0.001)
+        
+        # Ensure depth_image is float32 before conversion
+        if depth_image.dtype != np.float32:
+            depth_image = depth_image.astype(np.float32)
+            
+        # Convert meters to millimeters
+        depth_mm = (depth_image / depth_scale).astype(np.uint16)
+        
+        # Get actual dimensions after any processing
+        height, width = depth_mm.shape
+        
+        # Convert to bytes for proper encoding
+        # Ensure we're using native byte order
+        depth_bytes = depth_mm.tobytes()
+        
+        # Convert to base64
+        depth_data = base64.b64encode(depth_bytes).decode('utf-8')
+        
+        msg = {
+            "timestamp": {"sec": ts_sec, "nanosec": ts_nsec},
+            "frame_id": f"camera_{camera_id}_depth",
+            "width": width,
+            "height": height,
+            "encoding": "16UC1",  # 16-bit unsigned single channel
+            "step": width * 2,  # 2 bytes per pixel for 16-bit
+            "data": depth_data
+        }
+        
+        self._writer.add_message(
+            channel_id=self._channels[channel_name],
+            sequence=0,
+            log_time=timestamp_ns,
+            publish_time=timestamp_ns,
+            data=json.dumps(msg).encode("utf-8")
+        )
+        
+    def _write_camera_calibration_mcap(self, camera_id: str, intrinsics: Dict, ts_sec: int, ts_nsec: int, timestamp_ns: int):
+        """Write camera calibration to MCAP"""
+        # Write color camera calibration
+        channel_name = f"calibration_{camera_id}"
+        if channel_name not in self._channels:
+            self._channels[channel_name] = self._writer.register_channel(
+                topic=f"/camera/{camera_id}/camera_info",
+                message_encoding="json",
+                schema_id=self._schemas["camera_calibration"]
+            )
+        
+        # Convert intrinsics to camera calibration format
+        # K matrix (3x3 camera intrinsic matrix)
+        fx = intrinsics.get('fx', 0.0)
+        fy = intrinsics.get('fy', 0.0)
+        cx = intrinsics.get('cx', 0.0)
+        cy = intrinsics.get('cy', 0.0)
+        
+        K = [
+            fx, 0.0, cx,
+            0.0, fy, cy,
+            0.0, 0.0, 1.0
+        ]
+        
+        # R matrix (3x3 rectification matrix) - identity for single camera
+        R = [
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0
+        ]
+        
+        # P matrix (3x4 projection matrix)
+        P = [
+            fx, 0.0, cx, 0.0,
+            0.0, fy, cy, 0.0,
+            0.0, 0.0, 1.0, 0.0
+        ]
+        
+        # Distortion coefficients
+        D = intrinsics.get('coeffs', [0.0, 0.0, 0.0, 0.0, 0.0])
+        
+        # Distortion model
+        model = intrinsics.get('model', 'plumb_bob')
+        if model == 'distortion.brown_conrady':
+            model = 'plumb_bob'  # Convert RealSense model name to ROS standard
+        elif model == 'distortion.inverse_brown_conrady':
+            model = 'plumb_bob'  # Convert RealSense inverse model to ROS standard
+        elif 'brown_conrady' in str(model).lower():
+            model = 'plumb_bob'  # Handle any brown_conrady variant
+        
+        msg = {
+            "timestamp": {"sec": ts_sec, "nanosec": ts_nsec},
+            "frame_id": f"camera_{camera_id}",
+            "width": intrinsics.get('width', 0),
+            "height": intrinsics.get('height', 0),
+            "distortion_model": model,
+            "D": D,
+            "K": K,
+            "R": R,
+            "P": P
+        }
+        
+        self._writer.add_message(
+            channel_id=self._channels[channel_name],
+            sequence=0,
+            log_time=timestamp_ns,
+            publish_time=timestamp_ns,
+            data=json.dumps(msg).encode("utf-8")
+        )
+        
+        # Write depth camera calibration if available
+        depth_intrinsics = intrinsics.get('depth_intrinsics')
+        if depth_intrinsics:
+            depth_channel_name = f"calibration_depth_{camera_id}"
+            if depth_channel_name not in self._channels:
+                self._channels[depth_channel_name] = self._writer.register_channel(
+                    topic=f"/camera/{camera_id}/depth/camera_info",
+                    message_encoding="json",
+                    schema_id=self._schemas["camera_calibration"]
+                )
+            
+            # Convert depth intrinsics
+            d_fx = depth_intrinsics.get('fx', 0.0)
+            d_fy = depth_intrinsics.get('fy', 0.0)
+            d_cx = depth_intrinsics.get('cx', 0.0)
+            d_cy = depth_intrinsics.get('cy', 0.0)
+            
+            d_K = [
+                d_fx, 0.0, d_cx,
+                0.0, d_fy, d_cy,
+                0.0, 0.0, 1.0
+            ]
+            
+            d_P = [
+                d_fx, 0.0, d_cx, 0.0,
+                0.0, d_fy, d_cy, 0.0,
+                0.0, 0.0, 1.0, 0.0
+            ]
+            
+            # Depth distortion
+            d_D = depth_intrinsics.get('coeffs', [0.0, 0.0, 0.0, 0.0, 0.0])
+            d_model = depth_intrinsics.get('model', 'plumb_bob')
+            if 'brown_conrady' in str(d_model).lower():
+                d_model = 'plumb_bob'
+            
+            depth_msg = {
+                "timestamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                "frame_id": f"camera_{camera_id}_depth",
+                "width": depth_intrinsics.get('width', 0),
+                "height": depth_intrinsics.get('height', 0),
+                "distortion_model": d_model,
+                "D": d_D,
+                "K": d_K,
+                "R": R,  # Same rectification
+                "P": d_P
+            }
+            
+            self._writer.add_message(
+                channel_id=self._channels[depth_channel_name],
+                sequence=0,
+                log_time=timestamp_ns,
+                publish_time=timestamp_ns,
+                data=json.dumps(depth_msg).encode("utf-8")
+            )
+        
     def _write_robot_transforms(self, joint_positions: list, ts_sec: int, ts_nsec: int, timestamp_ns: int):
         """Write transforms for all robot links based on joint positions"""
         if "transform" not in self._channels:
@@ -1333,6 +1696,39 @@ class MCAPDataRecorder:
                     }
                 })
         
+        # Add dynamic camera transforms
+        if hasattr(self, 'dynamic_camera_configs'):
+            for camera_id, config in self.dynamic_camera_configs.items():
+                parent_frame = config['parent_frame']
+                trans = config['translation']
+                rot = config['rotation']
+                
+                # Camera RGB frame
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": parent_frame
+                    },
+                    "child_frame_id": f"camera_{camera_id}",
+                    "transform": {
+                        "translation": {"x": trans['x'], "y": trans['y'], "z": trans['z']},
+                        "rotation": {"x": rot['x'], "y": rot['y'], "z": rot['z'], "w": rot['w']}
+                    }
+                })
+                
+                # Camera depth frame (same position as RGB)
+                transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": parent_frame
+                    },
+                    "child_frame_id": f"camera_{camera_id}_depth",
+                    "transform": {
+                        "translation": {"x": trans['x'], "y": trans['y'], "z": trans['z']},
+                        "rotation": {"x": rot['x'], "y": rot['y'], "z": rot['z'], "w": rot['w']}
+                    }
+                })
+        
         # Write all transforms in a single TFMessage
         msg = {"transforms": transforms}
         
@@ -1410,6 +1806,98 @@ class MCAPDataRecorder:
             publish_time=initial_time_ns,
             data=json.dumps(static_transforms).encode("utf-8")
         )
+        
+        # Write camera transforms
+        self._write_camera_transforms()
+        
+    def _write_camera_transforms(self):
+        """Write static transforms for camera frames"""
+        if not self.camera_manager:
+            return
+            
+        # Try to load camera transform config
+        camera_transforms_config = {}
+        try:
+            transform_config_path = Path(__file__).parent.parent / "configs" / "camera_transforms.yaml"
+            if transform_config_path.exists():
+                import yaml
+                with open(transform_config_path, 'r') as f:
+                    camera_transforms_config = yaml.safe_load(f)
+        except Exception as e:
+            print(f"⚠️  Could not load camera transforms config: {e}")
+            
+        # Use actual start time for transforms
+        initial_time_ns = int(self.metadata["start_time"] * 1e9)
+        ts_sec = initial_time_ns // 1_000_000_000
+        ts_nsec = initial_time_ns % 1_000_000_000
+        
+        static_camera_transforms = []
+        self.dynamic_camera_configs = {}  # Store configs for dynamic cameras
+        
+        # Get configured transforms
+        transforms_data = camera_transforms_config.get('camera_transforms', {})
+        default_transform = camera_transforms_config.get('default_camera_transform', {
+            'parent_frame': 'base',
+            'translation': {'x': 0.0, 'y': 0.3, 'z': 0.5},
+            'rotation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
+        })
+        
+        # Add transforms for each camera
+        for camera_id in self.camera_manager.cameras.keys():
+            # Get transform for this camera or use default
+            transform = transforms_data.get(camera_id, default_transform)
+            parent_frame = transform.get('parent_frame', default_transform.get('parent_frame', 'base'))
+            trans = transform.get('translation', default_transform['translation'])
+            rot = transform.get('rotation', default_transform['rotation'])
+            
+            # Check if this is a static transform (parent is base or world)
+            if parent_frame in ['base', 'world', 'fr3_link0']:
+                # Static transform - write once at start
+                # Camera RGB frame
+                static_camera_transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": parent_frame
+                    },
+                    "child_frame_id": f"camera_{camera_id}",
+                    "transform": {
+                        "translation": {"x": trans['x'], "y": trans['y'], "z": trans['z']},
+                        "rotation": {"x": rot['x'], "y": rot['y'], "z": rot['z'], "w": rot['w']}
+                    }
+                })
+                
+                # Camera depth frame (same position as RGB)
+                static_camera_transforms.append({
+                    "header": {
+                        "stamp": {"sec": ts_sec, "nanosec": ts_nsec},
+                        "frame_id": parent_frame
+                    },
+                    "child_frame_id": f"camera_{camera_id}_depth",
+                    "transform": {
+                        "translation": {"x": trans['x'], "y": trans['y'], "z": trans['z']},
+                        "rotation": {"x": rot['x'], "y": rot['y'], "z": rot['z'], "w": rot['w']}
+                    }
+                })
+            else:
+                # Dynamic transform - store config for later updates
+                self.dynamic_camera_configs[camera_id] = {
+                    'parent_frame': parent_frame,
+                    'translation': trans,
+                    'rotation': rot
+                }
+                print(f"📷 Camera {camera_id} is mounted on {parent_frame} (dynamic transform)")
+        
+        if static_camera_transforms:
+            msg = {"transforms": static_camera_transforms}
+            
+            # Write to /tf_static
+            self._writer.add_message(
+                channel_id=self._channels["tf_static"],
+                sequence=0,
+                log_time=initial_time_ns,
+                publish_time=initial_time_ns,
+                data=json.dumps(msg).encode("utf-8")
+            )
         
     def _axis_angle_to_quaternion(self, axis: list, angle: float) -> dict:
         """Convert axis-angle representation to quaternion"""

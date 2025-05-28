@@ -1,0 +1,46 @@
+# Camera Transform Configuration
+# Defines the position and orientation of cameras relative to their parent frames
+
+camera_transforms:
+  realsense_0:
+    # Fixed camera position (mounted on table/stand)
+    parent_frame: "base"  # This camera is fixed relative to robot base
+    translation:
+      x: -0.3  # 30cm to the left of robot base
+      y: 0.2   # 20cm forward
+      z: 0.5   # 50cm up
+    rotation:
+      # Quaternion (x, y, z, w) - identity means camera faces same direction as robot
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      w: 1.0
+    frame_id: "camera_realsense_0"
+    
+  realsense_1:
+    # Hand-mounted camera position
+    parent_frame: "fr3_hand"  # This camera moves with the robot hand
+    translation:
+      x: 0.0   # Centered on hand
+      y: 0.0   # No offset
+      z: 0.1   # 10cm forward from hand mounting point
+    rotation:
+      # Quaternion (x, y, z, w) - camera faces forward from hand
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      w: 1.0
+    frame_id: "camera_realsense_1"
+
+# Default transform for any camera not explicitly configured
+default_camera_transform:
+  parent_frame: "base"
+  translation:
+    x: 0.0
+    y: 0.3
+    z: 0.5
+  rotation:
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    w: 1.0 

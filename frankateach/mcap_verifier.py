@@ -31,6 +31,7 @@ class MCAPVerifier:
         self.verification_results = {
             "file_info": {},
             "data_streams": {},
+            "camera_streams": {},
             "errors": [],
             "warnings": [],
             "summary": {}
@@ -95,6 +96,7 @@ class MCAPVerifier:
             # Track data by topic
             topic_data = {}
             message_counts = {}
+            camera_topics = {}
             
             # Read all messages
             for schema, channel, message in reader.iter_messages():
@@ -120,6 +122,10 @@ class MCAPVerifier:
                     topic_data[topic]["first_timestamp"] = timestamp_sec
                 topic_data[topic]["last_timestamp"] = timestamp_sec
                 
+                # Check if this is a camera topic
+                if topic.startswith("/camera/"):
+                    camera_topics[topic] = topic_data[topic]
+                
                 # Parse and verify message content
                 try:
                     if channel.message_encoding == "json":
@@ -134,6 +140,8 @@ class MCAPVerifier:
                             self._verify_vr_controller(msg_data, topic_data[topic])
                         elif topic == "/joint_states":
                             self._verify_joint_states(msg_data, topic_data[topic])
+                        elif topic.startswith("/camera/"):
+                            self._verify_camera_stream(topic, msg_data, topic_data[topic])
                             
                 except Exception as e:
                     self.verification_results["errors"].append(f"Error parsing {topic}: {str(e)}")
@@ -151,19 +159,34 @@ class MCAPVerifier:
                     avg_freq = 0
                     std_freq = 0
                 
-                self.verification_results["data_streams"][topic] = {
-                    "schema": data["schema"],
-                    "encoding": data["encoding"],
-                    "message_count": count,
-                    "average_frequency_hz": round(avg_freq, 2),
-                    "frequency_std_hz": round(std_freq, 2),
-                    "duration_sec": data["last_timestamp"] - data["first_timestamp"] if data["first_timestamp"] else 0,
-                    "has_joint_data": data.get("has_joint_data", False),
-                    "has_cartesian_data": data.get("has_cartesian_data", False),
-                    "joint_data_valid": data.get("joint_data_valid", False),
-                    "action_range": data.get("action_range", {}),
-                    "gripper_range": data.get("gripper_range", {})
-                }
+                # Store camera streams separately
+                if topic.startswith("/camera/"):
+                    self.verification_results["camera_streams"][topic] = {
+                        "schema": data["schema"],
+                        "encoding": data["encoding"],
+                        "message_count": count,
+                        "average_frequency_hz": round(avg_freq, 2),
+                        "frequency_std_hz": round(std_freq, 2),
+                        "duration_sec": data["last_timestamp"] - data["first_timestamp"] if data["first_timestamp"] else 0,
+                        "camera_id": data.get("camera_id", "unknown"),
+                        "is_depth": "depth" in topic,
+                        "resolution": data.get("resolution", "unknown"),
+                        "format": data.get("format", "unknown")
+                    }
+                else:
+                    self.verification_results["data_streams"][topic] = {
+                        "schema": data["schema"],
+                        "encoding": data["encoding"],
+                        "message_count": count,
+                        "average_frequency_hz": round(avg_freq, 2),
+                        "frequency_std_hz": round(std_freq, 2),
+                        "duration_sec": data["last_timestamp"] - data["first_timestamp"] if data["first_timestamp"] else 0,
+                        "has_joint_data": data.get("has_joint_data", False),
+                        "has_cartesian_data": data.get("has_cartesian_data", False),
+                        "joint_data_valid": data.get("joint_data_valid", False),
+                        "action_range": data.get("action_range", {}),
+                        "gripper_range": data.get("gripper_range", {})
+                    }
                 
     def _verify_robot_state(self, msg_data: Dict, topic_info: Dict):
         """Verify robot state message"""
@@ -256,6 +279,31 @@ class MCAPVerifier:
                 f"Invalid joint state position count: {len(positions)} (expected 9)"
             )
             
+    def _verify_camera_stream(self, topic: str, msg_data: Dict, topic_info: Dict):
+        """Verify camera stream message"""
+        # Extract camera ID from topic
+        parts = topic.split("/")
+        if len(parts) >= 3:
+            camera_id = parts[2]
+            topic_info["camera_id"] = camera_id
+        
+        # Check if it's a compressed image
+        if "compressed" in topic:
+            # Verify compressed image fields
+            if "format" in msg_data:
+                topic_info["format"] = msg_data["format"]
+            if "data" in msg_data:
+                # Could decode to check resolution, but that's expensive
+                pass
+        
+        # Check if it's a depth image
+        elif "depth" in topic:
+            # Verify depth image fields
+            if "encoding" in msg_data:
+                topic_info["format"] = msg_data["encoding"]
+            if "width" in msg_data and "height" in msg_data:
+                topic_info["resolution"] = f"{msg_data['width']}x{msg_data['height']}"
+            
     def _generate_summary(self):
         """Generate verification summary"""
         # Count totals
@@ -264,11 +312,28 @@ class MCAPVerifier:
             for stream in self.verification_results["data_streams"].values()
         )
         
+        # Count camera messages
+        camera_messages = sum(
+            stream["message_count"]
+            for stream in self.verification_results["camera_streams"].values()
+        )
+        
         # Check data quality
         has_robot_state = "/robot_state" in self.verification_results["data_streams"]
         has_actions = "/action" in self.verification_results["data_streams"]
         has_vr_data = "/vr_controller" in self.verification_results["data_streams"]
         has_joint_viz = "/joint_states" in self.verification_results["data_streams"]
+        
+        # Check camera data
+        has_camera_data = len(self.verification_results["camera_streams"]) > 0
+        camera_count = len(set(
+            stream.get("camera_id", "unknown") 
+            for stream in self.verification_results["camera_streams"].values()
+        ))
+        has_depth_data = any(
+            stream.get("is_depth", False)
+            for stream in self.verification_results["camera_streams"].values()
+        )
         
         # Check joint data
         has_joint_data = False
@@ -288,13 +353,18 @@ class MCAPVerifier:
         
         self.verification_results["summary"] = {
             "is_valid": is_valid,
-            "total_messages": total_messages,
+            "total_messages": total_messages + camera_messages,
+            "robot_messages": total_messages,
+            "camera_messages": camera_messages,
             "has_robot_state": has_robot_state,
             "has_actions": has_actions,
             "has_vr_controller": has_vr_data,
             "has_joint_visualization": has_joint_viz,
             "has_joint_data": has_joint_data,
             "joint_data_valid": joint_data_valid,
+            "has_camera_data": has_camera_data,
+            "camera_count": camera_count,
+            "has_depth_data": has_depth_data,
             "error_count": len(self.verification_results["errors"]),
             "warning_count": len(self.verification_results["warnings"])
         }
@@ -328,6 +398,20 @@ class MCAPVerifier:
                     print(f"      Linear velocity range: [{action_range['min'][0]:.3f}, {action_range['max'][0]:.3f}]")
                     print(f"      Angular velocity range: [{action_range['min'][3]:.3f}, {action_range['max'][3]:.3f}]")
         
+        # Camera streams
+        if results["camera_streams"]:
+            print(f"\n📷 Camera Streams:")
+            for topic, info in results["camera_streams"].items():
+                print(f"\n   {topic}:")
+                print(f"      Camera ID: {info.get('camera_id', 'unknown')}")
+                print(f"      Type: {'Depth' if info.get('is_depth', False) else 'RGB'}")
+                print(f"      Messages: {info['message_count']}")
+                print(f"      Frequency: {info['average_frequency_hz']:.1f} Hz (±{info['frequency_std_hz']:.1f})")
+                if info.get('format') != 'unknown':
+                    print(f"      Format: {info['format']}")
+                if info.get('resolution') != 'unknown':
+                    print(f"      Resolution: {info['resolution']}")
+        
         # Errors and warnings
         if results["errors"]:
             print(f"\n❌ Errors ({len(results['errors'])}):")
@@ -345,9 +429,18 @@ class MCAPVerifier:
         summary = results["summary"]
         print(f"\n📋 Summary:")
         print(f"   Total messages: {summary['total_messages']}")
+        print(f"   Robot messages: {summary['robot_messages']}")
+        print(f"   Camera messages: {summary['camera_messages']}")
         print(f"   Data streams present: {sum([summary['has_robot_state'], summary['has_actions'], summary['has_vr_controller']])}/3")
         print(f"   Joint data: {'✅ Valid' if summary['joint_data_valid'] else '❌ Missing or Invalid'}")
         print(f"   Visualization ready: {'✅' if summary['has_joint_visualization'] else '❌'}")
+        
+        # Camera summary
+        if summary['has_camera_data']:
+            print(f"   Cameras: {summary['camera_count']} camera(s) detected")
+            print(f"   Depth data: {'✅ Yes' if summary['has_depth_data'] else '❌ No'}")
+        else:
+            print(f"   Cameras: ❌ No camera data found")
         
         # Final verdict
         print(f"\n{'✅ VERIFICATION PASSED' if summary['is_valid'] else '❌ VERIFICATION FAILED'}")

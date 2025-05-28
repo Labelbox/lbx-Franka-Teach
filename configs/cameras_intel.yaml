@@ -1,0 +1,55 @@
+manufacturer: Intel RealSense
+cameras:
+  realsense_0:
+    enabled: true
+    type: realsense
+    serial_number: '218622277093'
+    port_offset: 0
+    config:
+      width: 1280
+      height: 720
+      fps: 30
+      enable_depth: true
+      depth_processing_preset: 1
+      align_depth_to_color: true
+      decimation_filter: 1
+      spatial_filter: true
+      temporal_filter: true
+      hole_filling_filter: 1
+    description: 'Intel RealSense D405 (Serial: 218622277093)'
+    usb_port_info: 2-3.3
+  realsense_1:
+    enabled: true
+    type: realsense
+    serial_number: '218622272999'
+    port_offset: 1
+    config:
+      width: 1280
+      height: 720
+      fps: 30
+      enable_depth: true
+      depth_processing_preset: 1
+      align_depth_to_color: true
+      decimation_filter: 1
+      spatial_filter: true
+      temporal_filter: true
+      hole_filling_filter: 1
+    description: 'Intel RealSense D405 (Serial: 218622272999)'
+    usb_port_info: 2-3.4
+camera_settings:
+  jpeg_quality: 90
+  depth_encoding: 16UC1
+  depth_scale: 0.001
+  enable_threading: true
+  buffer_size: 5
+  enable_sync: false
+  sync_tolerance_ms: 10
+  realsense_defaults:
+    depth_processing_preset: 1
+    align_depth_to_color: true
+    decimation_filter: 1
+    spatial_filter: true
+    temporal_filter: true
+    hole_filling_filter: 1
+    enable_auto_exposure: true
+    auto_exposure_priority: false

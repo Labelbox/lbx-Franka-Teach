@@ -9,6 +9,10 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 - **Multi-Camera Support**: Intel RealSense and ZED camera integration
 - **Simulation Mode**: Test without hardware using FR3 robot simulation
 - **Real-time Control**: 15-30Hz control loop with safety features
+- **High-Performance Async Architecture**: 40Hz data recording with 6.6Hz robot control
+- **Hot Reload**: Automatic server restart on code changes
+- **Performance Mode**: Optimized for high-frequency control and recording
+- **Data Verification**: Automatic validation of recorded trajectories
 
 ## Table of Contents
 
@@ -204,3 +208,112 @@ The MCAP recordings include the robot URDF model and joint states for visualizat
 ### Configure Cameras
 
 Edit `
+
+## Simulation Mode
+
+### Simulation Setup
+
+1. **Test in simulation**: `python oculus_vr_server.py --simulation`
+2. **Test without hardware**: Use FR3 robot simulation
+
+## Troubleshooting
+
+### Low Recording Frequency
+- Ensure performance mode is enabled (default with `run_server.sh`)
+- Check CPU usage and reduce other processes
+- Verify in console output: should show ~39-40Hz
+
+### Robot Communication Slow
+- The ~149ms latency is hardware limited
+- System automatically uses predictive control
+- Check network/USB connection quality
+
+### VR Controller Not Detected
+- Ensure Oculus is connected via USB or network
+- Check with `adb devices` for USB connection
+- For network: use `--ip <quest-ip-address>`
+
+## Additional Documentation
+
+### Architecture Overview
+
+The system uses a sophisticated asynchronous architecture to achieve high-frequency data recording (40Hz) while managing slower robot communication (6.6Hz):
+
+```
+VR Thread (50Hz) → Control Thread (40Hz) → Recording Thread (40Hz)
+                          ↓
+                   Robot Comm Thread → Robot Hardware (6.6Hz)
+```
+
+**Key Benefits:**
+- 6x higher recording rate than traditional synchronous approaches
+- Non-blocking operation ensures smooth teleoperation
+- Predictive control maintains responsiveness
+- Thread-safe data handling with minimal lock contention
+
+For detailed architecture documentation, see [ASYNC_ARCHITECTURE_README.md](ASYNC_ARCHITECTURE_README.md).
+
+### Performance Optimization
+
+The system includes several performance optimizations:
+
+#### Performance Mode (Default)
+- Control frequency: 40Hz (2x base rate)
+- Position gain: 10.0 (100% higher)
+- Rotation gain: 3.0 (50% higher)
+- Optimized for tight tracking
+
+#### Async Features
+- **Decoupled threads** for VR, control, recording, and robot I/O
+- **Predictive control** when robot feedback is delayed
+- **Non-blocking queues** for data flow
+- **Lock-free design** where possible
+
+See [ASYNC_ARCHITECTURE_README.md](ASYNC_ARCHITECTURE_README.md) for detailed performance documentation.
+
+### Hot Reload
+
+Enable automatic server restart on code changes:
+
+```bash
+./run_server.sh --hot-reload
+```
+
+This monitors Python files and configs, restarting the server when changes are detected. Perfect for rapid development and testing.
+
+See [HOT_RELOAD_README.md](HOT_RELOAD_README.md) for details.
+
+### Data Format
+
+Recordings are saved in MCAP format with the following structure:
+
+- `/robot_state`: Joint positions, cartesian pose, gripper state (40Hz)
+- `/action`: Velocity commands sent to robot (40Hz)
+- `/vr_controller`: Raw VR controller data (40Hz)
+- `/tf`: Transform tree for visualization
+- `/joint_states`: ROS-compatible joint states
+
+### Documentation
+
+- [Async Architecture & Performance](ASYNC_ARCHITECTURE_README.md)
+- [Hot Reload Feature](HOT_RELOAD_README.md)
+- [MCAP Recording Format](MCAP_RECORDING_README.md)
+- [Foxglove Visualization](FOXGLOVE_ROBOT_VISUALIZATION.md)
+- [VR Robot Mapping](VR_ROBOT_MAPPING.md)
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make changes and test with hot reload
+4. Submit a pull request
+
+### License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+### Acknowledgments
+
+- Based on the DROID VRPolicy implementation
+- Uses Deoxys control framework for Franka robots
+- MCAP format for efficient data storage

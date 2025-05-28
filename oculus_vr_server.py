@@ -29,6 +29,7 @@ Features:
 - Deoxys-compatible quaternion handling
 - FR3 robot simulation mode
 - MCAP data recording with Labelbox Robotics format
+- Asynchronous architecture for high-performance recording
 """
 
 import zmq
@@ -42,6 +43,10 @@ import pickle
 from scipy.spatial.transform import Rotation as R
 from typing import Dict, Optional, Tuple
 import os
+import queue
+from dataclasses import dataclass
+from collections import deque
+import copy
 
 # Import the Oculus Reader
 from oculus_reader.reader import OculusReader
@@ -52,6 +57,7 @@ from frankateach.constants import (
     HOST, CONTROL_PORT,
     GRIPPER_OPEN, GRIPPER_CLOSE,
     ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX,
+    CONTROL_FREQ,  # Use the constant from the config
 )
 from frankateach.messages import FrankaAction, FrankaState
 from deoxys.utils import transform_utils
@@ -62,6 +68,58 @@ from simulation.fr3_sim_server import FR3SimServer
 # Import MCAP data recorder
 from frankateach.mcap_data_recorder import MCAPDataRecorder
 from frankateach.mcap_verifier import MCAPVerifier
+
+
+@dataclass
+class VRState:
+    """Thread-safe VR controller state"""
+    timestamp: float
+    poses: Dict
+    buttons: Dict
+    movement_enabled: bool
+    controller_on: bool
+    
+    def copy(self):
+        """Deep copy for thread safety"""
+        return VRState(
+            timestamp=self.timestamp,
+            poses=copy.deepcopy(self.poses),
+            buttons=copy.deepcopy(self.buttons),
+            movement_enabled=self.movement_enabled,
+            controller_on=self.controller_on
+        )
+
+
+@dataclass
+class RobotState:
+    """Thread-safe robot state"""
+    timestamp: float
+    pos: np.ndarray
+    quat: np.ndarray
+    euler: np.ndarray
+    gripper: float
+    joint_positions: Optional[np.ndarray]
+    
+    def copy(self):
+        """Deep copy for thread safety"""
+        return RobotState(
+            timestamp=self.timestamp,
+            pos=self.pos.copy() if self.pos is not None else None,
+            quat=self.quat.copy() if self.quat is not None else None,
+            euler=self.euler.copy() if self.euler is not None else None,
+            gripper=self.gripper,
+            joint_positions=self.joint_positions.copy() if self.joint_positions is not None else None
+        )
+
+
+@dataclass
+class TimestepData:
+    """Data structure for MCAP recording"""
+    timestamp: float
+    vr_state: VRState
+    robot_state: RobotState
+    action: np.ndarray
+    info: Dict
 
 
 def vec_to_reorder_mat(vec):
@@ -150,7 +208,7 @@ class OculusVRServer:
         self.pos_action_gain = 5.0
         self.rot_action_gain = 2.0
         self.gripper_action_gain = 3.0
-        self.control_hz = 15
+        self.control_hz = CONTROL_FREQ  # Use constant from config
         self.control_interval = 1.0 / self.control_hz
         
         # DROID IK solver parameters for velocity-to-delta conversion
@@ -328,13 +386,18 @@ class OculusVRServer:
         print("\n⚠️  Note: Using Deoxys control interface (quaternion-based)")
         print("   Rotations are handled differently than DROID's Polymetis interface")
         
+        print("\n💡 Hot Reload:")
+        print("   - Run with --hot-reload flag to enable automatic restart on code changes")
+        print("   - Use: ./run_server.sh --hot-reload")
+        print("   - The server will restart automatically when you save changes")
+        
         print("\nPress Ctrl+C to exit gracefully\n")
         
         # Performance tuning parameters (can be adjusted for responsiveness)
         self.enable_performance_mode = performance_mode  # Enable performance optimizations
         if self.enable_performance_mode:
             # Increase control frequency for tighter tracking
-            self.control_hz = 30  # Double the frequency for faster response
+            self.control_hz = CONTROL_FREQ * 2  # Double the frequency for faster response
             self.control_interval = 1.0 / self.control_hz
             
             # Increase gains for more aggressive tracking
@@ -369,6 +432,32 @@ class OculusVRServer:
         self.joint_position_limit_velocity_scale = 0.95  # Scale velocity near limits
         self.max_cartesian_velocity_control_iterations = 300
         self.max_nullspace_control_iterations = 300
+        
+        # Asynchronous components
+        self._vr_state_lock = threading.Lock()
+        self._robot_state_lock = threading.Lock()
+        self._robot_comm_lock = threading.Lock()  # Lock for robot communication
+        self._latest_vr_state = None
+        self._latest_robot_state = None
+        
+        # Thread-safe queues for data flow
+        self.mcap_queue = queue.Queue(maxsize=1000)  # Buffer for MCAP writer
+        self.control_queue = queue.Queue(maxsize=10)  # Commands to robot
+        
+        # Thread management
+        self._threads = []
+        self._mcap_writer_thread = None
+        self._robot_control_thread = None
+        self._control_paused = False  # Flag to pause control during reset
+        
+        # Recording at independent frequency
+        self.recording_hz = self.control_hz  # Record at same rate as control target
+        self.recording_interval = 1.0 / self.recording_hz
+        
+        # Async robot communication
+        self._robot_command_queue = queue.Queue(maxsize=2)  # Small buffer for commands
+        self._robot_response_queue = queue.Queue(maxsize=2)  # Responses from robot
+        self._robot_comm_thread = None
         
     def reset_state(self):
         """Reset internal state - matches DROID exactly"""
@@ -414,6 +503,9 @@ class OculusVRServer:
         # Position filtering state
         self._last_vr_pos = None
         
+        # Last action for recording thread
+        self._last_action = np.zeros(7)
+        
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
         print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
@@ -454,6 +546,19 @@ class OculusVRServer:
             self._state["movement_enabled"] = current_grip
             self._state["controller_on"] = True
             last_read_time = time.time()
+            
+            # Publish VR state to async system
+            current_time = time.time()
+            vr_state = VRState(
+                timestamp=current_time,
+                poses=copy.deepcopy(poses),
+                buttons=copy.deepcopy(buttons),
+                movement_enabled=current_grip,
+                controller_on=True
+            )
+            
+            with self._vr_state_lock:
+                self._latest_vr_state = vr_state
             
             # Handle Forward Direction Calibration
             if self.controller_id in self._state["poses"]:
@@ -765,8 +870,13 @@ class OculusVRServer:
         
         return info
         
-    def reset_robot(self):
-        """Reset robot to initial position"""
+    def reset_robot(self, sync=True):
+        """Reset robot to initial position
+        
+        Args:
+            sync: If True, use synchronous communication (for initialization)
+                  If False, use async queues (not implemented for reset)
+        """
         if self.debug:
             print("🔄 [DEBUG] Would reset robot to initial position")
             # Return simulated values
@@ -781,8 +891,11 @@ class OculusVRServer:
             timestamp=time.time(),
         )
         
-        self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
-        robot_state = pickle.loads(self.action_socket.recv())
+        # For reset, we always use synchronous communication
+        # Thread-safe robot communication
+        with self._robot_comm_lock:
+            self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
+            robot_state = pickle.loads(self.action_socket.recv())
         
         print(f"✅ Robot reset complete")
         print(f"   Position: [{robot_state.pos[0]:.6f}, {robot_state.pos[1]:.6f}, {robot_state.pos[2]:.6f}]")
@@ -889,366 +1002,128 @@ class OculusVRServer:
         return target_pos, target_quat, target_gripper
     
     def control_loop(self):
-        """Main control loop"""
+        """Main control loop - now coordinates async workers"""
         message_count = 0
-        last_control_time = time.time()
         last_debug_time = time.time()
         
+        # Initialize robot on first frame
+        if self.is_first_frame:
+            init_pos, init_quat, init_joint_positions = self.reset_robot()
+            self.robot_pos = init_pos
+            self.robot_quat = init_quat
+            self.robot_euler = quat_to_euler(init_quat)
+            self.robot_gripper = 0.0
+            self.robot_joint_positions = init_joint_positions
+            self.is_first_frame = False
+            
+            # Store initial robot state
+            with self._robot_state_lock:
+                self._latest_robot_state = RobotState(
+                    timestamp=time.time(),
+                    pos=init_pos,
+                    quat=init_quat,
+                    euler=self.robot_euler,
+                    gripper=self.robot_gripper,
+                    joint_positions=init_joint_positions
+                )
+        
+        # Start worker threads
+        if self.enable_recording and self.data_recorder:
+            self._mcap_writer_thread = threading.Thread(target=self._mcap_writer_worker)
+            self._mcap_writer_thread.daemon = True
+            self._mcap_writer_thread.start()
+            self._threads.append(self._mcap_writer_thread)
+            print("✅ MCAP writer thread started")
+            
+            # Start data recording thread
+            self._data_recording_thread = threading.Thread(target=self._data_recording_worker)
+            self._data_recording_thread.daemon = True
+            self._data_recording_thread.start()
+            self._threads.append(self._data_recording_thread)
+            print("✅ Data recording thread started")
+        
+        # Start robot communication thread (only if not in debug mode)
+        if not self.debug:
+            self._robot_comm_thread = threading.Thread(target=self._robot_comm_worker)
+            self._robot_comm_thread.daemon = True
+            self._robot_comm_thread.start()
+            self._threads.append(self._robot_comm_thread)
+            print("✅ Robot communication thread started")
+        
+        self._robot_control_thread = threading.Thread(target=self._robot_control_worker)
+        self._robot_control_thread.daemon = True
+        self._robot_control_thread.start()
+        self._threads.append(self._robot_control_thread)
+        print("✅ Robot control thread started")
+        
+        # Main loop now just monitors status and handles high-level control
         while self.running:
             try:
                 current_time = time.time()
-                
-                # Initialize robot on first frame
-                if self.is_first_frame:
-                    init_pos, init_quat, init_joint_positions = self.reset_robot()
-                    self.robot_pos = init_pos
-                    self.robot_quat = init_quat
-                    self.robot_euler = quat_to_euler(init_quat)
-                    self.robot_gripper = 0.0
-                    self.robot_joint_positions = init_joint_positions
-                    self.is_first_frame = False
                 
                 # Handle robot reset after calibration
                 if hasattr(self, '_reset_robot_after_calibration') and self._reset_robot_after_calibration:
                     self._reset_robot_after_calibration = False
                     print("🤖 Executing robot reset after calibration...")
+                    
+                    # Pause control thread during reset
+                    self._control_paused = True
+                    time.sleep(0.1)  # Give control thread time to pause
+                    
                     reset_pos, reset_quat, reset_joint_positions = self.reset_robot()
+                    
+                    # Update robot state
+                    with self._robot_state_lock:
+                        self._latest_robot_state = RobotState(
+                            timestamp=current_time,
+                            pos=reset_pos,
+                            quat=reset_quat,
+                            euler=quat_to_euler(reset_quat),
+                            gripper=0.0,
+                            joint_positions=reset_joint_positions
+                        )
+                    
                     self.robot_pos = reset_pos
                     self.robot_quat = reset_quat
                     self.robot_euler = quat_to_euler(reset_quat)
                     self.robot_gripper = 0.0
                     self.robot_joint_positions = reset_joint_positions
+                    
                     # Clear any pending actions
                     self.reset_origin = True
+                    
+                    # Resume control thread
+                    self._control_paused = False
+                    
                     print("✅ Robot is now at home position, ready for teleoperation")
                     print("   Hold grip button to start controlling the robot\n")
-                    continue  # Skip this control cycle
                 
-                # Control at specified frequency
-                if current_time - last_control_time >= self.control_interval:
-                    # Get controller info
-                    info = self.get_info()
+                # Debug output
+                if self.debug and current_time - last_debug_time > 1.0:
+                    with self._vr_state_lock:
+                        vr_state = self._latest_vr_state
+                    with self._robot_state_lock:
+                        robot_state = self._latest_robot_state
                     
-                    # Handle recording controls (only when recording is enabled)
-                    if self.enable_recording and self.data_recorder:
-                        # A button: Start/Reset recording
-                        current_a_button = info["success"]
-                        if current_a_button and not self.prev_a_button:  # Rising edge
-                            if self.recording_active:
-                                # Reset recording
-                                print("\n🔄 A button pressed - Resetting recording...")
-                                self.data_recorder.reset_recording()
-                                print("📹 Recording restarted")
-                            else:
-                                # Start recording
-                                print("\n▶️  A button pressed - Starting recording...")
-                                self.data_recorder.start_recording()
-                                self.recording_active = True
-                                print("📹 Recording started")
-                                print("   Press A again to reset/restart")
-                                print("   Press B to mark as successful and save")
-                        self.prev_a_button = current_a_button
+                    if vr_state and robot_state:
+                        print(f"\n📊 Async Status [{message_count:04d}]:")
+                        print(f"   VR State: {vr_state.timestamp:.3f}s ago")
+                        print(f"   Robot State: {robot_state.timestamp:.3f}s ago")
+                        print(f"   MCAP Queue: {self.mcap_queue.qsize()} items")
+                        print(f"   Recording: {'ACTIVE' if self.recording_active else 'INACTIVE'}")
                         
-                        # B button: Mark as successful and stop
-                        if info["failure"] and self.recording_active:
-                            print("\n✅ B button pressed - Marking recording as successful...")
-                            saved_filepath = self.data_recorder.stop_recording(success=True)
-                            self.recording_active = False
-                            print("📹 Recording saved successfully")
-                            
-                            # Verify data if requested
-                            if self.verify_data and saved_filepath:
-                                print("\n🔍 Verifying recorded data...")
-                                try:
-                                    verifier = MCAPVerifier(saved_filepath)
-                                    results = verifier.verify(verbose=True)
-                                    
-                                    # Check if verification passed
-                                    if not results["summary"]["is_valid"]:
-                                        print("\n⚠️  WARNING: Data verification found issues!")
-                                        print("   The recording may not be suitable for training.")
-                                except Exception as e:
-                                    print(f"\n❌ Error during verification: {e}")
-                                    import traceback
-                                    traceback.print_exc()
-                            
-                            print("\n   Press A to start a new recording")
-                    else:
-                        # Original behavior when recording is disabled
-                        if info["success"]:
-                            print("\n✅ Success button pressed!")
-                            if not self.debug:
-                                # Send termination signal
-                                self.stop_server()
-                                break
-                        
-                        if info["failure"]:
-                            print("\n❌ Failure button pressed!")
-                            if not self.debug:
-                                # Send termination signal
-                                self.stop_server()
-                                break
-                    
-                    # Calculate action if movement is enabled
-                    if info["movement_enabled"] and self._state["poses"]:
-                        action, action_info = self._calculate_action()
-                        
-                        # Convert velocity to position target
-                        target_pos, target_quat, target_gripper = self.velocity_to_position_target(
-                            action, self.robot_pos, self.robot_quat, action_info
-                        )
-                        
-                        # Apply workspace bounds
-                        target_pos = np.clip(target_pos, ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX)
-                        
-                        # Handle gripper control - simple open/close based on trigger
-                        trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
-                        gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
-                        # Update robot gripper state for tracking
-                        self.robot_gripper = 1.0 if gripper_state == GRIPPER_CLOSE else 0.0
-                        
-                        # Send action to robot (or simulate)
-                        if not self.debug:
-                            # Send action to robot - DEOXYS EXPECTS QUATERNIONS
-                            robot_action = FrankaAction(
-                                pos=target_pos.flatten().astype(np.float32),
-                                quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
-                                gripper=gripper_state,
-                                reset=False,
-                                timestamp=time.time(),
-                            )
-                            
-                            self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
-                            robot_state = pickle.loads(self.action_socket.recv())
-                            
-                            # Update robot state from actual feedback
-                            self.robot_pos = robot_state.pos
-                            self.robot_quat = robot_state.quat
-                            self.robot_euler = quat_to_euler(robot_state.quat)
-                            self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
-                            self.robot_joint_positions = getattr(robot_state, 'joint_positions', None)
-                        else:
-                            # In debug mode, simulate robot state update
-                            self.robot_pos = target_pos
-                            self.robot_quat = target_quat
-                            self.robot_euler = quat_to_euler(target_quat)
-                        
-                        # Record data if recording is active - Labelbox Robotics format timestep recording
-                        if self.recording_active and self.data_recorder:
-                            # Create timestep data structure in Labelbox Robotics format
-                            timestep = {
-                                "observation": {
-                                    "timestamp": {
-                                        "robot_state": {
-                                            "read_start": int(current_time * 1e9),  # Convert to nanoseconds
-                                            "read_end": int(current_time * 1e9)
-                                        }
-                                    },
-                                    "robot_state": {
-                                        "joint_positions": self.robot_joint_positions.tolist() if self.robot_joint_positions is not None else [],
-                                        "joint_velocities": [],
-                                        "joint_efforts": [],
-                                        "cartesian_position": np.concatenate([self.robot_pos, self.robot_euler]).tolist(),
-                                        "cartesian_velocity": [],
-                                        "gripper_position": self.robot_gripper,
-                                        "gripper_velocity": 0.0
-                                    },
-                                    "controller_info": info  # VR controller info
-                                },
-                                "action": action.tolist() if hasattr(action, 'tolist') else action  # The velocity action
-                            }
-                            
-                            # Write the complete timestep
-                            self.data_recorder.write_timestep(timestep, current_time)
-                        
-                        if self.debug:
-                            # Debug mode - print status for ACTIVE teleoperation
-                            if current_time - last_debug_time > 0.5:
-                                print(f"\n📊 Debug Data [{message_count:04d}]:")
-                                print(f"   🟢 TELEOPERATION: ACTIVE")
-                                if self.recording_active:
-                                    print(f"   📹 RECORDING: ACTIVE")
-                                print(f"   Action (vel): [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}, "
-                                      f"{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
-                                print(f"   Target Pos: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
-                                target_euler_deg = np.degrees(quat_to_euler(target_quat))
-                                print(f"   Target Rot (deg): [R:{target_euler_deg[0]:.1f}, P:{target_euler_deg[1]:.1f}, Y:{target_euler_deg[2]:.1f}]")
-                                
-                                # Show VR controller rotation for debugging
-                                if hasattr(self, 'vr_neutral_pose') and self.vr_neutral_pose is not None:
-                                    # Get current controller pose (raw)
-                                    current_pose = np.asarray(self._state["poses"][self.controller_id])
-                                    
-                                    neutral_rot = R.from_matrix(self.vr_neutral_pose[:3, :3])
-                                    current_rot = R.from_matrix(current_pose[:3, :3])
-                                    
-                                    # Calculate relative rotation from neutral
-                                    relative_rot = neutral_rot.inv() * current_rot
-                                    
-                                    # Get axis-angle representation for clearer understanding
-                                    rotvec = relative_rot.as_rotvec()
-                                    angle = np.linalg.norm(rotvec)
-                                    angle_deg = np.degrees(angle)
-                                    
-                                    if angle_deg > 1.0:  # Only show if there's significant rotation
-                                        axis_norm = rotvec / angle
-                                        print(f"   VR Rotation: {angle_deg:.1f}° around [{axis_norm[0]:.2f}, {axis_norm[1]:.2f}, {axis_norm[2]:.2f}]")
-                                        print(f"   Raw axis components: X={axis_norm[0]:.3f}, Y={axis_norm[1]:.3f}, Z={axis_norm[2]:.3f}")
-                                        
-                                        # Calculate absolute values for dominant axis detection
-                                        abs_axis = np.abs(axis_norm)
-                                        print(f"   Dominant axis: ", end="")
-                                        if abs_axis[0] > abs_axis[1] and abs_axis[0] > abs_axis[2]:
-                                            print("X-axis")
-                                        elif abs_axis[1] > abs_axis[0] and abs_axis[1] > abs_axis[2]:
-                                            print("Y-axis")
-                                        else:
-                                            print("Z-axis")
-                                        
-                                        # Identify primary rotation in VR space (before transformation)
-                                        vr_motion = ""
-                                        # Based on calibration results (confirmed):
-                                        # Roll is around Y-axis, Pitch is around X-axis, Yaw is around Z-axis
-                                        # Using 45-degree threshold (cos(45°) ≈ 0.707)
-                                        threshold = 0.707  # 45 degrees
-                                        
-                                        # Debug: show which physical motion this represents based on the axis
-                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
-                                            direction = "LEFT" if axis_norm[1] > 0 else "RIGHT"
-                                            vr_motion = f"Rolling {direction}"
-                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
-                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
-                                            vr_motion = f"Pitching {direction}"
-                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
-                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"  # Note: signs from calibration
-                                            vr_motion = f"Yawing {direction}"
-                                        else:
-                                            vr_motion = "Combined rotation"
-                                        
-                                        print(f"   🎮 VR Motion: {vr_motion}")
-                                        
-                                        # Since VR roll/pitch/yaw map directly to robot roll/pitch/yaw
-                                        # The robot motion is the same as VR motion (just inverted roll)
-                                        robot_motion = ""
-                                        if abs_axis[1] > threshold:  # Y-axis dominant = Roll
-                                            # Roll is inverted for ergonomics
-                                            direction = "RIGHT" if axis_norm[1] > 0 else "LEFT"
-                                            robot_motion = f"Rolling {direction} (inverted)"
-                                        elif abs_axis[0] > threshold:  # X-axis dominant = Pitch
-                                            direction = "UP" if axis_norm[0] > 0 else "DOWN"
-                                            robot_motion = f"Pitching {direction}"
-                                        elif abs_axis[2] > threshold:  # Z-axis dominant = Yaw
-                                            direction = "RIGHT" if axis_norm[2] > 0 else "LEFT"
-                                            robot_motion = f"Yawing {direction}"
-                                        else:
-                                            robot_motion = "Combined rotation"
-                                        
-                                        print(f"   🤖 Robot Motion: {robot_motion}")
-                                    
-                                    # For compatibility, still calculate euler angles but note their limitations
-                                    relative_euler_neutral = relative_rot.as_euler('xyz', degrees=True)
-                                    
-                                    # Show euler angles for reference (but note they have limitations)
-                                    print(f"   Euler angles from neutral: [R:{relative_euler_neutral[0]:.1f}, P:{relative_euler_neutral[1]:.1f}, Y:{relative_euler_neutral[2]:.1f}]")
-                                    
-                                    # Store current rotation for next frame
-                                    self._last_controller_rot = current_rot
-                                else:
-                                    vr_euler = quat_to_euler(self.vr_state['quat'], degrees=True)
-                                    print(f"   VR Controller Rot (deg): [R:{vr_euler[0]:.1f}, P:{vr_euler[1]:.1f}, Y:{vr_euler[2]:.1f}]")
-                                
-                                # Show rotation difference
-                                if np.any(np.abs(action[3:6]) > 0.01):
-                                    print(f"   🔄 ROTATION ACTIVE - Rot velocities: [{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}]")
-                                
-                                # Show color-coded gripper state
-                                if gripper_state == GRIPPER_CLOSE:
-                                    gripper_status = f"🔴 CLOSED"
-                                else:
-                                    gripper_status = f"🟢 OPEN"
-                                print(f"   Gripper: {gripper_status} (trigger: {trigger_value:.3f})")
-                                
-                                # Show if velocities are being limited
-                                if np.any(np.abs(action[:3]) >= 0.99):
-                                    print(f"   ⚠️  Position velocity at limit!")
-                                if np.any(np.abs(action[3:6]) >= 0.99):
-                                    print(f"   ⚠️  Rotation velocity at limit!")
-                                
-                                last_debug_time = current_time
-                        else:
-                            # Send action to robot - DEOXYS EXPECTS QUATERNIONS
-                            robot_action = FrankaAction(
-                                pos=target_pos.flatten().astype(np.float32),
-                                quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
-                                gripper=gripper_state,
-                                reset=False,
-                                timestamp=time.time(),
-                            )
-                            
-                            self.action_socket.send(bytes(pickle.dumps(robot_action, protocol=-1)))
-                            robot_state = pickle.loads(self.action_socket.recv())
-                            
-                            # Update robot state
-                            self.robot_pos = robot_state.pos
-                            self.robot_quat = robot_state.quat
-                            self.robot_euler = quat_to_euler(robot_state.quat)
-                            self.robot_gripper = 1.0 if robot_state.gripper == GRIPPER_CLOSE else 0.0
-                            self.robot_joint_positions = getattr(robot_state, 'joint_positions', None)
-                    else:
-                        # Not moving but still record if recording is active
-                        if self.recording_active and self.data_recorder and self.robot_pos is not None:
-                            # Create timestep for non-movement
-                            timestep = {
-                                "observation": {
-                                    "timestamp": {
-                                        "robot_state": {
-                                            "read_start": int(current_time * 1e9),
-                                            "read_end": int(current_time * 1e9)
-                                        }
-                                    },
-                                    "robot_state": {
-                                        "joint_positions": self.robot_joint_positions.tolist() if self.robot_joint_positions is not None else [],
-                                        "joint_velocities": [],
-                                        "joint_efforts": [],
-                                        "cartesian_position": np.concatenate([self.robot_pos, self.robot_euler]).tolist(),
-                                        "cartesian_velocity": [],
-                                        "gripper_position": self.robot_gripper,
-                                        "gripper_velocity": 0.0
-                                    },
-                                    "controller_info": info
-                                },
-                                "action": np.zeros(7).tolist()  # Zero action when not moving
-                            }
-                            
-                            # Write the timestep
-                            self.data_recorder.write_timestep(timestep, current_time)
-                        
-                        # Show status periodically
-                        if current_time - last_debug_time > 0.5:
-                            if self.calibrating_forward:
-                                if self.debug:
-                                    print(f"\n📊 Debug Data [{message_count:04d}]:")
-                                    print(f"   🎯 CALIBRATING FORWARD - Keep moving controller forward!")
-                                # Status is printed in the state update thread
-                            elif self.recording_active and self.debug:
-                                print(f"\n📊 Debug Data [{message_count:04d}]:")
-                                print(f"   🔴 TELEOPERATION: PAUSED (grip not held)")
-                                print(f"   📹 RECORDING: ACTIVE")
-                            
-                            last_debug_time = current_time
-                    
+                    last_debug_time = current_time
                     message_count += 1
-                    last_control_time = current_time
                 
                 # Small sleep to prevent CPU spinning
-                time.sleep(0.001)
+                time.sleep(0.01)
                 
             except Exception as e:
                 if self.running:
-                    print(f"❌ Error in control loop: {e}")
+                    print(f"❌ Error in main loop: {e}")
                     import traceback
                     traceback.print_exc()
-                    time.sleep(1)  # Wait before retrying
+                    time.sleep(1)
     
     def start(self):
         """Start the server"""
@@ -1273,9 +1148,22 @@ class OculusVRServer:
             self.data_recorder.stop_recording(success=False)
             self.recording_active = False
         
+        # Send poison pill to MCAP writer
+        if self._mcap_writer_thread and self._mcap_writer_thread.is_alive():
+            self.mcap_queue.put(None)
+        
+        # Send poison pill to robot comm thread
+        if self._robot_comm_thread and self._robot_comm_thread.is_alive():
+            self._robot_command_queue.put(None)
+        
         # Stop state thread
         if hasattr(self, '_state_thread'):
             self._state_thread.join(timeout=1.0)
+        
+        # Stop worker threads
+        for thread in self._threads:
+            if thread.is_alive():
+                thread.join(timeout=1.0)
         
         # Stop Oculus Reader
         if hasattr(self, 'oculus_reader'):
@@ -1302,6 +1190,454 @@ class OculusVRServer:
         
         print("✅ Server stopped gracefully")
         sys.exit(0)
+
+    def _mcap_writer_worker(self):
+        """Asynchronous MCAP writer thread - processes data without blocking control"""
+        print("📹 MCAP writer thread started")
+        
+        while self.running or not self.mcap_queue.empty():
+            try:
+                # Get data from queue with timeout
+                timestep_data = self.mcap_queue.get(timeout=0.1)
+                
+                if timestep_data is None:  # Poison pill
+                    break
+                
+                # Create timestep in Labelbox Robotics format
+                timestep = {
+                    "observation": {
+                        "timestamp": {
+                            "robot_state": {
+                                "read_start": int(timestep_data.timestamp * 1e9),
+                                "read_end": int(timestep_data.timestamp * 1e9)
+                            }
+                        },
+                        "robot_state": {
+                            "joint_positions": timestep_data.robot_state.joint_positions.tolist() if timestep_data.robot_state.joint_positions is not None else [],
+                            "joint_velocities": [],
+                            "joint_efforts": [],
+                            "cartesian_position": np.concatenate([
+                                timestep_data.robot_state.pos,
+                                timestep_data.robot_state.euler
+                            ]).tolist(),
+                            "cartesian_velocity": [],
+                            "gripper_position": timestep_data.robot_state.gripper,
+                            "gripper_velocity": 0.0
+                        },
+                        "controller_info": timestep_data.info
+                    },
+                    "action": timestep_data.action.tolist() if hasattr(timestep_data.action, 'tolist') else timestep_data.action
+                }
+                
+                # Write to MCAP
+                self.data_recorder.write_timestep(timestep, timestep_data.timestamp)
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"❌ Error in MCAP writer: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        print("📹 MCAP writer thread stopped")
+
+    def _robot_control_worker(self):
+        """Asynchronous robot control thread - sends commands at control frequency"""
+        print("🤖 Robot control thread started")
+        print(f"   Target control frequency: {self.control_hz}Hz")
+        print(f"   Control interval: {self.control_interval*1000:.1f}ms")
+        
+        last_control_time = time.time()
+        control_count = 0
+        freq_check_time = time.time()
+        
+        # Track prediction accuracy
+        prediction_errors = deque(maxlen=100)
+        using_predictions = False
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Skip if control is paused
+                if self._control_paused:
+                    time.sleep(0.01)
+                    continue
+                
+                # Control at specified frequency
+                if current_time - last_control_time >= self.control_interval:
+                    # Get latest VR state
+                    with self._vr_state_lock:
+                        vr_state = self._latest_vr_state.copy() if self._latest_vr_state else None
+                    
+                    # Get latest robot state
+                    with self._robot_state_lock:
+                        robot_state = self._latest_robot_state.copy() if self._latest_robot_state else None
+                    
+                    if vr_state and robot_state:
+                        # Check if we're using predictions
+                        state_age = current_time - robot_state.timestamp
+                        if state_age > self.control_interval * 2:
+                            if not using_predictions:
+                                print("⚡ Switching to predictive control mode")
+                                using_predictions = True
+                        else:
+                            if using_predictions:
+                                print("✅ Returned to real-time feedback mode")
+                                using_predictions = False
+                        
+                        # Process control command
+                        self._process_control_cycle(vr_state, robot_state, current_time)
+                        control_count += 1
+                    
+                    last_control_time = current_time
+                    
+                    # Print actual frequency every second
+                    if current_time - freq_check_time >= 1.0:
+                        actual_freq = control_count / (current_time - freq_check_time)
+                        if self.recording_active:
+                            status = "PREDICTIVE" if using_predictions else "REAL-TIME"
+                            print(f"⚡ Control frequency: {actual_freq:.1f}Hz (target: {self.control_hz}Hz) - {status}")
+                        control_count = 0
+                        freq_check_time = current_time
+                
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.001)
+                
+            except Exception as e:
+                if self.running:
+                    print(f"❌ Error in robot control: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(0.1)
+        
+        print("🤖 Robot control thread stopped")
+
+    def _data_recording_worker(self):
+        """Records data at target frequency independent of robot control"""
+        print("📊 Data recording thread started")
+        print(f"   Target recording frequency: {self.recording_hz}Hz")
+        
+        last_record_time = time.time()
+        record_count = 0
+        freq_check_time = time.time()
+        
+        while self.running:
+            try:
+                current_time = time.time()
+                
+                # Record at specified frequency
+                if current_time - last_record_time >= self.recording_interval:
+                    # Only record if recording is active
+                    if self.recording_active and self.data_recorder:
+                        # Get latest states
+                        with self._vr_state_lock:
+                            vr_state = self._latest_vr_state.copy() if self._latest_vr_state else None
+                        
+                        with self._robot_state_lock:
+                            robot_state = self._latest_robot_state.copy() if self._latest_robot_state else None
+                        
+                        if vr_state and robot_state:
+                            # Get current action (may be zero if not moving)
+                            info = {
+                                "success": vr_state.buttons.get("A", False) if self.controller_id == 'r' else vr_state.buttons.get("X", False),
+                                "failure": vr_state.buttons.get("B", False) if self.controller_id == 'r' else vr_state.buttons.get("Y", False),
+                                "movement_enabled": vr_state.movement_enabled,
+                                "controller_on": vr_state.controller_on,
+                                "poses": vr_state.poses,
+                                "buttons": vr_state.buttons
+                            }
+                            
+                            # Calculate action if movement is enabled
+                            action = np.zeros(7)  # Default no movement
+                            if vr_state.movement_enabled and hasattr(self, 'vr_state') and self.vr_state:
+                                # Use the last calculated action if available
+                                if hasattr(self, '_last_action'):
+                                    action = self._last_action
+                            
+                            # Create timestep data
+                            timestep_data = TimestepData(
+                                timestamp=current_time,
+                                vr_state=vr_state,
+                                robot_state=robot_state,
+                                action=action.copy(),
+                                info=copy.deepcopy(info)
+                            )
+                            
+                            # Queue for MCAP writer
+                            try:
+                                self.mcap_queue.put_nowait(timestep_data)
+                                record_count += 1
+                            except queue.Full:
+                                print("⚠️  MCAP queue full, dropping frame")
+                    
+                    last_record_time = current_time
+                    
+                    # Print actual frequency every second
+                    if current_time - freq_check_time >= 1.0:
+                        if self.recording_active:
+                            actual_freq = record_count / (current_time - freq_check_time)
+                            print(f"📊 Recording frequency: {actual_freq:.1f}Hz (target: {self.recording_hz}Hz)")
+                        record_count = 0
+                        freq_check_time = current_time
+                
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.001)
+                
+            except Exception as e:
+                if self.running:
+                    print(f"❌ Error in data recording: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(0.1)
+        
+        print("📊 Data recording thread stopped")
+
+    def _robot_comm_worker(self):
+        """Handles robot communication asynchronously to prevent blocking control thread"""
+        print("🔌 Robot communication thread started")
+        
+        comm_count = 0
+        total_comm_time = 0
+        
+        while self.running:
+            try:
+                # Get command from queue with timeout
+                command = self._robot_command_queue.get(timeout=0.01)
+                
+                if command is None:  # Poison pill
+                    break
+                
+                # Send command and receive response
+                comm_start = time.time()
+                with self._robot_comm_lock:
+                    self.action_socket.send(bytes(pickle.dumps(command, protocol=-1)))
+                    response = pickle.loads(self.action_socket.recv())
+                comm_time = time.time() - comm_start
+                
+                comm_count += 1
+                total_comm_time += comm_time
+                
+                # Log communication stats periodically
+                if comm_count % 10 == 0:
+                    avg_comm_time = total_comm_time / comm_count
+                    print(f"📡 Avg robot comm: {avg_comm_time*1000:.1f}ms")
+                
+                # Put response in queue
+                try:
+                    self._robot_response_queue.put_nowait(response)
+                except queue.Full:
+                    # Drop oldest response if queue is full
+                    try:
+                        self._robot_response_queue.get_nowait()
+                        self._robot_response_queue.put_nowait(response)
+                    except:
+                        pass
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                if self.running:
+                    print(f"❌ Error in robot communication: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    time.sleep(0.1)
+        
+        print("🔌 Robot communication thread stopped")
+
+    def _process_control_cycle(self, vr_state: VRState, robot_state: RobotState, current_time: float):
+        """Process a single control cycle with given VR and robot states"""
+        # Restore state from thread-safe structures
+        self._state["poses"] = vr_state.poses
+        self._state["buttons"] = vr_state.buttons
+        self._state["movement_enabled"] = vr_state.movement_enabled
+        self._state["controller_on"] = vr_state.controller_on
+        
+        # Update robot state
+        self.robot_pos = robot_state.pos
+        self.robot_quat = robot_state.quat
+        self.robot_euler = robot_state.euler
+        self.robot_gripper = robot_state.gripper
+        self.robot_joint_positions = robot_state.joint_positions
+        
+        # Get controller info
+        info = self.get_info()
+        
+        # Handle recording controls (only when recording is enabled)
+        if self.enable_recording and self.data_recorder:
+            # A button: Start/Reset recording
+            current_a_button = info["success"]
+            if current_a_button and not self.prev_a_button:  # Rising edge
+                if self.recording_active:
+                    # Reset recording
+                    print("\n🔄 A button pressed - Resetting recording...")
+                    self.data_recorder.reset_recording()
+                    print("📹 Recording restarted")
+                else:
+                    # Start recording
+                    print("\n▶️  A button pressed - Starting recording...")
+                    self.data_recorder.start_recording()
+                    self.recording_active = True
+                    print("📹 Recording started")
+                    print("   Press A again to reset/restart")
+                    print("   Press B to mark as successful and save")
+            self.prev_a_button = current_a_button
+            
+            # B button: Mark as successful and stop
+            if info["failure"] and self.recording_active:
+                print("\n✅ B button pressed - Marking recording as successful...")
+                saved_filepath = self.data_recorder.stop_recording(success=True)
+                self.recording_active = False
+                print("📹 Recording saved successfully")
+                
+                # Verify data if requested
+                if self.verify_data and saved_filepath:
+                    print("\n🔍 Verifying recorded data...")
+                    try:
+                        verifier = MCAPVerifier(saved_filepath)
+                        results = verifier.verify(verbose=True)
+                        
+                        # Check if verification passed
+                        if not results["summary"]["is_valid"]:
+                            print("\n⚠️  WARNING: Data verification found issues!")
+                            print("   The recording may not be suitable for training.")
+                    except Exception as e:
+                        print(f"\n❌ Error during verification: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                print("\n   Press A to start a new recording")
+        else:
+            # Original behavior when recording is disabled
+            if info["success"]:
+                print("\n✅ Success button pressed!")
+                if not self.debug:
+                    # Send termination signal
+                    self.stop_server()
+                    return
+            
+            if info["failure"]:
+                print("\n❌ Failure button pressed!")
+                if not self.debug:
+                    # Send termination signal
+                    self.stop_server()
+                    return
+        
+        # Default action (no movement)
+        action = np.zeros(7)
+        action_info = {}
+        
+        # Calculate action if movement is enabled
+        if info["movement_enabled"] and self._state["poses"]:
+            action, action_info = self._calculate_action()
+            
+            # Store last action for recording thread
+            self._last_action = action.copy()
+            
+            # Convert velocity to position target
+            target_pos, target_quat, target_gripper = self.velocity_to_position_target(
+                action, self.robot_pos, self.robot_quat, action_info
+            )
+            
+            # Apply workspace bounds
+            target_pos = np.clip(target_pos, ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX)
+            
+            # Handle gripper control - simple open/close based on trigger
+            trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
+            gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
+            
+            # Send action to robot (or simulate)
+            if not self.debug:
+                # Send action to robot - DEOXYS EXPECTS QUATERNIONS
+                robot_action = FrankaAction(
+                    pos=target_pos.flatten().astype(np.float32),
+                    quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
+                    gripper=gripper_state,
+                    reset=False,
+                    timestamp=time.time(),
+                )
+                
+                # Queue command for async sending
+                try:
+                    self._robot_command_queue.put_nowait(robot_action)
+                except queue.Full:
+                    # Drop oldest command if queue is full
+                    try:
+                        self._robot_command_queue.get_nowait()
+                        self._robot_command_queue.put_nowait(robot_action)
+                    except:
+                        pass
+                
+                # Try to get latest response (non-blocking)
+                try:
+                    franka_state = self._robot_response_queue.get_nowait()
+                    
+                    # Update robot state from actual feedback
+                    new_robot_state = RobotState(
+                        timestamp=current_time,
+                        pos=franka_state.pos,
+                        quat=franka_state.quat,
+                        euler=quat_to_euler(franka_state.quat),
+                        gripper=1.0 if franka_state.gripper == GRIPPER_CLOSE else 0.0,
+                        joint_positions=getattr(franka_state, 'joint_positions', None)
+                    )
+                    
+                    with self._robot_state_lock:
+                        self._latest_robot_state = new_robot_state
+                    
+                    # Update local state for next calculation
+                    self.robot_pos = new_robot_state.pos
+                    self.robot_quat = new_robot_state.quat
+                    self.robot_euler = new_robot_state.euler
+                    self.robot_gripper = new_robot_state.gripper
+                    self.robot_joint_positions = new_robot_state.joint_positions
+                    
+                except queue.Empty:
+                    # No new response available, use predicted state
+                    # This allows control to continue at target frequency
+                    new_robot_state = RobotState(
+                        timestamp=current_time,
+                        pos=target_pos,  # Use target as prediction
+                        quat=target_quat,
+                        euler=quat_to_euler(target_quat),
+                        gripper=1.0 if gripper_state == GRIPPER_CLOSE else 0.0,
+                        joint_positions=self.robot_joint_positions  # Keep last known
+                    )
+                    
+                    with self._robot_state_lock:
+                        self._latest_robot_state = new_robot_state
+                    
+                    # Update predicted state
+                    self.robot_pos = target_pos
+                    self.robot_quat = target_quat
+                    self.robot_euler = quat_to_euler(target_quat)
+                    self.robot_gripper = new_robot_state.gripper
+            else:
+                # In debug mode, simulate robot state update
+                new_robot_state = RobotState(
+                    timestamp=current_time,
+                    pos=target_pos,
+                    quat=target_quat,
+                    euler=quat_to_euler(target_quat),
+                    gripper=1.0 if gripper_state == GRIPPER_CLOSE else 0.0,
+                    joint_positions=self.robot_joint_positions
+                )
+                
+                with self._robot_state_lock:
+                    self._latest_robot_state = new_robot_state
+                
+                self.robot_pos = target_pos
+                self.robot_quat = target_quat
+                self.robot_euler = quat_to_euler(target_quat)
+                self.robot_gripper = new_robot_state.gripper
+        else:
+            # Not moving - use current robot state
+            new_robot_state = robot_state
+            # Clear last action when not moving
+            self._last_action = np.zeros(7)
+        
+        # Note: Data recording is now handled by the dedicated recording thread
+        # which runs at the target frequency independent of robot control
 
 
 def main():

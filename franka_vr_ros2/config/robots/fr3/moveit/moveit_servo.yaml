@@ -1,0 +1,71 @@
+# MoveIt Servo configuration for FR3 VR teleoperation
+moveit_servo:
+  # Servo node parameters
+  use_gazebo: false
+
+  # Incoming command parameters
+  command_in_type: "speed_units" # "unitless", "speed_units"
+  scale:
+    linear: 0.4 # Max linear velocity (m/s)
+    rotational: 0.8 # Max angular velocity (rad/s)
+    joint: 0.5 # Max joint velocity scaling
+
+  # Servo timing - optimized for FR3 and low latency
+  publish_period: 0.002 # 500Hz for ultra-low latency
+  incoming_command_timeout: 0.1 # Stop if no command for 100ms
+
+  # Low-pass filter for smoothing (minimal filtering for responsiveness)
+  low_pass_filter_coeff: 5.0 # Higher = less filtering
+
+  # Kinematics - FR3 specific
+  ee_frame: "fr3_hand" # End effector frame
+  planning_frame: "fr3_link0" # Base frame
+
+  # Collision checking
+  check_collisions: true
+  collision_check_rate: 10.0 # Hz
+  self_collision_proximity_threshold: 0.01 # m
+  scene_collision_proximity_threshold: 0.02 # m
+
+  # Joint limits - FR3 specific margins
+  joint_limit_margin: 0.1 # Radians
+
+  # Singularity checking
+  singularity_threshold: 17.0 # Condition number
+
+  # Halt conditions
+  halt_all_joints_in_joint_mode: true
+  halt_all_joints_in_cartesian_mode: true
+
+  # Joint topic
+  joint_topic: "/joint_states"
+
+  # Command topics
+  cartesian_command_in_topic: "/servo_node/delta_twist_cmds"
+  joint_command_in_topic: "/servo_node/delta_joint_cmds"
+
+  # Output command topic - FR3 specific
+  command_out_topic: "/fr3_arm_controller/joint_trajectory"
+
+  # Status topic
+  status_topic: "/servo_node/status"
+
+  # MoveIt planning scene
+  monitored_planning_scene_topic: "/planning_scene"
+
+  # Robot description
+  robot_description_semantic: "robot_description_semantic"
+
+  # FR3-specific safety parameters
+  override_velocity_scaling_factor: 0.8 # Scale down velocities for safety
+
+  # Joint-specific velocity scaling (based on FR3 torque limits)
+  # Lower values for wrist joints due to lower torque limits
+  joint_scale:
+    fr3_joint1: 1.0
+    fr3_joint2: 1.0
+    fr3_joint3: 1.0
+    fr3_joint4: 1.0
+    fr3_joint5: 0.7 # Lower torque limit
+    fr3_joint6: 0.7 # Lower torque limit
+    fr3_joint7: 0.7 # Lower torque limit

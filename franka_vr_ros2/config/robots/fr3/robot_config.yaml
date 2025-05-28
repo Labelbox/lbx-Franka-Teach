@@ -1,0 +1,58 @@
+# Franka FR3 Robot Configuration
+robot:
+  name: "franka_fr3"
+  type: "fr3"
+
+  # Network configuration
+  robot_ip: "192.168.1.59"
+
+  # Control parameters
+  control_rate: 1000 # Hz
+
+  # DH parameters for FR3 (from robot model)
+  dh_parameters:
+    a: [0, 0, 0, 0.0825, -0.0825, 0, 0.088, 0]
+    d: [0.333, 0, 0.316, 0, 0.384, 0, 0, 0.107]
+    alpha: [0, -1.5708, 1.5708, 1.5708, -1.5708, 1.5708, 1.5708, 0]
+
+  # Home position (radians)
+  home_position:
+    [
+      -0.13935425877571106,
+      -0.020481698215007782,
+      -0.05201413854956627,
+      -2.0691256523132324,
+      0.05058913677930832,
+      2.0028650760650635,
+      -0.9167874455451965,
+    ]
+
+  # Workspace limits (meters)
+  workspace:
+    x_min: -0.855
+    x_max: 0.855
+    y_min: -0.855
+    y_max: 0.855
+    z_min: -0.36
+    z_max: 1.19
+
+  # Safety parameters
+  safety:
+    max_cartesian_velocity: 1.7 # m/s
+    max_cartesian_acceleration: 13.0 # m/s^2
+    max_cartesian_jerk: 6500.0 # m/s^3
+    max_elbow_velocity: 2.175 # rad/s
+    max_elbow_acceleration: 10.0 # rad/s^2
+    max_elbow_jerk: 5000.0 # rad/s^3
+
+  # Gripper configuration
+  gripper:
+    max_width: 0.08 # meters
+    max_force: 70.0 # Newtons
+    speed: 0.1 # m/s
+
+  # Frame names
+  frames:
+    base: "fr3_link0"
+    end_effector: "fr3_hand"
+    tcp: "fr3_hand_tcp" # Tool center point

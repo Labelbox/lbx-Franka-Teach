@@ -45,7 +45,8 @@ aiofiles  # Async file I/O
 aioserial  # Async serial communication
 
 # VR/Robot control
-oculus_reader  # From the existing codebase
+oculus_reader  # From the existing codebase (for backward compatibility)
+pure-python-adb>=0.3.0.dev0  # For Meta Quest (Oculus) VR controller support
 deoxys  # Keep for compatibility during transition
 
 # Development tools
@@ -64,6 +65,7 @@ aiohttp
 
 # Camera dependencies
 pyrealsense2==2.55.1.6486  # Latest stable Intel RealSense SDK
+opencv-python>=4.5.0  # OpenCV for image processing and generic cameras
 pyyaml  # For camera configuration files
 
 # ZED SDK Python wrapper (pyzed) must be installed separately:

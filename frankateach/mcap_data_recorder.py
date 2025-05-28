@@ -760,10 +760,25 @@ class MCAPDataRecorder:
         if self._camera_thread:
             self._camera_thread.join(timeout=5.0)
             
-        # Wait for queue to empty
-        print("⏳ Flushing data queue...")
-        while not self._data_queue.empty():
-            time.sleep(0.1)
+        # Handle queue based on success/failure
+        if success:
+            # For successful recordings, wait for queue to empty to ensure all data is written
+            print("⏳ Flushing data queue...")
+            while not self._data_queue.empty():
+                time.sleep(0.1)
+        else:
+            # For discarded recordings, clear the queue instantly
+            print("🗑️  Clearing data queue...")
+            # Clear the queue by getting all items without processing
+            cleared_count = 0
+            try:
+                while True:
+                    self._data_queue.get_nowait()
+                    cleared_count += 1
+            except Empty:
+                pass
+            if cleared_count > 0:
+                print(f"   Cleared {cleared_count} pending items")
             
         # Stop writer thread
         self._running = False

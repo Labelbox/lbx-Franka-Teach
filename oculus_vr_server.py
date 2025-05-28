@@ -1340,11 +1340,9 @@ class OculusVRServer:
                         state_age = current_time - robot_state.timestamp
                         if state_age > self.control_interval * 2:
                             if not using_predictions:
-                                print("⚡ Switching to predictive control mode")
                                 using_predictions = True
                         else:
                             if using_predictions:
-                                print("✅ Returned to real-time feedback mode")
                                 using_predictions = False
                         
                         # Process control command

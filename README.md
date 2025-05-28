@@ -148,9 +148,6 @@ cd /home/robot-lab/work/deoxys_control/deoxys
 # Terminal 1: Start Franka server
 cd /path/to/Franka-Teach
 python franka_server.py
-
-# Terminal 2: Start camera server (optional)
-python camera_server.py --config camera_config_example.json
 ```
 
 ### 5. Start VR Teleoperation with Recording
@@ -317,3 +314,37 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Based on the DROID VRPolicy implementation
 - Uses Deoxys control framework for Franka robots
 - MCAP format for efficient data storage
+
+## Camera Integration
+
+The system supports multiple camera types with automatic discovery and configuration:
+
+### Supported Cameras
+- Intel RealSense (D405, D415, D435, etc.)
+- ZED cameras (with SDK installed)
+
+### Quick Start
+```bash
+# Auto-discover and use all connected cameras
+./run_server.sh --auto-discover-cameras
+
+# Or use specific camera configuration
+./run_server.sh --camera-config configs/cameras_intel.yaml
+```
+
+### Camera Discovery
+```bash
+# Discover all connected cameras
+python discover_cameras.py
+
+# List cameras with simple output
+python list_cameras.py
+```
+
+### Camera Testing
+```bash
+# Test camera functionality
+python test_cameras.py
+```
+
+See [CAMERA_INTEGRATION_README.md](CAMERA_INTEGRATION_README.md) for detailed camera setup instructions.

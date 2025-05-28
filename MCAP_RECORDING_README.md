@@ -76,17 +76,18 @@ python oculus_vr_server.py --verify-data
 ```
 
 ### With Camera Recording
+
+To include camera data in your MCAP recordings:
+
 ```bash
-# Create camera configuration file (see camera_config_example.json)
-# Start camera server
-python camera_server.py --config camera_config.json
+# Auto-discover and use all connected cameras
+python oculus_vr_server.py --enable-cameras --auto-discover-cameras
 
-# Start VR server with camera configuration
-python oculus_vr_server.py --camera-config camera_config.json
-
-# With both camera recording and verification
-python oculus_vr_server.py --camera-config camera_config.json --verify-data
+# Or use specific camera configuration
+python oculus_vr_server.py --enable-cameras --camera-config configs/cameras_intel.yaml
 ```
+
+The camera data will be automatically included in the MCAP file with RGB and depth streams.
 
 ### Data Verification
 

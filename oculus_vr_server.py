@@ -178,7 +178,9 @@ class OculusVRServer:
                  performance_mode=False,
                  enable_recording=True,
                  camera_configs=None,
-                 verify_data=False):
+                 verify_data=False,
+                 camera_config_path=None,
+                 enable_cameras=False):
         """
         Initialize the Oculus VR Server with DROID-exact VRPolicy control
         
@@ -193,6 +195,8 @@ class OculusVRServer:
             enable_recording: If True, enable MCAP data recording functionality
             camera_configs: Camera configuration dictionary for recording
             verify_data: If True, verify MCAP data after successful recording
+            camera_config_path: Path to camera configuration JSON file
+            enable_cameras: If True, enable camera recording
         """
         self.debug = debug
         self.right_controller = right_controller
@@ -325,11 +329,49 @@ class OculusVRServer:
         self.recording_active = False
         self.prev_a_button = False  # For edge detection
         
+        # Initialize camera manager
+        self.camera_manager = None
+        self.enable_cameras = enable_cameras
+        self.camera_config_path = camera_config_path
+        
+        if self.enable_cameras and self.camera_config_path:
+            try:
+                # First, test cameras before starting the manager
+                print("\n🔍 Testing camera functionality...")
+                from frankateach.camera_test import test_cameras
+                
+                # Load camera config
+                import yaml
+                with open(self.camera_config_path, 'r') as f:
+                    test_camera_configs = yaml.safe_load(f)
+                
+                # Run camera tests
+                all_passed, test_results = test_cameras(test_camera_configs)
+                
+                if not all_passed:
+                    print("\n❌ Camera tests failed!")
+                    print("   Some cameras are not functioning properly.")
+                    response = input("\n   Continue anyway? (y/N): ")
+                    if response.lower() != 'y':
+                        print("   Exiting due to camera test failures.")
+                        sys.exit(1)
+                    else:
+                        print("   Continuing with available cameras...")
+                
+                # Initialize camera manager after tests pass
+                from frankateach.camera_manager import CameraManager
+                self.camera_manager = CameraManager(self.camera_config_path)
+                print("📷 Camera manager initialized")
+            except Exception as e:
+                print(f"⚠️  Failed to initialize camera manager: {e}")
+                self.camera_manager = None
+        
         if self.enable_recording:
             self.data_recorder = MCAPDataRecorder(
                 camera_configs=camera_configs,
                 save_images=True,
-                save_depth=False
+                save_depth=True,  # Enable depth recording if cameras support it
+                camera_manager=self.camera_manager
             )
             print("📹 MCAP data recording enabled")
         
@@ -1027,6 +1069,16 @@ class OculusVRServer:
                     joint_positions=init_joint_positions
                 )
         
+        # Start camera manager if enabled
+        if self.camera_manager:
+            try:
+                self.camera_manager.start()
+                print("📷 Camera manager started")
+            except Exception as e:
+                print(f"⚠️  Failed to start camera manager: {e}")
+                # Continue without cameras
+                self.camera_manager = None
+        
         # Start worker threads
         if self.enable_recording and self.data_recorder:
             self._mcap_writer_thread = threading.Thread(target=self._mcap_writer_worker)
@@ -1172,6 +1224,14 @@ class OculusVRServer:
                 print("✅ Oculus Reader stopped")
             except Exception as e:
                 print(f"⚠️  Error stopping Oculus Reader: {e}")
+        
+        # Stop camera manager
+        if self.camera_manager:
+            try:
+                self.camera_manager.stop()
+                print("✅ Camera manager stopped")
+            except Exception as e:
+                print(f"⚠️  Error stopping camera manager: {e}")
         
         # Stop simulation server if running
         if self.sim_server:
@@ -1688,10 +1748,14 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
                         help='Enable performance mode for tighter tracking (2x frequency, higher gains)')
     parser.add_argument('--no-recording', action='store_true',
                         help='Disable MCAP data recording functionality')
-    parser.add_argument('--camera-config', type=str, default=None,
-                        help='Path to camera configuration JSON file')
     parser.add_argument('--verify-data', action='store_true',
                         help='Verify MCAP data integrity after successful recording')
+    parser.add_argument('--camera-config', type=str, default=None,
+                        help='Path to camera configuration YAML file (e.g., configs/cameras.yaml)')
+    parser.add_argument('--enable-cameras', action='store_true',
+                        help='Enable camera recording with MCAP data')
+    parser.add_argument('--auto-discover-cameras', action='store_true',
+                        help='Automatically discover and use all connected cameras')
     
     args = parser.parse_args()
     
@@ -1718,13 +1782,35 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
             print("\n✅ Hot reload stopped")
         sys.exit(0)
     
+    # Handle auto-discovery of cameras
+    if args.auto_discover_cameras:
+        print("🔍 Auto-discovering cameras...")
+        try:
+            from frankateach.camera_utils import discover_all_cameras, generate_camera_config
+            
+            cameras = discover_all_cameras()
+            if cameras:
+                # Generate temporary config
+                temp_config = "/tmp/cameras_autodiscovered.yaml"
+                generate_camera_config(cameras, temp_config)
+                
+                # Override camera config path
+                args.camera_config = temp_config
+                args.enable_cameras = True
+                
+                print(f"✅ Using auto-discovered cameras from: {temp_config}")
+            else:
+                print("⚠️  No cameras found during auto-discovery")
+        except Exception as e:
+            print(f"❌ Camera auto-discovery failed: {e}")
+    
     # Load camera configuration if provided
     camera_configs = None
     if args.camera_config:
         try:
-            import json
+            import yaml
             with open(args.camera_config, 'r') as f:
-                camera_configs = json.load(f)
+                camera_configs = yaml.safe_load(f)
             print(f"📷 Loaded camera configuration from {args.camera_config}")
         except Exception as e:
             print(f"⚠️  Failed to load camera config: {e}")
@@ -1743,7 +1829,9 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
         performance_mode=args.performance,
         enable_recording=not args.no_recording,
         camera_configs=camera_configs,
-        verify_data=args.verify_data
+        verify_data=args.verify_data,
+        camera_config_path=args.camera_config,
+        enable_cameras=args.enable_cameras
     )
     
     try:

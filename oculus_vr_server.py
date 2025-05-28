@@ -401,9 +401,10 @@ class OculusVRServer:
         
         if self.enable_recording:
             print("\n📹 Recording Controls:")
-            print("   - A button: Start/reset recording")
+            print("   - A button: Start recording or stop current recording")
             print("   - B button: Mark recording as successful and save")
-            print("   - Recordings saved to: ~/recordings/")
+            print("   - Recordings saved to: ~/recordings/success")
+            print("   - Stopped recordings (via A button) are discarded")
         else:
             print("   - A/X button: Mark success and exit")
             print("   - B/Y button: Mark failure and exit")
@@ -1529,17 +1530,19 @@ class OculusVRServer:
             current_a_button = info["success"]
             if current_a_button and not self.prev_a_button:  # Rising edge
                 if self.recording_active:
-                    # Reset recording
-                    print("\n🔄 A button pressed - Resetting recording...")
+                    # Stop current recording
+                    print("\n🛑 A button pressed - Stopping current recording...")
                     self.data_recorder.reset_recording()
-                    print("📹 Recording restarted")
+                    self.recording_active = False
+                    print("📹 Recording stopped (not saved)")
+                    print("   Press A to start a new recording")
                 else:
                     # Start recording
                     print("\n▶️  A button pressed - Starting recording...")
                     self.data_recorder.start_recording()
                     self.recording_active = True
                     print("📹 Recording started")
-                    print("   Press A again to reset/restart")
+                    print("   Press A again to stop/discard")
                     print("   Press B to mark as successful and save")
             self.prev_a_button = current_a_button
             
@@ -1720,9 +1723,10 @@ Calibration:
   - Falls back to DROID-style calibration if no movement detected
 
 Recording (when enabled):
-  - Press A button to start/reset recording
+  - Press A button to start recording or stop current recording
   - Press B button to mark recording as successful and save
-  - Recordings are saved in ~/recordings/success or ~/recordings/failure
+  - Recordings are saved in ~/recordings/success
+  - Stopped recordings (via A button) are discarded
 
 Note: This version is adapted for Deoxys control (quaternion-based) instead of
 Polymetis (euler angle-based). The rotation handling has been adjusted accordingly.

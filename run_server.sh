@@ -39,10 +39,10 @@ if [ "$HOT_RELOAD" = true ]; then
     # Run in hot reload mode with camera support
     if [ -n "$CAMERA_CONFIG" ]; then
         echo "🔥 Starting async Oculus VR server in HOT RELOAD mode with cameras..."
-        python3 oculus_vr_server.py --hot-reload --performance --verify-data $CAMERA_ARGS "$@"
+        python3 oculus_vr_server.py --hot-reload --performance $CAMERA_ARGS "$@"
     else
         echo "🔥 Starting async Oculus VR server in HOT RELOAD mode..."
-        python3 oculus_vr_server.py --hot-reload --performance --verify-data "$@"
+        python3 oculus_vr_server.py --hot-reload --performance "$@"
     fi
 else
     # Normal mode

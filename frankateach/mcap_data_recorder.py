@@ -71,6 +71,7 @@ class MCAPDataRecorder:
         self.current_dir = None
         self.filepath = None
         self.start_timestamp = None
+        self._has_written_data = False  # Track if we've written actual data
         
         # Configuration
         self.save_images = save_images
@@ -789,19 +790,35 @@ class MCAPDataRecorder:
         self._writer.finish()
         self._mcap_file.close()
         
+        # Handle failure recordings - delete them
+        if not success:
+            # Delete the file instead of keeping it
+            try:
+                self.filepath.unlink()
+                print(f"❌ Recording discarded (failure case)")
+            except Exception as e:
+                print(f"⚠️  Failed to delete failure recording: {e}")
+            
+            # Reset state
+            self._channels.clear()
+            self._schemas.clear()
+            self._writer = None
+            self._mcap_file = None
+            self.filepath = None
+            self.start_timestamp = None
+            self._has_written_data = False
+            
+            return None
+        
+        # Only save successful recordings
         # Create new filename with duration
         timestamp_str = self.metadata.get("start_timestamp", "unknown")
         new_filename = f"trajectory_{timestamp_str}_{duration_str}.mcap"
         
-        # Move to appropriate directory with new name
-        if success:
-            new_filepath = self.success_dir / new_filename
-            self.filepath.rename(new_filepath)
-            print(f"✅ Recording saved as SUCCESS: {new_filepath}")
-        else:
-            new_filepath = self.failure_dir / new_filename
-            self.filepath.rename(new_filepath)
-            print(f"❌ Recording saved as FAILURE: {new_filepath}")
+        # Move to success directory with new name
+        new_filepath = self.success_dir / new_filename
+        self.filepath.rename(new_filepath)
+        print(f"✅ Recording saved as SUCCESS: {new_filepath}")
             
         # Reset state
         self._channels.clear()
@@ -810,18 +827,18 @@ class MCAPDataRecorder:
         self._mcap_file = None
         self.filepath = None
         self.start_timestamp = None
+        self._has_written_data = False
         
         return new_filepath
         
     def reset_recording(self):
-        """Reset current recording and start a new one"""
+        """Stop current recording without saving"""
         if self.recording:
-            print("🔄 Resetting recording...")
+            print("🔄 Stopping current recording...")
             # Stop current recording as failure (since it's being reset)
             self.stop_recording(success=False)
-            time.sleep(0.1)  # Brief pause
-            
-        return self.start_recording()
+            return True
+        return False
         
     def write_timestep(self, timestep: Dict[str, Any], timestamp: Optional[float] = None):
         """Queue timestep data for writing to MCAP"""
@@ -1011,6 +1028,25 @@ class MCAPDataRecorder:
                 
     def _write_timestep_to_mcap(self, timestep: Dict[str, Any]):
         """Write a Labelbox Robotics format timestep to MCAP file"""
+        # Check if this timestep has actual data
+        has_robot_state = ("robot_state" in timestep.get("observation", {}) and 
+                          timestep["observation"]["robot_state"])
+        has_action = "action" in timestep and timestep["action"] is not None
+        has_controller = ("controller_info" in timestep.get("observation", {}) and 
+                         timestep["observation"]["controller_info"])
+        has_images = ("image" in timestep.get("observation", {}) and 
+                     timestep["observation"]["image"] is not None)
+        
+        # Skip empty timesteps at the beginning of recording
+        if not self._has_written_data:
+            if not (has_robot_state or has_action or has_controller or has_images):
+                # Skip this empty timestep
+                return
+            else:
+                # We have data, mark that we've started writing
+                self._has_written_data = True
+                print("📝 First data timestep received, starting MCAP recording")
+        
         # Extract timestamp from the timestep data
         try:
             time_ns = timestep["observation"]["timestamp"]["robot_state"]["read_start"]

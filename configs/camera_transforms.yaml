@@ -4,17 +4,20 @@
 camera_transforms:
   realsense_0:
     # Fixed camera position (mounted on table/stand)
+    # Position: 3ft right, 2ft forward, 2ft high (from user's perspective facing the arm)
     parent_frame: "base"  # This camera is fixed relative to robot base
     translation:
-      x: -0.3  # 30cm to the left of robot base
-      y: 0.2   # 20cm forward
-      z: 0.5   # 50cm up
+      x: 0.61   # 2ft forward (61cm)
+      y: -0.91  # 3ft right (91cm) - negative Y is to the right in robot frame
+      z: 0.61   # 2ft high (61cm)
     rotation:
-      # Quaternion (x, y, z, w) - identity means camera faces same direction as robot
-      x: 0.0
+      # Quaternion for 135-degree clockwise rotation around X-axis
+      # 135 degrees clockwise = -135 degrees in right-hand rule
+      # sin(-67.5°) = -0.924, cos(-67.5°) = 0.383
+      x: -0.924  # sin(-67.5°)
       y: 0.0
       z: 0.0
-      w: 1.0
+      w: 0.383   # cos(-67.5°)
     frame_id: "camera_realsense_0"
     
   realsense_1:
@@ -25,11 +28,13 @@ camera_transforms:
       y: 0.0   # No offset
       z: 0.1   # 10cm forward from hand mounting point
     rotation:
-      # Quaternion (x, y, z, w) - camera faces forward from hand
+      # Quaternion for 60-degree counter-clockwise rotation around Z-axis
+      # 60 degrees counter-clockwise = +60 degrees in right-hand rule
+      # sin(30°) = 0.5, cos(30°) = 0.866
       x: 0.0
       y: 0.0
-      z: 0.0
-      w: 1.0
+      z: 0.5     # sin(30°)
+      w: 0.866   # cos(30°)
     frame_id: "camera_realsense_1"
 
 # Default transform for any camera not explicitly configured

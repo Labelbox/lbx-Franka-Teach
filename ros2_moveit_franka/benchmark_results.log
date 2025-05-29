@@ -1,0 +1,260 @@
+[INFO] [1748493540.397463326] [franka_benchmark_controller]: 🔄 Waiting for MoveIt services...
+[INFO] [1748493540.397847502] [franka_benchmark_controller]: ✅ All MoveIt services ready!
+[INFO] [1748493540.397995960] [franka_benchmark_controller]: 🔄 Waiting for trajectory action server...
+[INFO] [1748493540.398188158] [franka_benchmark_controller]: ✅ Trajectory action server ready!
+[INFO] [1748493540.398346229] [franka_benchmark_controller]: 🎯 Franka FR3 Benchmark Controller Initialized
+[INFO] [1748493540.398508741] [franka_benchmark_controller]: 📊 Will test rates: [1, 5, 10, 20, 50, 100, 200, 500, 1000] Hz
+[INFO] [1748493540.398651438] [franka_benchmark_controller]: ⏱️  Each rate tested for: 10.0s
+[INFO] [1748493543.409740331] [franka_benchmark_controller]: 🚀 Starting Comprehensive Franka FR3 Benchmark Suite
+[INFO] [1748493543.409936473] [franka_benchmark_controller]: 📊 Testing MoveIt integration with VR poses and collision avoidance
+[INFO] [1748493543.410097504] [franka_benchmark_controller]: 🏠 Moving to home position...
+[INFO] [1748493546.461586255] [franka_benchmark_controller]: ✅ Robot at home position - starting benchmark
+[INFO] [1748493546.461804655] [franka_benchmark_controller]: 🧪 Validating test VR poses...
+[INFO] [1748493546.462067022] [franka_benchmark_controller]: 🔧 Debugging IK setup...
+[INFO] [1748493546.462774795] [franka_benchmark_controller]: Available IK services: ['/compute_ik']
+[INFO] [1748493547.486196636] [franka_benchmark_controller]: Available TF frames include fr3 frames: []
+[INFO] [1748493547.488432683] [franka_benchmark_controller]: ✅ Frame fr3_hand_tcp works for FK
+[INFO] [1748493547.489445502] [franka_benchmark_controller]: ❌ Frame panda_hand_tcp failed FK
+[INFO] [1748493547.490303815] [franka_benchmark_controller]: ✅ Frame fr3_hand works for FK
+[INFO] [1748493547.491114563] [franka_benchmark_controller]: ❌ Frame panda_hand failed FK
+[INFO] [1748493547.491949981] [franka_benchmark_controller]: ✅ Frame fr3_link8 works for FK
+[INFO] [1748493547.492752096] [franka_benchmark_controller]: ❌ Frame panda_link8 failed FK
+[INFO] [1748493547.493550880] [franka_benchmark_controller]: ❌ Frame tool0 failed FK
+[INFO] [1748493547.493709620] [franka_benchmark_controller]: 🔍 Testing different planning group names...
+[INFO] [1748493547.495659571] [franka_benchmark_controller]: Current EE pose: pos=[0.307, 0.000, 0.485]
+[INFO] [1748493547.495820630] [franka_benchmark_controller]:                  ori=[1.000, -0.004, -0.002, -0.000]
+[INFO] [1748493547.496690020] [franka_benchmark_controller]: ❌ Group panda_arm: error code -15
+[INFO] [1748493547.498574796] [franka_benchmark_controller]: Current EE pose: pos=[0.307, 0.000, 0.485]
+[INFO] [1748493547.498743969] [franka_benchmark_controller]:                  ori=[1.000, -0.004, -0.002, -0.000]
+[INFO] [1748493547.499604457] [franka_benchmark_controller]: ✅ Found working planning group: fr3_arm
+[INFO] [1748493547.499791901] [franka_benchmark_controller]: ✅ Updated planning group to: fr3_arm
+[INFO] [1748493547.499971827] [franka_benchmark_controller]: 🧪 Testing IK with current exact pose...
+[INFO] [1748493547.500793168] [franka_benchmark_controller]: Current EE pose: pos=[0.307, 0.000, 0.485]
+[INFO] [1748493547.501010046] [franka_benchmark_controller]:                  ori=[1.000, -0.004, -0.002, -0.000]
+[INFO] [1748493547.502258874] [franka_benchmark_controller]: Testing IK for frame: fr3_hand_tcp
+[INFO] [1748493547.502427691] [franka_benchmark_controller]: Planning group: fr3_arm
+[INFO] [1748493547.502573988] [franka_benchmark_controller]: Target pose: pos=[0.307, 0.000, 0.485]
+[INFO] [1748493547.502719187] [franka_benchmark_controller]: Target ori: [1.000, -0.004, -0.002, -0.000]
+[INFO] [1748493547.503282851] [franka_benchmark_controller]: IK Error code: 1
+[INFO] [1748493547.503438361] [franka_benchmark_controller]: ✅ IK SUCCESS with current pose!
+[INFO] [1748493547.504200269] [franka_benchmark_controller]: Current EE pose: pos=[0.307, 0.000, 0.485]
+[INFO] [1748493547.504366024] [franka_benchmark_controller]:                  ori=[1.000, -0.004, -0.002, -0.000]
+[INFO] [1748493547.504585896] [franka_benchmark_controller]: Created test poses based on current EE position
+[INFO] [1748493547.506167257] [franka_benchmark_controller]: ✅ Pose 1: SUCCESS - IK solved in 0.58ms
+[INFO] [1748493547.507794331] [franka_benchmark_controller]: ✅ Pose 2: SUCCESS - IK solved in 0.72ms
+[INFO] [1748493547.509291601] [franka_benchmark_controller]: ✅ Pose 3: SUCCESS - IK solved in 0.60ms
+[INFO] [1748493547.510727274] [franka_benchmark_controller]: ✅ Pose 4: SUCCESS - IK solved in 0.51ms
+[INFO] [1748493547.510900729] [franka_benchmark_controller]: 📊 Pose validation: 4/4 successful (100.0%)
+[INFO] [1748493547.511080657] [franka_benchmark_controller]: 📊 Benchmarking 1Hz control rate...
+[INFO] [1748493547.511235950] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 1Hz
+[INFO] [1748493547.511384520] [franka_benchmark_controller]: 🎯 Target period: 1000.00ms
+[INFO] [1748493547.511533851] [franka_benchmark_controller]: 🚀 Execution interval: every 2 cycles (~2.0s)
+[INFO] [1748493557.557471054] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493558.562961135] [franka_benchmark_controller]: 📊 Benchmarking 5Hz control rate...
+[INFO] [1748493558.563161121] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 5Hz
+[INFO] [1748493558.563321792] [franka_benchmark_controller]: 🎯 Target period: 200.00ms
+[INFO] [1748493558.563484030] [franka_benchmark_controller]: 🚀 Execution interval: every 10 cycles (~2.0s)
+[INFO] [1748493568.615852945] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493569.621357467] [franka_benchmark_controller]: 📊 Benchmarking 10Hz control rate...
+[INFO] [1748493569.621573854] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 10Hz
+[INFO] [1748493569.621760711] [franka_benchmark_controller]: 🎯 Target period: 100.00ms
+[INFO] [1748493569.621964818] [franka_benchmark_controller]: 🚀 Execution interval: every 20 cycles (~2.0s)
+[INFO] [1748493579.682576559] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493580.687343166] [franka_benchmark_controller]: 📊 Benchmarking 20Hz control rate...
+[INFO] [1748493580.687569673] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 20Hz
+[INFO] [1748493580.687812337] [franka_benchmark_controller]: 🎯 Target period: 50.00ms
+[INFO] [1748493580.688044621] [franka_benchmark_controller]: 🚀 Execution interval: every 40 cycles (~2.0s)
+[INFO] [1748493590.704504460] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493591.709926031] [franka_benchmark_controller]: 📊 Benchmarking 50Hz control rate...
+[INFO] [1748493591.710142857] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 50Hz
+[INFO] [1748493591.710299840] [franka_benchmark_controller]: 🎯 Target period: 20.00ms
+[INFO] [1748493591.710446565] [franka_benchmark_controller]: 🚀 Execution interval: every 100 cycles (~2.0s)
+[INFO] [1748493601.732048939] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493602.737519372] [franka_benchmark_controller]: 📊 Benchmarking 100Hz control rate...
+[INFO] [1748493602.737743687] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 100Hz
+[INFO] [1748493602.737901618] [franka_benchmark_controller]: 🎯 Target period: 10.00ms
+[INFO] [1748493602.738341009] [franka_benchmark_controller]: 🚀 Execution interval: every 200 cycles (~2.0s)
+[INFO] [1748493612.754739465] [franka_benchmark_controller]: ✅ Completed: 3 safe trajectory executions during benchmark
+[INFO] [1748493613.759851517] [franka_benchmark_controller]: 📊 Benchmarking 200Hz control rate...
+[INFO] [1748493613.760129141] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 200Hz
+[INFO] [1748493613.760312138] [franka_benchmark_controller]: 🎯 Target period: 5.00ms
+[INFO] [1748493613.760471865] [franka_benchmark_controller]: 🚀 Execution interval: every 400 cycles (~2.0s)
+[INFO] [1748493623.764500091] [franka_benchmark_controller]: ✅ Completed: 0 safe trajectory executions during benchmark
+[INFO] [1748493624.769991775] [franka_benchmark_controller]: 📊 Benchmarking 500Hz control rate...
+[INFO] [1748493624.770268545] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 500Hz
+[INFO] [1748493624.770445093] [franka_benchmark_controller]: 🎯 Target period: 2.00ms
+[INFO] [1748493624.770677056] [franka_benchmark_controller]: 🚀 Execution interval: every 1000 cycles (~2.0s)
+[INFO] [1748493634.777121887] [franka_benchmark_controller]: ✅ Completed: 0 safe trajectory executions during benchmark
+[INFO] [1748493635.782726493] [franka_benchmark_controller]: 📊 Benchmarking 1000Hz control rate...
+[INFO] [1748493635.783077807] [franka_benchmark_controller]: ⏱️  Running for 10.0s at 1000Hz
+[INFO] [1748493635.783255163] [franka_benchmark_controller]: 🎯 Target period: 1.00ms
+[INFO] [1748493635.783406224] [franka_benchmark_controller]: 🚀 Execution interval: every 2000 cycles (~2.0s)
+[INFO] [1748493645.792449248] [franka_benchmark_controller]: ✅ Completed: 0 safe trajectory executions during benchmark
+[INFO] [1748493646.798041233] [franka_benchmark_controller]: 🏁 Benchmark suite completed!
+
+================================================================================
+📊 BENCHMARK RESULTS - 1Hz TARGET
+================================================================================
+🎯 Target Rate:                1.0 Hz
+📈 Actual Rate:                1.0 Hz (100.0%)
+⏱️  Average Latency:         -95.97 ms
+🧮 IK Solve Time:             1.67 ms
+🛡️  Collision Check Time:      1.96 ms
+🗺️  Motion Plan Time:         18.70 ms
+🔄 Total Cycle Time:         22.51 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 100.0% of target rate
+⚡ EXCELLENT latency: -95.97ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 5Hz TARGET
+================================================================================
+🎯 Target Rate:                5.0 Hz
+📈 Actual Rate:                5.0 Hz (100.0%)
+⏱️  Average Latency:          -2.98 ms
+🧮 IK Solve Time:             1.61 ms
+🛡️  Collision Check Time:      2.22 ms
+🗺️  Motion Plan Time:         16.65 ms
+🔄 Total Cycle Time:         20.59 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 100.0% of target rate
+⚡ EXCELLENT latency: -2.98ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 10Hz TARGET
+================================================================================
+🎯 Target Rate:               10.0 Hz
+📈 Actual Rate:               10.0 Hz (100.0%)
+⏱️  Average Latency:          -0.40 ms
+🧮 IK Solve Time:             1.06 ms
+🛡️  Collision Check Time:      2.00 ms
+🗺️  Motion Plan Time:         15.88 ms
+🔄 Total Cycle Time:         19.03 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 100.0% of target rate
+⚡ EXCELLENT latency: -0.40ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 20Hz TARGET
+================================================================================
+🎯 Target Rate:               20.0 Hz
+📈 Actual Rate:               19.9 Hz ( 99.5%)
+⏱️  Average Latency:           0.08 ms
+🧮 IK Solve Time:             0.96 ms
+🛡️  Collision Check Time:      1.52 ms
+🗺️  Motion Plan Time:         17.12 ms
+🔄 Total Cycle Time:         19.69 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 99.5% of target rate
+⚡ EXCELLENT latency: 0.08ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 50Hz TARGET
+================================================================================
+🎯 Target Rate:               50.0 Hz
+📈 Actual Rate:               47.7 Hz ( 95.4%)
+⏱️  Average Latency:           0.96 ms
+🧮 IK Solve Time:             0.81 ms
+🛡️  Collision Check Time:      1.06 ms
+🗺️  Motion Plan Time:         16.50 ms
+🔄 Total Cycle Time:         18.47 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 95.4% of target rate
+⚡ EXCELLENT latency: 0.96ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 100Hz TARGET
+================================================================================
+🎯 Target Rate:              100.0 Hz
+📈 Actual Rate:               54.8 Hz ( 54.8%)
+⏱️  Average Latency:           8.24 ms
+🧮 IK Solve Time:             0.81 ms
+🛡️  Collision Check Time:      1.01 ms
+🗺️  Motion Plan Time:         16.24 ms
+🔄 Total Cycle Time:         18.15 ms
+✅ Success Rate:             100.0 %
+⚠️  MODERATE: Only achieved 54.8% of target rate
+⚠️  MODERATE latency: 8.24ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 200Hz TARGET
+================================================================================
+🎯 Target Rate:              200.0 Hz
+📈 Actual Rate:              195.3 Hz ( 97.7%)
+⏱️  Average Latency:           0.12 ms
+🧮 IK Solve Time:             0.65 ms
+🛡️  Collision Check Time:      0.82 ms
+🗺️  Motion Plan Time:          0.00 ms
+🔄 Total Cycle Time:          1.50 ms
+✅ Success Rate:             100.0 %
+🎉 EXCELLENT: Achieved 97.7% of target rate
+⚡ EXCELLENT latency: 0.12ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 500Hz TARGET
+================================================================================
+🎯 Target Rate:              500.0 Hz
+📈 Actual Rate:              474.6 Hz ( 94.9%)
+⏱️  Average Latency:           0.11 ms
+🧮 IK Solve Time:             0.56 ms
+🛡️  Collision Check Time:      0.68 ms
+🗺️  Motion Plan Time:          0.00 ms
+🔄 Total Cycle Time:          1.27 ms
+✅ Success Rate:             100.0 %
+👍 GOOD: Achieved 94.9% of target rate
+⚡ EXCELLENT latency: 0.11ms
+================================================================================
+
+
+================================================================================
+📊 BENCHMARK RESULTS - 1000Hz TARGET
+================================================================================
+🎯 Target Rate:             1000.0 Hz
+📈 Actual Rate:              811.2 Hz ( 81.1%)
+⏱️  Average Latency:           0.23 ms
+🧮 IK Solve Time:             0.54 ms
+🛡️  Collision Check Time:      0.64 ms
+🗺️  Motion Plan Time:          0.00 ms
+🔄 Total Cycle Time:          1.20 ms
+✅ Success Rate:             100.0 %
+👍 GOOD: Achieved 81.1% of target rate
+⚡ EXCELLENT latency: 0.23ms
+================================================================================
+
+
+====================================================================================================
+🏆 COMPREHENSIVE BENCHMARK SUMMARY - FRANKA FR3 WITH MOVEIT
+====================================================================================================
+ Rate (Hz)  Actual (Hz)  Latency (ms)    IK (ms)  Collision (ms)   Plan (ms)   Cycle (ms)  Success (%)
+----------------------------------------------------------------------------------------------------
+         1          1.0        -95.97       1.67            1.96       18.70        22.51        100.0
+         5          5.0         -2.98       1.61            2.22       16.65        20.59        100.0
+        10         10.0         -0.40       1.06            2.00       15.88        19.03        100.0
+        20         19.9          0.08       0.96            1.52       17.12        19.69        100.0
+        50         47.7          0.96       0.81            1.06       16.50        18.47        100.0
+       100         54.8          8.24       0.81            1.01       16.24        18.15        100.0
+       200        195.3          0.12       0.65            0.82        0.00         1.50        100.0
+       500        474.6          0.11       0.56            0.68        0.00         1.27        100.0
+      1000        811.2          0.23       0.54            0.64        0.00         1.20        100.0
+----------------------------------------------------------------------------------------------------
+
+🏆 PERFORMANCE HIGHLIGHTS:
+   🚀 Highest Rate:     811.2 Hz
+   ⚡ Lowest Latency:   -95.97 ms
+   ✅ Best Success:     100.0 %
+====================================================================================================
+

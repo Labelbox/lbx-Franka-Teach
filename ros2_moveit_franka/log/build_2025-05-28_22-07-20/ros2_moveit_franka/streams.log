@@ -1,0 +1,36 @@
+[0.410s] Invoking command in '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka': PYTHONPATH=/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build
+[0.579s] running develop
+[0.621s] /usr/lib/python3/dist-packages/pkg_resources/__init__.py:116: PkgResourcesDeprecationWarning: 2.22.1ubuntu1 is an invalid version and will not be supported in a future release
+[0.621s]   warnings.warn(
+[0.701s] Removing /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2-moveit-franka.egg-link (link to .)
+[0.721s] Invoked command in '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka' returned '0': PYTHONPATH=/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --uninstall --editable --build-directory /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build
+[0.722s] Invoking command in '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka': PYTHONPATH=/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/ros2_moveit_franka build --build-base /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build install --record /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/install.log --single-version-externally-managed install_data --force
+[0.884s] running egg_info
+[0.884s] writing build/ros2_moveit_franka/ros2_moveit_franka.egg-info/PKG-INFO
+[0.884s] writing dependency_links to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/dependency_links.txt
+[0.884s] writing entry points to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/entry_points.txt
+[0.885s] writing requirements to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/requires.txt
+[0.885s] writing top-level names to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/top_level.txt
+[0.886s] reading manifest file 'build/ros2_moveit_franka/ros2_moveit_franka.egg-info/SOURCES.txt'
+[0.886s] writing manifest file 'build/ros2_moveit_franka/ros2_moveit_franka.egg-info/SOURCES.txt'
+[0.886s] running build
+[0.886s] running build_py
+[0.886s] copying ros2_moveit_franka/simple_arm_control.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka
+[0.886s] running install
+[0.887s] running install_lib
+[0.887s] creating /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+[0.887s] copying /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka/__init__.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+[0.887s] copying /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka/simple_arm_control.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+[0.888s] byte-compiling /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka/__init__.py to __init__.cpython-310.pyc
+[0.888s] byte-compiling /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka/simple_arm_control.py to simple_arm_control.cpython-310.pyc
+[0.894s] running install_data
+[0.894s] copying resource/ros2_moveit_franka -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ament_index/resource_index/packages
+[0.894s] copying package.xml -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ros2_moveit_franka
+[0.894s] copying launch/franka_demo.launch.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ros2_moveit_franka/launch
+[0.894s] running install_egg_info
+[0.895s] Copying build/ros2_moveit_franka/ros2_moveit_franka.egg-info to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka-0.0.1-py3.10.egg-info
+[0.896s] running install_scripts
+[0.909s] Installing franka_moveit_control script to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/bin
+[0.909s] Installing simple_arm_control script to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/bin
+[0.909s] writing list of installed files to '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/install.log'
+[0.927s] Invoked command in '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka' returned '0': PYTHONPATH=/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/ros2_moveit_franka build --build-base /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build install --record /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/install.log --single-version-externally-managed install_data --force

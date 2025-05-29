@@ -1,64 +1,55 @@
 #!/bin/bash
 # Docker run script for ros2_moveit_franka package
-# Provides easy commands to run different Docker scenarios
 
 set -e
 
-# Colors
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-print_usage() {
-    echo "Usage: $0 <command> [options]"
+echo -e "${BLUE}🐳 ROS 2 MoveIt Franka Docker Manager${NC}"
+echo "================================================"
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 [COMMAND] [OPTIONS]"
     echo ""
     echo "Commands:"
-    echo "  build              Build the Docker image"
-    echo "  real               Run with real robot (requires robot connection)"
-    echo "  sim                Run simulation (fake hardware)"
-    echo "  demo               Run the demo (requires MoveIt to be running)"
-    echo "  dev                Start interactive development container"
-    echo "  stop               Stop all containers"
-    echo "  clean              Remove containers and images"
-    echo "  logs               Show container logs"
+    echo "  build          Build the Docker image"
+    echo "  run            Run interactive container"
+    echo "  sim            Run simulation demo"
+    echo "  demo           Run real robot demo"
+    echo "  shell          Open shell in running container"
+    echo "  stop           Stop and remove containers"
+    echo "  clean          Remove containers and images"
+    echo "  logs           Show container logs"
     echo ""
     echo "Options:"
-    echo "  --robot-ip IP      Robot IP address (default: 192.168.1.59)"
-    echo "  --help, -h         Show this help message"
+    echo "  --no-gpu       Disable GPU support"
+    echo "  --robot-ip IP  Set robot IP address (default: 192.168.1.59)"
+    echo "  --help         Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0 build                    # Build the Docker image"
-    echo "  $0 sim                      # Run simulation"
-    echo "  $0 real --robot-ip 192.168.1.100  # Run with robot at custom IP"
-    echo "  $0 dev                      # Start development container"
+    echo "  $0 build                    # Build the image"
+    echo "  $0 sim                      # Run simulation demo"
+    echo "  $0 demo --robot-ip 192.168.1.59  # Run with real robot"
+    echo "  $0 run                      # Interactive development container"
 }
 
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# Default values
-ROBOT_IP="192.168.1.59"
+# Parse command line arguments
 COMMAND=""
+ROBOT_IP="192.168.1.59"
+GPU_SUPPORT=true
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        build|real|sim|demo|dev|stop|clean|logs)
+        build|run|sim|demo|shell|stop|clean|logs)
             COMMAND="$1"
             shift
             ;;
@@ -66,106 +57,173 @@ while [[ $# -gt 0 ]]; do
             ROBOT_IP="$2"
             shift 2
             ;;
-        -h|--help)
-            print_usage
+        --no-gpu)
+            GPU_SUPPORT=false
+            shift
+            ;;
+        --help)
+            usage
             exit 0
             ;;
         *)
-            print_error "Unknown option: $1"
-            print_usage
+            echo -e "${RED}Unknown option: $1${NC}"
+            usage
             exit 1
             ;;
     esac
 done
 
 if [[ -z "$COMMAND" ]]; then
-    print_error "No command specified"
-    print_usage
+    usage
     exit 1
 fi
 
-# Set up X11 forwarding for GUI applications
+# Check if Docker is running
+if ! docker info >/dev/null 2>&1; then
+    echo -e "${RED}❌ Docker is not running or not accessible${NC}"
+    exit 1
+fi
+
+# Change to package directory
+cd "$PACKAGE_DIR"
+
+# Setup X11 forwarding for GUI applications
 setup_x11() {
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Linux: Enable X11 forwarding
-        xhost +local:docker 2>/dev/null || print_warning "Could not configure X11 forwarding"
-        export DISPLAY=${DISPLAY:-:0}
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: Use XQuartz
-        if ! command -v xquartz &> /dev/null; then
-            print_warning "XQuartz not found. Install with: brew install --cask xquartz"
-        fi
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        echo -e "${YELLOW}ℹ️  For GUI support on macOS, ensure XQuartz is running${NC}"
+        echo "   Install: brew install --cask xquartz"
+        echo "   Run: open -a XQuartz"
         export DISPLAY=host.docker.internal:0
     else
-        print_warning "X11 forwarding not configured for this OS"
+        # Linux
+        xhost +local:docker >/dev/null 2>&1 || true
     fi
 }
 
-# Execute commands
+# Build command
+cmd_build() {
+    echo -e "${BLUE}🔨 Building Docker image...${NC}"
+    docker compose build ros2_moveit_franka
+    echo -e "${GREEN}✅ Build completed${NC}"
+}
+
+# Run interactive container
+cmd_run() {
+    echo -e "${BLUE}🚀 Starting interactive development container...${NC}"
+    setup_x11
+    
+    # Set environment variables
+    export ROBOT_IP="$ROBOT_IP"
+    
+    docker compose up -d ros2_moveit_franka
+    docker compose exec ros2_moveit_franka bash
+}
+
+# Run simulation demo
+cmd_sim() {
+    echo -e "${BLUE}🎮 Starting simulation demo...${NC}"
+    setup_x11
+    
+    # Stop any existing containers
+    docker compose down >/dev/null 2>&1 || true
+    
+    # Start simulation
+    docker compose up ros2_moveit_franka_sim
+}
+
+# Run real robot demo
+cmd_demo() {
+    echo -e "${BLUE}🤖 Starting real robot demo...${NC}"
+    echo -e "${YELLOW}⚠️  Ensure robot at ${ROBOT_IP} is ready and accessible${NC}"
+    setup_x11
+    
+    # Set environment variables
+    export ROBOT_IP="$ROBOT_IP"
+    
+    # Check robot connectivity
+    if ! ping -c 1 -W 3 "$ROBOT_IP" >/dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️  Warning: Cannot ping robot at ${ROBOT_IP}${NC}"
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    fi
+    
+    # Stop any existing containers
+    docker compose down >/dev/null 2>&1 || true
+    
+    # Start with real robot
+    docker compose run --rm ros2_moveit_franka \
+        ros2 launch ros2_moveit_franka franka_demo.launch.py robot_ip:="$ROBOT_IP"
+}
+
+# Open shell in running container
+cmd_shell() {
+    echo -e "${BLUE}🐚 Opening shell in running container...${NC}"
+    
+    if ! docker compose ps ros2_moveit_franka | grep -q "Up"; then
+        echo -e "${YELLOW}⚠️  No running container found. Starting one...${NC}"
+        docker compose up -d ros2_moveit_franka
+        sleep 2
+    fi
+    
+    docker compose exec ros2_moveit_franka bash
+}
+
+# Stop containers
+cmd_stop() {
+    echo -e "${BLUE}🛑 Stopping containers...${NC}"
+    docker compose down
+    echo -e "${GREEN}✅ Containers stopped${NC}"
+}
+
+# Clean up
+cmd_clean() {
+    echo -e "${BLUE}🧹 Cleaning up containers and images...${NC}"
+    
+    # Stop and remove containers
+    docker compose down --rmi all --volumes --remove-orphans
+    
+    # Remove dangling images
+    docker image prune -f >/dev/null 2>&1 || true
+    
+    echo -e "${GREEN}✅ Cleanup completed${NC}"
+}
+
+# Show logs
+cmd_logs() {
+    echo -e "${BLUE}📋 Container logs:${NC}"
+    docker compose logs --tail=50 -f
+}
+
+# Execute command
 case $COMMAND in
     build)
-        print_info "Building Docker image..."
-        docker compose build
-        print_success "Docker image built successfully"
+        cmd_build
         ;;
-    
-    real)
-        print_info "Starting MoveIt with REAL robot at $ROBOT_IP"
-        print_warning "Make sure robot is connected and in programming mode!"
-        setup_x11
-        export ROBOT_IP
-        docker compose up real_robot
+    run)
+        cmd_run
         ;;
-    
     sim)
-        print_info "Starting MoveIt with SIMULATION (fake hardware)"
-        print_success "Safe for testing without real robot"
-        setup_x11
-        export ROBOT_IP
-        docker compose up simulation
+        cmd_sim
         ;;
-    
     demo)
-        print_info "Starting demo..."
-        print_info "This will connect to an existing MoveIt container"
-        docker compose up demo
+        cmd_demo
         ;;
-    
-    dev)
-        print_info "Starting development container..."
-        setup_x11
-        export ROBOT_IP
-        docker compose run --rm dev
+    shell)
+        cmd_shell
         ;;
-    
     stop)
-        print_info "Stopping all containers..."
-        docker compose down
-        print_success "All containers stopped"
+        cmd_stop
         ;;
-    
     clean)
-        print_warning "This will remove ALL containers and images"
-        read -p "Are you sure? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Cleaning up..."
-            docker compose down --rmi all --volumes --remove-orphans
-            docker system prune -f
-            print_success "Cleanup complete"
-        else
-            print_info "Cleanup cancelled"
-        fi
+        cmd_clean
         ;;
-    
     logs)
-        print_info "Showing container logs..."
-        docker compose logs -f
+        cmd_logs
         ;;
-    
-    *)
-        print_error "Unknown command: $COMMAND"
-        print_usage
-        exit 1
-        ;;
-esac 
+esac
+
+echo -e "${GREEN}✅ Command completed: $COMMAND${NC}" 

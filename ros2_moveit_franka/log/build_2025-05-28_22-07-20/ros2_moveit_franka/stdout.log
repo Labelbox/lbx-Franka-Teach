@@ -1,0 +1,30 @@
+running develop
+Removing /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2-moveit-franka.egg-link (link to .)
+running egg_info
+writing build/ros2_moveit_franka/ros2_moveit_franka.egg-info/PKG-INFO
+writing dependency_links to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/dependency_links.txt
+writing entry points to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/entry_points.txt
+writing requirements to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/requires.txt
+writing top-level names to build/ros2_moveit_franka/ros2_moveit_franka.egg-info/top_level.txt
+reading manifest file 'build/ros2_moveit_franka/ros2_moveit_franka.egg-info/SOURCES.txt'
+writing manifest file 'build/ros2_moveit_franka/ros2_moveit_franka.egg-info/SOURCES.txt'
+running build
+running build_py
+copying ros2_moveit_franka/simple_arm_control.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka
+running install
+running install_lib
+creating /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+copying /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka/__init__.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+copying /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/build/lib/ros2_moveit_franka/simple_arm_control.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka
+byte-compiling /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka/__init__.py to __init__.cpython-310.pyc
+byte-compiling /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka/simple_arm_control.py to simple_arm_control.cpython-310.pyc
+running install_data
+copying resource/ros2_moveit_franka -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ament_index/resource_index/packages
+copying package.xml -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ros2_moveit_franka
+copying launch/franka_demo.launch.py -> /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/share/ros2_moveit_franka/launch
+running install_egg_info
+Copying build/ros2_moveit_franka/ros2_moveit_franka.egg-info to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka-0.0.1-py3.10.egg-info
+running install_scripts
+Installing franka_moveit_control script to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/bin
+Installing simple_arm_control script to /home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/bin
+writing list of installed files to '/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/build/ros2_moveit_franka/install.log'

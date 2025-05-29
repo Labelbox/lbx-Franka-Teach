@@ -104,7 +104,7 @@ setup_x11() {
 # Build command
 cmd_build() {
     echo -e "${BLUE}🔨 Building Docker image...${NC}"
-    docker-compose build ros2_moveit_franka
+    docker compose build ros2_moveit_franka
     echo -e "${GREEN}✅ Build completed${NC}"
 }
 
@@ -116,8 +116,8 @@ cmd_run() {
     # Set environment variables
     export ROBOT_IP="$ROBOT_IP"
     
-    docker-compose up -d ros2_moveit_franka
-    docker-compose exec ros2_moveit_franka bash
+    docker compose up -d ros2_moveit_franka
+    docker compose exec ros2_moveit_franka bash
 }
 
 # Run simulation demo
@@ -126,10 +126,10 @@ cmd_sim() {
     setup_x11
     
     # Stop any existing containers
-    docker-compose down >/dev/null 2>&1 || true
+    docker compose down >/dev/null 2>&1 || true
     
     # Start simulation
-    docker-compose up ros2_moveit_franka_sim
+    docker compose up ros2_moveit_franka_sim
 }
 
 # Run real robot demo
@@ -152,10 +152,10 @@ cmd_demo() {
     fi
     
     # Stop any existing containers
-    docker-compose down >/dev/null 2>&1 || true
+    docker compose down >/dev/null 2>&1 || true
     
     # Start with real robot
-    docker-compose run --rm ros2_moveit_franka \
+    docker compose run --rm ros2_moveit_franka \
         ros2 launch ros2_moveit_franka franka_demo.launch.py robot_ip:="$ROBOT_IP"
 }
 
@@ -163,19 +163,19 @@ cmd_demo() {
 cmd_shell() {
     echo -e "${BLUE}🐚 Opening shell in running container...${NC}"
     
-    if ! docker-compose ps ros2_moveit_franka | grep -q "Up"; then
+    if ! docker compose ps ros2_moveit_franka | grep -q "Up"; then
         echo -e "${YELLOW}⚠️  No running container found. Starting one...${NC}"
-        docker-compose up -d ros2_moveit_franka
+        docker compose up -d ros2_moveit_franka
         sleep 2
     fi
     
-    docker-compose exec ros2_moveit_franka bash
+    docker compose exec ros2_moveit_franka bash
 }
 
 # Stop containers
 cmd_stop() {
     echo -e "${BLUE}🛑 Stopping containers...${NC}"
-    docker-compose down
+    docker compose down
     echo -e "${GREEN}✅ Containers stopped${NC}"
 }
 
@@ -184,7 +184,7 @@ cmd_clean() {
     echo -e "${BLUE}🧹 Cleaning up containers and images...${NC}"
     
     # Stop and remove containers
-    docker-compose down --rmi all --volumes --remove-orphans
+    docker compose down --rmi all --volumes --remove-orphans
     
     # Remove dangling images
     docker image prune -f >/dev/null 2>&1 || true
@@ -195,7 +195,7 @@ cmd_clean() {
 # Show logs
 cmd_logs() {
     echo -e "${BLUE}📋 Container logs:${NC}"
-    docker-compose logs --tail=50 -f
+    docker compose logs --tail=50 -f
 }
 
 # Execute command

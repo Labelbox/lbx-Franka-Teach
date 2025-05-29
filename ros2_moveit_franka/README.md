@@ -149,37 +149,64 @@ This package is designed to work seamlessly with the [official franka_ros2 Docke
 
 Make sure you have ROS 2 Humble installed on your system. Follow the [official installation guide](https://docs.ros.org/en/humble/Installation.html).
 
-### 2. Franka ROS 2 Dependencies
+### 2. Automated Franka ROS 2 Setup (Recommended)
 
-Install the official Franka ROS 2 packages:
+We provide a setup script that automatically installs and configures the Franka ROS 2 packages with necessary fixes:
 
 ```bash
-# Create a ROS 2 workspace for Franka dependencies
-mkdir -p ~/franka_ros2_ws/src
-cd ~/franka_ros2_ws
-
-# Clone the Franka ROS 2 repository
-git clone https://github.com/frankaemika/franka_ros2.git src
-
-# Install dependencies
-vcs import src < src/franka.repos --recursive --skip-existing
-rosdep install --from-paths src --ignore-src --rosdistro humble -y
-
-# Build the workspace
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+# From the ros2_moveit_franka directory
+./scripts/setup_franka_ros2.sh
 
 # Source the workspace
-source install/setup.bash
+source ~/franka_ros2_ws/install/setup.bash
 ```
 
-### 3. Add to your ROS 2 environment
+This script will:
+- Clone and build the official Franka ROS 2 packages
+- Apply the necessary URDF fixes for real hardware
+- Skip problematic Gazebo packages
+- Set up all dependencies
 
-Add the Franka workspace to your ROS 2 environment:
+### 3. Manual Franka ROS 2 Installation (Alternative)
 
-```bash
-echo "source ~/franka_ros2_ws/install/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
+If you prefer to install manually:
+
+1. **Clone the Franka ROS 2 repository:**
+
+   ```bash
+   # Create a ROS 2 workspace for Franka dependencies
+   mkdir -p ~/franka_ros2_ws/src
+   cd ~/franka_ros2_ws
+
+   # Clone the Franka ROS 2 repository
+   git clone https://github.com/frankaemika/franka_ros2.git src
+   ```
+
+2. **Install dependencies:**
+
+   ```bash
+   vcs import src < src/franka.repos --recursive --skip-existing
+   rosdep install --from-paths src --ignore-src --rosdistro humble -y
+   ```
+
+3. **Build the workspace:**
+
+   ```bash
+   colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+   ```
+
+4. **Source the workspace:**
+
+   ```bash
+   source install/setup.bash
+   ```
+
+5. **Add to your ROS 2 environment:**
+
+   ```bash
+   echo "source ~/franka_ros2_ws/install/setup.bash" >> ~/.bashrc
+   source ~/.bashrc
+   ```
 
 ### 4. Install This Package
 
@@ -258,6 +285,32 @@ The demo performs the following sequence:
 4. **➡️ X-Direction Movement**: Moves the end effector 10cm in the positive X direction
 5. **🏠 Return Home**: Returns the robot to the home position
 
+## ✅ **WORKING STATUS** ✅
+
+**The demo is now fully functional and tested with real hardware!**
+
+### Successful Test Results:
+- ✅ Robot connects to real Franka FR3 at `192.168.1.59`
+- ✅ MoveIt integration working properly
+- ✅ Home position movement: **SUCCESS**
+- ✅ X-direction movement using joint space: **SUCCESS** 
+- ✅ Return to home: **SUCCESS**
+- ✅ Complete demo sequence: **FULLY WORKING**
+
+### Example Output:
+```
+[INFO] Starting Franka FR3 demo...
+[INFO] Moving to home position...
+[INFO] Trajectory executed successfully
+[INFO] Moving approximately 10.0cm in X direction using joint space movement
+[INFO] Moving from joints: ['0.001', '-0.782', '-0.000', '-2.359', '0.000', '1.572', '0.795']
+[INFO] Moving to joints:   ['0.151', '-0.782', '-0.000', '-2.359', '0.000', '1.572', '0.795']
+[INFO] Trajectory executed successfully
+[INFO] Returning to home position...
+[INFO] Trajectory executed successfully
+[INFO] Demo completed successfully!
+```
+
 ## Safety Notes
 
 ⚠️ **Important Safety Information:**
@@ -298,18 +351,43 @@ The demo performs the following sequence:
    - Ensure robot is powered on and in programming mode
    - Verify network connectivity: `ping 192.168.1.59`
 
-2. **"Planning failed"**
+2. **"Parameter 'version' is not set" Error with Real Hardware**
+   
+   If you encounter this error when connecting to real hardware:
+   ```
+   [FATAL] [FrankaHardwareInterface]: Parameter 'version' is not set. Please update your URDF (aka franka_description).
+   ```
+   
+   **Solution**: The franka_description package needs to be updated to include the version parameter. Add the following line to `/home/labelbox/franka_ros2_ws/src/franka_description/robots/common/franka_arm.ros2_control.xacro`:
+   
+   ```xml
+   <hardware>
+     <param name="arm_id">${arm_id}</param>
+     <param name="prefix">${arm_prefix}</param>
+     <param name="version">0.1.0</param>
+     ...
+   </hardware>
+   ```
+   
+   Then rebuild the franka_description package:
+   ```bash
+   cd ~/franka_ros2_ws
+   colcon build --packages-select franka_description --symlink-install
+   source install/setup.bash
+   ```
+
+3. **"Planning failed"**
 
    - Check if the target position is within robot workspace
    - Ensure no obstacles are blocking the path
    - Try increasing planning timeout or attempts
 
-3. **"MoveGroup not available"**
+4. **"MoveGroup not available"**
 
    - Ensure the Franka MoveIt configuration is running
    - Check that all required ROS 2 nodes are active: `ros2 node list`
 
-4. **Missing dependencies**
+5. **Missing dependencies**
    - Make sure you installed the Franka ROS 2 packages
    - Run `rosdep install` again to check for missing dependencies
 

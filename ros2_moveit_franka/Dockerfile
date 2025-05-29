@@ -5,32 +5,43 @@ FROM ros:${ROS_DISTRO}-ros-base
 ENV DEBIAN_FRONTEND=noninteractive
 ENV ROS_DISTRO=${ROS_DISTRO}
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    # Build tools
+# Configure apt for better reliability
+RUN echo 'Acquire::http::Timeout "300";' > /etc/apt/apt.conf.d/99timeout && \
+    echo 'Acquire::Retries "3";' >> /etc/apt/apt.conf.d/99timeout && \
+    echo 'Acquire::http::Pipeline-Depth "0";' >> /etc/apt/apt.conf.d/99timeout
+
+# Update package lists with retry
+RUN apt-get update || (sleep 5 && apt-get update) || (sleep 10 && apt-get update)
+
+# Install system dependencies in smaller chunks
+RUN apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     python3-colcon-common-extensions \
     python3-rosdep \
     python3-vcstool \
-    # Development tools  
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     nano \
-    curl \
-    wget \
-    # ROS 2 development tools
-    ros-${ROS_DISTRO}-ros-dev-tools \
-    # MoveIt dependencies
-    ros-${ROS_DISTRO}-moveit-ros-planning-interface \
-    ros-${ROS_DISTRO}-moveit-commander \
-    ros-${ROS_DISTRO}-moveit-visual-tools \
-    ros-${ROS_DISTRO}-rviz2 \
-    # Additional utilities
     iputils-ping \
     net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MoveIt dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ros-${ROS_DISTRO}-moveit-ros-planning-interface \
+    ros-${ROS_DISTRO}-moveit-visual-tools \
+    ros-${ROS_DISTRO}-rviz2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create workspace directory

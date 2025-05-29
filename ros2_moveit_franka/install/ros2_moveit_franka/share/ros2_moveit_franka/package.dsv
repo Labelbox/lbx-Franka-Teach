@@ -1,0 +1,12 @@
+source;share/ros2_moveit_franka/hook/path.ps1
+source;share/ros2_moveit_franka/hook/path.dsv
+source;share/ros2_moveit_franka/hook/path.sh
+source;share/ros2_moveit_franka/hook/pythonpath.ps1
+source;share/ros2_moveit_franka/hook/pythonpath.dsv
+source;share/ros2_moveit_franka/hook/pythonpath.sh
+source;share/ros2_moveit_franka/hook/pythonscriptspath.ps1
+source;share/ros2_moveit_franka/hook/pythonscriptspath.dsv
+source;share/ros2_moveit_franka/hook/pythonscriptspath.sh
+source;share/ros2_moveit_franka/hook/ament_prefix_path.ps1
+source;share/ros2_moveit_franka/hook/ament_prefix_path.dsv
+source;share/ros2_moveit_franka/hook/ament_prefix_path.sh

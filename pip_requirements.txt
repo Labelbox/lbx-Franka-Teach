@@ -1,0 +1,75 @@
+# Core dependencies
+numpy>=1.19.0,<2.0
+scipy
+pyzmq
+mcap
+mcap-ros2-support
+opencv-python>=4.5.0
+pyrealsense2==2.55.1.6486
+pyyaml
+matplotlib
+Pillow
+pyserial
+requests
+websocket-client
+tqdm
+h5py
+pandas
+scikit-learn
+torch>=1.9.0
+torchvision>=0.10.0
+transformers>=4.20.0
+wandb
+tensorboard
+omegaconf
+hydra-core
+einops
+diffusers
+accelerate
+
+# ROS2 dependencies (install via rosdep/apt for system packages)
+# These are Python packages that can be installed via pip
+
+# Performance optimizations
+uvloop  # Faster event loop
+aiofiles  # Async file I/O
+aioserial  # Async serial communication
+
+# VR/Robot control
+oculus_reader  # From the existing codebase (for backward compatibility)
+pure-python-adb>=0.3.0.dev0  # For Meta Quest (Oculus) VR controller support
+deoxys  # Keep for compatibility during transition
+
+# Development tools
+pytest
+pytest-asyncio
+black
+flake8
+mypy
+ipython
+jupyter
+watchdog  # For hot reload functionality
+
+# Additional async support
+asyncio-mqtt
+aiohttp
+
+# Camera dependencies
+pyrealsense2==2.55.1.6486  # Latest stable Intel RealSense SDK
+opencv-python>=4.5.0  # OpenCV for image processing and generic cameras
+pyyaml  # For camera configuration files
+
+# ZED SDK Python wrapper (pyzed) must be installed separately:
+# 1. Install ZED SDK 5.0 from https://www.stereolabs.com/developers/release
+# 2. Run: python /usr/local/zed/get_python_api.py
+# Note: Requires CUDA, see ZED documentation for details
+
+# VR dependencies
+requests
+websocket-client
+
+# Optional dependencies for development
+pytest  # For running tests
+pytest-asyncio  # For async tests
+black  # Code formatting
+flake8  # Linting

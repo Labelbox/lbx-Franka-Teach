@@ -1,0 +1,76 @@
+<?xml version="1.0" ?>
+<robot name="franka_fr3">
+    <!-- Planning Groups -->
+    <group name="fr3_arm">
+        <chain base_link="fr3_link0" tip_link="fr3_hand"/>
+    </group>
+    
+    <group name="fr3_hand">
+        <link name="fr3_hand"/>
+        <link name="fr3_leftfinger"/>
+        <link name="fr3_rightfinger"/>
+        <joint name="fr3_finger_joint1"/>
+        <joint name="fr3_finger_joint2"/>
+    </group>
+    
+    <!-- End Effector -->
+    <end_effector name="fr3_hand" parent_link="fr3_link8" group="fr3_hand"/>
+    
+    <!-- Virtual Joints -->
+    <virtual_joint name="virtual_joint" type="fixed" parent_frame="world" child_link="fr3_link0"/>
+    
+    <!-- Group States -->
+    <!-- Home position from FR3 robot model -->
+    <group_state name="home" group="fr3_arm">
+        <joint name="fr3_joint1" value="-0.13935425877571106"/>
+        <joint name="fr3_joint2" value="-0.020481698215007782"/>
+        <joint name="fr3_joint3" value="-0.05201413854956627"/>
+        <joint name="fr3_joint4" value="-2.0691256523132324"/>
+        <joint name="fr3_joint5" value="0.05058913677930832"/>
+        <joint name="fr3_joint6" value="2.0028650760650635"/>
+        <joint name="fr3_joint7" value="-0.9167874455451965"/>
+    </group_state>
+    
+    <!-- Ready position (upright) -->
+    <group_state name="ready" group="fr3_arm">
+        <joint name="fr3_joint1" value="0"/>
+        <joint name="fr3_joint2" value="-0.785"/>
+        <joint name="fr3_joint3" value="0"/>
+        <joint name="fr3_joint4" value="-2.356"/>
+        <joint name="fr3_joint5" value="0"/>
+        <joint name="fr3_joint6" value="1.571"/>
+        <joint name="fr3_joint7" value="0.785"/>
+    </group_state>
+    
+    <!-- Transport position (folded) -->
+    <group_state name="transport" group="fr3_arm">
+        <joint name="fr3_joint1" value="0"/>
+        <joint name="fr3_joint2" value="-0.5"/>
+        <joint name="fr3_joint3" value="0"/>
+        <joint name="fr3_joint4" value="-2.5"/>
+        <joint name="fr3_joint5" value="0"/>
+        <joint name="fr3_joint6" value="2.0"/>
+        <joint name="fr3_joint7" value="0"/>
+    </group_state>
+    
+    <!-- Disable Collisions -->
+    <disable_collisions link1="fr3_link0" link2="fr3_link1" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link1" link2="fr3_link2" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link2" link2="fr3_link3" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link3" link2="fr3_link4" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link4" link2="fr3_link5" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link5" link2="fr3_link6" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link6" link2="fr3_link7" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link7" link2="fr3_link8" reason="Adjacent"/>
+    <disable_collisions link1="fr3_link8" link2="fr3_hand" reason="Adjacent"/>
+    <disable_collisions link1="fr3_hand" link2="fr3_leftfinger" reason="Adjacent"/>
+    <disable_collisions link1="fr3_hand" link2="fr3_rightfinger" reason="Adjacent"/>
+    <disable_collisions link1="fr3_leftfinger" link2="fr3_rightfinger" reason="Default"/>
+    
+    <!-- Additional collision pairs to disable based on FR3 geometry -->
+    <disable_collisions link1="fr3_link0" link2="fr3_link3" reason="Never"/>
+    <disable_collisions link1="fr3_link0" link2="fr3_link4" reason="Never"/>
+    <disable_collisions link1="fr3_link1" link2="fr3_link3" reason="Never"/>
+    <disable_collisions link1="fr3_link1" link2="fr3_link4" reason="Never"/>
+    <disable_collisions link1="fr3_link2" link2="fr3_link4" reason="Never"/>
+</robot> 

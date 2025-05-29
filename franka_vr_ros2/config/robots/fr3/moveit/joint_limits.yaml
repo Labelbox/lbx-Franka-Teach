@@ -1,0 +1,89 @@
+# Joint limits for Franka FR3 - Based on actual robot specifications
+joint_limits:
+  panda_joint1:
+    has_position_limits: true
+    min_position: -2.7437
+    max_position: 2.7437
+    has_velocity_limits: true
+    max_velocity: 2.1750
+    has_acceleration_limits: true
+    max_acceleration: 15.0
+    has_jerk_limits: true
+    max_jerk: 7500.0
+  panda_joint2:
+    has_position_limits: true
+    min_position: -1.7837
+    max_position: 1.7837
+    has_velocity_limits: true
+    max_velocity: 2.1750
+    has_acceleration_limits: true
+    max_acceleration: 7.5
+    has_jerk_limits: true
+    max_jerk: 3750.0
+  panda_joint3:
+    has_position_limits: true
+    min_position: -2.9007
+    max_position: 2.9007
+    has_velocity_limits: true
+    max_velocity: 2.1750
+    has_acceleration_limits: true
+    max_acceleration: 10.0
+    has_jerk_limits: true
+    max_jerk: 5000.0
+  panda_joint4:
+    has_position_limits: true
+    min_position: -3.0421
+    max_position: -0.1518
+    has_velocity_limits: true
+    max_velocity: 2.1750
+    has_acceleration_limits: true
+    max_acceleration: 12.5
+    has_jerk_limits: true
+    max_jerk: 6250.0
+  panda_joint5:
+    has_position_limits: true
+    min_position: -2.8065
+    max_position: 2.8065
+    has_velocity_limits: true
+    max_velocity: 2.6100
+    has_acceleration_limits: true
+    max_acceleration: 15.0
+    has_jerk_limits: true
+    max_jerk: 7500.0
+  panda_joint6:
+    has_position_limits: true
+    min_position: 0.5445
+    max_position: 4.5169
+    has_velocity_limits: true
+    max_velocity: 2.6100
+    has_acceleration_limits: true
+    max_acceleration: 20.0
+    has_jerk_limits: true
+    max_jerk: 10000.0
+  panda_joint7:
+    has_position_limits: true
+    min_position: -3.0159
+    max_position: 3.0159
+    has_velocity_limits: true
+    max_velocity: 2.6100
+    has_acceleration_limits: true
+    max_acceleration: 20.0
+    has_jerk_limits: true
+    max_jerk: 10000.0
+
+# Torque limits for FR3
+torque_limits:
+  panda_joint1:
+    max_torque: 87.0
+  panda_joint2:
+    max_torque: 87.0
+  panda_joint3:
+    max_torque: 87.0
+  panda_joint4:
+    max_torque: 87.0
+  panda_joint5:
+    max_torque: 12.0
+  panda_joint6:
+    max_torque: 12.0
+  panda_joint7:
+    max_torque: 12.0

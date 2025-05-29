@@ -1,16 +1,67 @@
 # Core dependencies
 numpy>=1.19.0,<2.0
 scipy
-matplotlib
 pyzmq
-hydra-core
-omegaconf
-h5py
-blosc
 mcap
 mcap-ros2-support
-foxglove-schemas-protobuf
-protobuf==3.20.3
+opencv-python>=4.5.0
+pyrealsense2==2.55.1.6486
+pyyaml
+matplotlib
+Pillow
+pyserial
+requests
+websocket-client
+tqdm
+h5py
+pandas
+scikit-learn
+torch>=1.9.0
+torchvision>=0.10.0
+transformers>=4.20.0
+wandb
+tensorboard
+omegaconf
+hydra-core
+einops
+diffusers
+accelerate
+
+# ROS2 dependencies (install via rosdep/apt for system packages)
+# These are Python packages that can be installed via pip
+rclpy>=3.3.0
+geometry_msgs
+sensor_msgs
+std_msgs
+std_srvs
+control_msgs
+moveit_msgs
+tf2_ros
+tf2_geometry_msgs
+
+# Performance optimizations
+uvloop  # Faster event loop
+aiofiles  # Async file I/O
+aioserial  # Async serial communication
+
+# VR/Robot control
+oculus_reader  # From the existing codebase (for backward compatibility)
+pure-python-adb>=0.3.0.dev0  # For Meta Quest (Oculus) VR controller support
+deoxys  # Keep for compatibility during transition
+
+# Development tools
+pytest
+pytest-asyncio
+black
+flake8
+mypy
+ipython
+jupyter
+watchdog  # For hot reload functionality
+
+# Additional async support
+asyncio-mqtt
+aiohttp
 
 # Camera dependencies
 pyrealsense2==2.55.1.6486  # Latest stable Intel RealSense SDK

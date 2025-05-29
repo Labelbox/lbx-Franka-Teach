@@ -1,0 +1,30 @@
+# Core dependencies
+numpy>=1.19.0,<2.0
+scipy>=1.7.0
+pyzmq>=22.0.0
+
+# ROS2 dependencies
+rclpy>=3.3.0
+geometry_msgs
+sensor_msgs
+moveit_msgs
+tf2_ros
+tf2_geometry_msgs
+
+# Recording
+mcap>=0.0.10
+mcap-ros2-support>=0.1.0
+opencv-python>=4.5.0
+pyrealsense2==2.55.1.6486
+pyyaml>=5.4.0
+aiofiles>=0.8.0
+
+# Performance
+uvloop>=0.16.0  # Faster event loop
+
+# Input devices
+pure-python-adb>=0.3.0.dev0  # For Meta Quest (Oculus) support
+
+# Optional dependencies for future input devices
+# pyobjc-framework-Vision  # For Apple Vision Pro (macOS only)
+# pyobjc-framework-ARKit   # For Apple Vision Pro (macOS only) 

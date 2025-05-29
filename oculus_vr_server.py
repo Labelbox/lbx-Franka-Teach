@@ -48,8 +48,13 @@ from dataclasses import dataclass
 from collections import deque
 import copy
 
-# Import the Oculus Reader
-from oculus_reader.reader import OculusReader
+# Import the input device through new modular structure
+# This allows easy swapping of input devices in the future
+try:
+    from franka_vr_ros2.input_devices import MetaQuestReader as OculusReader
+except ImportError:
+    # Fallback to old import for backward compatibility
+    from oculus_reader.reader import OculusReader
 
 # Import robot control components
 from frankateach.network import create_request_socket
@@ -289,7 +294,8 @@ class OculusVRServer:
         try:
             self.oculus_reader = OculusReader(
                 ip_address=ip_address,
-                print_FPS=False
+                print_fps=False,
+                auto_start=True  # MetaQuestReader uses auto_start instead of run
             )
             print("✅ Oculus Reader initialized successfully")
         except Exception as e:

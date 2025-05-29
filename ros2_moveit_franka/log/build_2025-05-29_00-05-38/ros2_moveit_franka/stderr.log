@@ -1,0 +1,5 @@
+  File "/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/install/ros2_moveit_franka/lib/python3.10/site-packages/ros2_moveit_franka/simple_arm_control.py", line 1274
+    else:
+    ^^^^
+SyntaxError: invalid syntax
+

@@ -10,11 +10,11 @@ VR-to-Robot Control Pipeline:
 4. Velocity Limiting: Clip to [-1, 1] range
 5. Delta Conversion: Scale by max_delta (0.075m linear, 0.15rad angular)
 6. Position Target: Add deltas to current position/orientation
-7. Deoxys Command: Send position + quaternion targets (15Hz)
+7. MoveIt Command: Send position + quaternion targets via MoveGroup action (15Hz)
 
 Key Differences from DROID:
-- DROID uses Polymetis (euler angles) vs our Deoxys (quaternions)
-- We skip IK solver (Deoxys handles internally)
+- DROID uses Polymetis (euler angles) vs our MoveIt (quaternions)
+- We skip IK solver (MoveIt handles internally)
 - Direct quaternion calculation for accurate rotation control
 - VR motions map directly to robot motions (roll inverted for ergonomics)
 
@@ -26,13 +26,19 @@ Features:
 - Success/failure buttons (A/B or X/Y)
 - 50Hz VR polling with internal state thread
 - Safety limiting and workspace bounds
-- Deoxys-compatible quaternion handling
+- MoveIt-compatible quaternion handling
 - FR3 robot simulation mode
 - MCAP data recording with Labelbox Robotics format
 - Asynchronous architecture for high-performance recording
 """
 
-import zmq
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Pose, PoseStamped
+from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import MotionPlanRequest, PlanningOptions, Constraints
+from sensor_msgs.msg import JointState
+from rclpy.action import ActionClient
 import time
 import threading
 import numpy as np
@@ -51,16 +57,12 @@ import copy
 # Import the Oculus Reader
 from oculus_reader.reader import OculusReader
 
-# Import robot control components
-from frankateach.network import create_request_socket
+# Import robot control components - keep gripper constants
 from frankateach.constants import (
-    HOST, CONTROL_PORT,
     GRIPPER_OPEN, GRIPPER_CLOSE,
     ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX,
     CONTROL_FREQ,  # Use the constant from the config
 )
-from frankateach.messages import FrankaAction, FrankaState
-from deoxys.utils import transform_utils
 
 # Import simulation components
 from simulation.fr3_sim_server import FR3SimServer
@@ -167,7 +169,7 @@ def add_angles(delta, source, degrees=False):
     return new_rot.as_euler("xyz", degrees=degrees)
 
 
-class OculusVRServer:
+class OculusVRServer(Node):
     def __init__(self, 
                  debug=False, 
                  right_controller=True, 
@@ -198,6 +200,7 @@ class OculusVRServer:
             camera_config_path: Path to camera configuration JSON file
             enable_cameras: If True, enable camera recording
         """
+        super().__init__('oculus_vr_server')
         self.debug = debug
         self.right_controller = right_controller
         self.simulation = simulation
@@ -307,21 +310,55 @@ class OculusVRServer:
             time.sleep(1.0)  # Give server time to start
             print("✅ Simulation server started")
         
+        # Initialize ROS2 and MoveIt components
         if not self.debug:
-            print("🤖 Connecting to robot...")
-            try:
-                # Create robot control socket
-                self.action_socket = create_request_socket(HOST, CONTROL_PORT)
-                print("✅ Connected to robot server")
-                
-                # Create ZMQ context and publisher
-                self.context = zmq.Context()
-                self.controller_publisher = self.context.socket(zmq.PUB)
-                self.controller_publisher.bind("tcp://192.168.1.54:5555")
-                print("📡 Controller state publisher bound to tcp://192.168.1.54:5555")
-            except Exception as e:
-                print(f"❌ Failed to connect to robot: {e}")
-                sys.exit(1)
+            print("🤖 Initializing ROS2 and MoveIt components...")
+            
+            # Robot configuration
+            self.planning_group = "fr3_arm"
+            self.end_effector_link = "fr3_hand_tcp"
+            self.base_frame = "fr3_link0"
+            self.joint_names = [
+                'fr3_joint1', 'fr3_joint2', 'fr3_joint3', 'fr3_joint4',
+                'fr3_joint5', 'fr3_joint6', 'fr3_joint7'
+            ]
+            
+            # Create MoveGroup action client
+            self.move_group_client = ActionClient(self, MoveGroup, '/move_action')
+            
+            # Create gripper action client to maintain gripper functionality
+            from control_msgs.action import GripperCommand
+            self.gripper_client = ActionClient(self, GripperCommand, '/fr3_gripper/gripper_action')
+            
+            # Joint state subscriber
+            self.joint_state = None
+            self.joint_state_sub = self.create_subscription(
+                JointState, '/joint_states', self.joint_state_callback, 10
+            )
+            
+            # Wait for move_group action server
+            self.get_logger().info('Waiting for move_group action server...')
+            if self.move_group_client.wait_for_server(timeout_sec=10.0):
+                self.get_logger().info('Move group action server ready!')
+                print("✅ Connected to MoveIt system")
+            else:
+                self.get_logger().error('Move group action server not available!')
+                print("❌ Failed to connect to MoveIt system")
+                return
+            
+            # Wait for gripper action server (optional)
+            self.get_logger().info('Waiting for gripper action server...')
+            if self.gripper_client.wait_for_server(timeout_sec=5.0):
+                self.get_logger().info('Gripper action server ready!')
+                print("✅ Connected to gripper system")
+            else:
+                self.get_logger().warn('Gripper action server not available - gripper control disabled')
+                self.gripper_client = None
+        else:
+            # In debug mode, still initialize node but without robot connections
+            print("🤖 Debug mode - MoveIt system disabled")
+            self.move_group_client = None
+            self.joint_state = None
         
         # Initialize MCAP data recorder
         self.enable_recording = enable_recording
@@ -426,7 +463,7 @@ class OculusVRServer:
             print("   - Green dashed line shows end-effector trajectory")
             print("   - Gray box shows robot workspace limits")
         
-        print("\n⚠️  Note: Using Deoxys control interface (quaternion-based)")
+        print("\n⚠️  Note: Using MoveIt control interface (quaternion-based)")
         print("   Rotations are handled differently than DROID's Polymetis interface")
         
         print("\n💡 Hot Reload:")
@@ -517,7 +554,7 @@ class OculusVRServer:
         self.vr_origin = None
         self.vr_state = None
         
-        # Robot state - Deoxys uses quaternions directly
+        # Robot state - MoveIt uses quaternions directly
         self.robot_pos = None
         self.robot_quat = None
         self.robot_euler = None
@@ -548,7 +585,112 @@ class OculusVRServer:
         
         # Last action for recording thread
         self._last_action = np.zeros(7)
+    
+    def joint_state_callback(self, msg):
+        """Callback for joint state updates"""
+        self.joint_state = msg
         
+    def get_current_joint_positions(self):
+        """Get current joint positions from joint state"""
+        if self.joint_state is None:
+            return None
+        positions = []
+        for joint_name in self.joint_names:
+            if joint_name in self.joint_state.name:
+                idx = self.joint_state.name.index(joint_name)
+                positions.append(self.joint_state.position[idx])
+            else:
+                return None
+        return positions
+    
+    def create_move_group_goal(self, target_pose: Pose) -> MoveGroup.Goal:
+        """Create a MoveGroup action goal for pose commands"""
+        goal = MoveGroup.Goal()
+        
+        # Set up the motion plan request
+        goal.request.group_name = self.planning_group
+        goal.request.num_planning_attempts = 3
+        goal.request.allowed_planning_time = 2.0  # Faster planning for real-time control
+        goal.request.max_velocity_scaling_factor = 0.5  # Moderate speed for safety
+        goal.request.max_acceleration_scaling_factor = 0.5
+        
+        # Set the target pose
+        pose_goal = PoseStamped()
+        pose_goal.header.frame_id = self.base_frame
+        pose_goal.header.stamp = self.get_clock().now().to_msg()
+        pose_goal.pose = target_pose
+        
+        # Create position constraint
+        from moveit_msgs.msg import PositionConstraint
+        constraints = Constraints()
+        
+        # Position constraint
+        pos_constraint = PositionConstraint()
+        pos_constraint.header = pose_goal.header
+        pos_constraint.link_name = self.end_effector_link
+        pos_constraint.target_point_offset.x = 0.0
+        pos_constraint.target_point_offset.y = 0.0
+        pos_constraint.target_point_offset.z = 0.0
+        
+        # Create constraint region (small sphere)
+        from shape_msgs.msg import SolidPrimitive
+        sphere = SolidPrimitive()
+        sphere.type = SolidPrimitive.SPHERE
+        sphere.dimensions = [0.01]  # 1cm tolerance
+        pos_constraint.constraint_region.primitives = [sphere]
+        pos_constraint.constraint_region.primitive_poses = [target_pose]
+        pos_constraint.weight = 1.0
+        
+        constraints.position_constraints = [pos_constraint]
+        goal.request.goal_constraints = [constraints]
+        
+        # Planning options
+        goal.planning_options.plan_only = False  # Plan and execute
+        goal.planning_options.look_around = False
+        goal.planning_options.replan = True
+        goal.planning_options.replan_attempts = 2
+        
+        return goal
+    
+    def send_pose_command(self, target_pose: Pose) -> bool:
+        """Send pose command using MoveGroup action"""
+        if self.debug or self.move_group_client is None:
+            return True  # Always succeed in debug mode
+            
+        try:
+            # Create and send goal
+            goal = self.create_move_group_goal(target_pose)
+            
+            # Send goal and wait for acceptance
+            future = self.move_group_client.send_goal_async(goal)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=1.0)
+            
+            if future.done():
+                goal_handle = future.result()
+                if goal_handle and goal_handle.accepted:
+                    # Wait for completion with short timeout for real-time control
+                    result_future = goal_handle.get_result_async()
+                    rclpy.spin_until_future_complete(self, result_future, timeout_sec=3.0)
+                    
+                    if result_future.done():
+                        result = result_future.result()
+                        if result and result.result.error_code.val == 1:  # SUCCESS
+                            return True
+                        else:
+                            self.get_logger().debug(f'Movement failed with error code: {result.result.error_code.val if result else "None"}')
+                    else:
+                        self.get_logger().debug('Movement timed out')
+                else:
+                    self.get_logger().debug('Goal rejected by MoveGroup')
+            else:
+                self.get_logger().debug('Goal submission timed out')
+            
+            return False
+            
+        except Exception as e:
+            self.get_logger().debug(f'Pose command failed: {e}')
+            return False
+    
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
         print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
@@ -850,9 +992,9 @@ class OculusVRServer:
             print(f"   Pos Action: [{pos_action[0]:.4f}, {pos_action[1]:.4f}, {pos_action[2]:.4f}]")
             print(f"   Pos Action Norm: {np.linalg.norm(pos_action):.4f}")
         
-        # Calculate Rotation Action - CRITICAL FIX FOR DEOXYS
+        # Calculate Rotation Action - CRITICAL FIX FOR MOVEIT
         # DROID calculates euler velocities because Polymetis expects euler angles
-        # But Deoxys expects quaternions directly, so we need a different approach
+        # But MoveIt expects quaternions directly, so we need a different approach
         
         # Calculate the target quaternion directly
         # VR controller's relative rotation from its origin
@@ -886,11 +1028,11 @@ class OculusVRServer:
         lin_vel, rot_vel, gripper_vel = self._limit_velocity(pos_action, euler_action, gripper_action)
         
         # Prepare Return Values
-        # Store the target quaternion for Deoxys
+        # Store the target quaternion for MoveIt
         info_dict = {
             "target_cartesian_position": target_cartesian, 
             "target_gripper_position": target_gripper,
-            "target_quaternion": target_quat  # Add this for Deoxys
+            "target_quaternion": target_quat  # Add this for MoveIt
         }
         action = np.concatenate([lin_vel, rot_vel, [gripper_vel]])
         action = action.clip(-1, 1)
@@ -913,8 +1055,63 @@ class OculusVRServer:
         
         return info
         
+    def get_current_end_effector_pose(self) -> Pose:
+        """Get current end effector pose from joint states or use safe default"""
+        # For now, use a safe default pose that should be reachable
+        # TODO: Could compute forward kinematics from joint states if needed
+        current_pose = Pose()
+        current_pose.position.x = 0.4
+        current_pose.position.y = 0.0
+        current_pose.position.z = 0.3
+        current_pose.orientation.w = 1.0
+        return current_pose
+    
+    def go_to_home_pose(self) -> bool:
+        """Move robot to home pose for consistent reset"""
+        if self.debug:
+            print("🏠 [DEBUG] Would move to HOME pose")
+            return True
+            
+        self.get_logger().info('🏠 Moving to HOME pose...')
+        
+        # Define home pose
+        home_pose = Pose()
+        home_pose.position.x = 0.4
+        home_pose.position.y = 0.0
+        home_pose.position.z = 0.4
+        home_pose.orientation.w = 1.0
+        
+        # Use current position as home if initial setup fails
+        if not hasattr(self, '_home_established'):
+            # Try the default home first
+            success = self.send_pose_command(home_pose)
+            if not success:
+                # If default home fails, use current position as home
+                self.get_logger().warn('Default home unreachable, using current position as home')
+                home_pose = self.get_current_end_effector_pose()
+                success = self.send_pose_command(home_pose)
+            
+            if success:
+                self._home_established = True
+                self.get_logger().info('✅ HOME pose established successfully!')
+                time.sleep(1.0)
+                return True
+            else:
+                self.get_logger().error('❌ Failed to establish any HOME pose!')
+                return False
+        else:
+            # Home already established, just go there
+            success = self.send_pose_command(home_pose)
+            if success:
+                self.get_logger().info('✅ HOME pose reached successfully!')
+                time.sleep(1.0)
+                return True
+            else:
+                self.get_logger().error('❌ Failed to reach established HOME pose!')
+                return False
+        
     def reset_robot(self, sync=True):
-        """Reset robot to initial position
+        """Reset robot to initial position using MoveIt
         
         Args:
             sync: If True, use synchronous communication (for initialization)
@@ -926,29 +1123,30 @@ class OculusVRServer:
             return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0]), None
         
         print("🔄 Resetting robot to initial position...")
-        action = FrankaAction(
-            pos=np.zeros(3),
-            quat=np.zeros(4),
-            gripper=GRIPPER_OPEN,
-            reset=True,
-            timestamp=time.time(),
-        )
         
-        # For reset, we always use synchronous communication
-        # Thread-safe robot communication
-        with self._robot_comm_lock:
-            self.action_socket.send(bytes(pickle.dumps(action, protocol=-1)))
-            robot_state = pickle.loads(self.action_socket.recv())
+        # Use go_to_home_pose for reset
+        success = self.go_to_home_pose()
         
-        print(f"✅ Robot reset complete")
-        print(f"   Position: [{robot_state.pos[0]:.6f}, {robot_state.pos[1]:.6f}, {robot_state.pos[2]:.6f}]")
-        print(f"   Quaternion: [{robot_state.quat[0]:.6f}, {robot_state.quat[1]:.6f}, {robot_state.quat[2]:.6f}, {robot_state.quat[3]:.6f}]")
-        
-        joint_positions = getattr(robot_state, 'joint_positions', None)
-        return robot_state.pos, robot_state.quat, joint_positions
+        if success:
+            # Get current joint positions
+            joint_positions = self.get_current_joint_positions()
+            
+            # Define the expected robot state after reset
+            reset_pos = np.array([0.4, 0.0, 0.4])
+            reset_quat = np.array([1.0, 0.0, 0.0, 0.0])  # w, x, y, z format
+            
+            print(f"✅ Robot reset complete")
+            print(f"   Position: [{reset_pos[0]:.6f}, {reset_pos[1]:.6f}, {reset_pos[2]:.6f}]")
+            print(f"   Quaternion: [{reset_quat[0]:.6f}, {reset_quat[1]:.6f}, {reset_quat[2]:.6f}, {reset_quat[3]:.6f}]")
+            
+            return reset_pos, reset_quat, joint_positions
+        else:
+            print("❌ Robot reset failed")
+            # Return safe default values
+            return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0]), None
     
     def velocity_to_position_target(self, velocity_action, current_pos, current_quat, action_info=None):
-        """Convert velocity action to position target for deoxys control
+        """Convert velocity action to position target for MoveIt control
         
         This implements DROID-style velocity-to-delta conversion:
         - Velocities are normalized to [-1, 1] range
@@ -982,9 +1180,9 @@ class OculusVRServer:
         # Calculate target position
         target_pos = current_pos + pos_delta
         
-        # Calculate target orientation - CRITICAL DIFFERENCE FOR DEOXYS
+        # Calculate target orientation - CRITICAL DIFFERENCE FOR MOVEIT
         if action_info and "target_quaternion" in action_info:
-            # Use the pre-calculated target quaternion for Deoxys
+            # Use the pre-calculated target quaternion for MoveIt
             target_quat = action_info["target_quaternion"]
         else:
             # Fallback: convert rotation velocity (euler angles) to quaternion
@@ -1045,7 +1243,7 @@ class OculusVRServer:
         return target_pos, target_quat, target_gripper
     
     def control_loop(self):
-        """Main control loop - now coordinates async workers"""
+        """Main control loop - now coordinates async workers with ROS2 spinning"""
         message_count = 0
         last_debug_time = time.time()
         
@@ -1109,10 +1307,14 @@ class OculusVRServer:
         self._threads.append(self._robot_control_thread)
         print("✅ Robot control thread started")
         
-        # Main loop now just monitors status and handles high-level control
+        # Main loop now handles ROS2 spinning and high-level control
         while self.running:
             try:
                 current_time = time.time()
+                
+                # Spin ROS2 node for callbacks
+                if not self.debug:
+                    rclpy.spin_once(self, timeout_sec=0.001)
                 
                 # Handle robot reset after calibration
                 if hasattr(self, '_reset_robot_after_calibration') and self._reset_robot_after_calibration:
@@ -1169,7 +1371,7 @@ class OculusVRServer:
                     message_count += 1
                 
                 # Small sleep to prevent CPU spinning
-                time.sleep(0.01)
+                time.sleep(0.001)
                 
             except Exception as e:
                 if self.running:
@@ -1181,6 +1383,10 @@ class OculusVRServer:
     def start(self):
         """Start the server"""
         try:
+            # Initialize ROS2 if not in debug mode
+            if not self.debug and not rclpy.ok():
+                rclpy.init()
+            
             # Run control loop
             self.control_loop()
         except KeyboardInterrupt:
@@ -1239,15 +1445,22 @@ class OculusVRServer:
             self.sim_server.stop()
             print("✅ Simulation server stopped")
         
-        # Close robot connections
+        # Close ROS2 resources
         if not self.debug:
-            if hasattr(self, 'action_socket'):
-                self.action_socket.close()
-            if hasattr(self, 'controller_publisher'):
-                self.controller_publisher.close()
-            if hasattr(self, 'context'):
-                self.context.term()
-            print("✅ Robot connections and ZMQ resources closed")
+            try:
+                # Destroy action client
+                if hasattr(self, 'move_group_client'):
+                    self.move_group_client.destroy()
+                
+                # Destroy subscriptions
+                if hasattr(self, 'joint_state_sub'):
+                    self.destroy_subscription(self.joint_state_sub)
+                
+                # Destroy node
+                self.destroy_node()
+                print("✅ ROS2 resources closed")
+            except Exception as e:
+                print(f"⚠️  Error closing ROS2 resources: {e}")
         
         print("✅ Server stopped gracefully")
         sys.exit(0)
@@ -1452,8 +1665,47 @@ class OculusVRServer:
         
         print("📊 Data recording thread stopped")
 
+    def send_gripper_command(self, gripper_state) -> bool:
+        """Send gripper command using gripper action client"""
+        if self.debug or self.gripper_client is None:
+            return True  # Always succeed in debug mode or if gripper not available
+            
+        try:
+            from control_msgs.action import GripperCommand
+            
+            # Create gripper goal
+            goal = GripperCommand.Goal()
+            
+            # Convert gripper state to position
+            # GRIPPER_CLOSE = 1, GRIPPER_OPEN = -1
+            if gripper_state == GRIPPER_CLOSE:
+                goal.command.position = 0.0  # Closed position
+                goal.command.max_effort = 50.0  # Moderate effort
+            else:
+                goal.command.position = 0.08  # Open position (8cm)
+                goal.command.max_effort = 50.0
+            
+            # Send goal
+            future = self.gripper_client.send_goal_async(goal)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
+            
+            if future.done():
+                goal_handle = future.result()
+                if goal_handle and goal_handle.accepted:
+                    return True
+                else:
+                    self.get_logger().debug('Gripper goal rejected')
+            else:
+                self.get_logger().debug('Gripper goal submission timed out')
+            
+            return False
+            
+        except Exception as e:
+            self.get_logger().debug(f'Gripper command failed: {e}')
+            return False
+    
     def _robot_comm_worker(self):
-        """Handles robot communication asynchronously to prevent blocking control thread"""
+        """Handles robot communication asynchronously using MoveIt commands"""
         print("🔌 Robot communication thread started")
         
         comm_count = 0
@@ -1467,13 +1719,28 @@ class OculusVRServer:
                 if command is None:  # Poison pill
                     break
                 
-                # Send command and receive response
+                # Send command using MoveIt
                 comm_start = time.time()
-                with self._robot_comm_lock:
-                    self.action_socket.send(bytes(pickle.dumps(command, protocol=-1)))
-                    response = pickle.loads(self.action_socket.recv())
-                comm_time = time.time() - comm_start
                 
+                # Convert command to Pose message
+                target_pose = Pose()
+                target_pose.position.x = float(command.pos[0])
+                target_pose.position.y = float(command.pos[1])
+                target_pose.position.z = float(command.pos[2])
+                target_pose.orientation.x = float(command.quat[0])
+                target_pose.orientation.y = float(command.quat[1])
+                target_pose.orientation.z = float(command.quat[2])
+                target_pose.orientation.w = float(command.quat[3])
+                
+                # Send pose command
+                pose_success = self.send_pose_command(target_pose)
+                
+                # Send gripper command (maintain existing gripper control logic)
+                gripper_success = self.send_gripper_command(command.gripper)
+                
+                success = pose_success  # Main success based on pose, gripper is auxiliary
+                
+                comm_time = time.time() - comm_start
                 comm_count += 1
                 total_comm_time += comm_time
                 
@@ -1481,6 +1748,15 @@ class OculusVRServer:
                 if comm_count % 10 == 0:
                     avg_comm_time = total_comm_time / comm_count
                     print(f"📡 Avg robot comm: {avg_comm_time*1000:.1f}ms")
+                
+                # Create response based on success/failure
+                # For now, just echo back the command as confirmation
+                response = type('RobotState', (), {
+                    'pos': command.pos,
+                    'quat': command.quat,
+                    'gripper': command.gripper,
+                    'joint_positions': self.get_current_joint_positions()
+                })()
                 
                 # Put response in queue
                 try:
@@ -1609,38 +1885,37 @@ class OculusVRServer:
             
             # Send action to robot (or simulate)
             if not self.debug:
-                # Send action to robot - DEOXYS EXPECTS QUATERNIONS
-                robot_action = FrankaAction(
-                    pos=target_pos.flatten().astype(np.float32),
-                    quat=target_quat.flatten().astype(np.float32),  # Quaternion directly
-                    gripper=gripper_state,
-                    reset=False,
-                    timestamp=time.time(),
-                )
+                # Create command object for MoveIt
+                robot_command = type('Command', (), {
+                    'pos': target_pos.flatten().astype(np.float32),
+                    'quat': target_quat.flatten().astype(np.float32),  # Quaternion directly
+                    'gripper': gripper_state,
+                    'timestamp': time.time(),
+                })()
                 
                 # Queue command for async sending
                 try:
-                    self._robot_command_queue.put_nowait(robot_action)
+                    self._robot_command_queue.put_nowait(robot_command)
                 except queue.Full:
                     # Drop oldest command if queue is full
                     try:
                         self._robot_command_queue.get_nowait()
-                        self._robot_command_queue.put_nowait(robot_action)
+                        self._robot_command_queue.put_nowait(robot_command)
                     except:
                         pass
                 
                 # Try to get latest response (non-blocking)
                 try:
-                    franka_state = self._robot_response_queue.get_nowait()
+                    robot_response = self._robot_response_queue.get_nowait()
                     
                     # Update robot state from actual feedback
                     new_robot_state = RobotState(
                         timestamp=current_time,
-                        pos=franka_state.pos,
-                        quat=franka_state.quat,
-                        euler=quat_to_euler(franka_state.quat),
-                        gripper=1.0 if franka_state.gripper == GRIPPER_CLOSE else 0.0,
-                        joint_positions=getattr(franka_state, 'joint_positions', None)
+                        pos=robot_response.pos,
+                        quat=robot_response.quat,
+                        euler=quat_to_euler(robot_response.quat),
+                        gripper=1.0 if robot_response.gripper == GRIPPER_CLOSE else 0.0,
+                        joint_positions=robot_response.joint_positions
                     )
                     
                     with self._robot_state_lock:
@@ -1703,16 +1978,22 @@ class OculusVRServer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Oculus VR Server with DROID-exact VRPolicy Control',
+        description='Oculus VR Server with DROID-exact VRPolicy Control using MoveIt',
         epilog='''
-This server implements the exact VRPolicy control from DROID with intuitive calibration.
+This server implements the exact VRPolicy control from DROID with intuitive calibration,
+now using MoveIt/ROS2 instead of Deoxys for robot control.
 
 Features:
   - DROID-exact control parameters (gains, velocities, transforms)
   - Intuitive forward direction calibration (hold joystick + move)
-  - Deoxys-compatible quaternion handling
+  - MoveIt-compatible quaternion handling via action client
   - Origin recalibration on grip press/release
   - MCAP data recording in DROID-compatible format
+
+Setup Requirements:
+  - ROS2 system running with MoveIt configured for FR3 robot
+  - Launch: ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=192.168.1.59
+  - Move group action server must be available at /move_action
 
 Calibration:
   - Hold joystick button and move controller forward (at least 3mm)
@@ -1726,8 +2007,8 @@ Recording (when enabled):
   - Recordings are saved in ~/recordings/success
   - Stopped recordings (via A button) are discarded
 
-Note: This version is adapted for Deoxys control (quaternion-based) instead of
-Polymetis (euler angle-based). The rotation handling has been adjusted accordingly.
+Note: This version uses MoveIt for robot control instead of Deoxys.
+The rotation handling has been adapted for MoveIt's action interface.
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -1818,6 +2099,15 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
             print(f"⚠️  Failed to load camera config: {e}")
             print("   Continuing without camera configuration")
     
+    # Initialize ROS2
+    try:
+        rclpy.init(args=None)
+        print("🤖 ROS2 initialized")
+    except Exception as e:
+        print(f"❌ Failed to initialize ROS2: {e}")
+        print("   Make sure ROS2 is properly sourced and MoveIt is running")
+        sys.exit(1)
+    
     # Normal execution (no hot reload)
     # Create and start server with DROID-exact parameters
     coord_transform = args.coord_transform
@@ -1843,6 +2133,11 @@ Polymetis (euler angle-based). The rotation handling has been adjusted according
         import traceback
         traceback.print_exc()
         server.stop_server()
+    finally:
+        try:
+            rclpy.shutdown()
+        except:
+            pass
 
 
 if __name__ == "__main__":

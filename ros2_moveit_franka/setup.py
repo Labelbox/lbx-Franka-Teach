@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'franka_moveit_control = ros2_moveit_franka.franka_moveit_control:main',
             'simple_arm_control = ros2_moveit_franka.simple_arm_control:main',
+            'vr_benchmark_simple = ros2_moveit_franka.vr_benchmark_simple:main',
         ],
     },
 ) 

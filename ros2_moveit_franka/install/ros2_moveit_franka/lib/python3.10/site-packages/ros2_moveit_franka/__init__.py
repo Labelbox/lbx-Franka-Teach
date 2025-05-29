@@ -1,1 +1,0 @@
-# ROS 2 MoveIt Franka Package 

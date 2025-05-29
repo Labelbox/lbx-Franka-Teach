@@ -1,79 +1,94 @@
-version: "3.8"
+version: '3.8'
 
 services:
-  ros2_moveit_franka:
+  # Base service for common configuration
+  ros2_moveit_franka_base: &base
     build:
       context: .
       dockerfile: Dockerfile
       args:
         ROS_DISTRO: humble
     image: ros2_moveit_franka:latest
-    container_name: ros2_moveit_franka_dev
-
-    # Environment variables
-    environment:
-      - ROS_DOMAIN_ID=42
-      - ROBOT_IP=192.168.1.59
-      - DISPLAY=${DISPLAY:-:0}
-      - QT_X11_NO_MITSHM=1
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-
-    # Network configuration
+    container_name: ros2_moveit_franka
     network_mode: host
-
-    # Volume mounts for development
+    privileged: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+      - ROBOT_IP=192.168.1.59
     volumes:
-      # Mount the package source for development
-      - .:/workspace/ros2_ws/src/ros2_moveit_franka:rw
-      # X11 forwarding for GUI applications (RViz)
+      # X11 forwarding for GUI applications
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # Share host's .bashrc_additions if it exists
-      - ${HOME}/.bashrc_additions:/root/.bashrc_additions:ro
-      # Persistent bash history
-      - ros2_moveit_franka_bash_history:/root/.bash_history
-
-    # Device access for real robot communication
-    devices:
-      - /dev/dri:/dev/dri # GPU access for visualization
-
-    # Capabilities for real-time communication
-    cap_add:
-      - SYS_NICE # For real-time scheduling
-      - NET_ADMIN # For network configuration
-
-    # Interactive terminal
+      # Mount the current directory for development
+      - .:/home/ros/ros2_moveit_franka_dev:rw
     stdin_open: true
     tty: true
+    working_dir: /home/ros
+    user: ros
 
-    # Working directory
-    working_dir: /workspace/ros2_ws
-
-    # Health check
-    healthcheck:
-      test: ["CMD", "ros2", "node", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # Simulation service (for testing without real robot)
-  ros2_moveit_franka_sim:
-    extends: ros2_moveit_franka
-    container_name: ros2_moveit_franka_sim
+  # Service for running with real robot
+  real_robot:
+    <<: *base
+    container_name: ros2_moveit_franka_real
     environment:
-      - ROS_DOMAIN_ID=43
-      - USE_FAKE_HARDWARE=true
-      - DISPLAY=${DISPLAY:-:0}
-      - QT_X11_NO_MITSHM=1
-
-    # Override command to start in simulation mode
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+      - ROBOT_IP=192.168.1.59
+      - USE_FAKE_HARDWARE=false
     command: >
       bash -c "
-        echo 'Starting ROS 2 MoveIt Franka in simulation mode...' &&
-        ros2 launch ros2_moveit_franka franka_demo.launch.py use_fake_hardware:=true
+        echo '🤖 Starting MoveIt with REAL robot at ${ROBOT_IP:-192.168.1.59}' &&
+        echo '⚠️  Make sure robot is connected and in programming mode!' &&
+        echo 'Press Ctrl+C to stop' &&
+        echo '' &&
+        ./launch_moveit.sh
       "
 
-volumes:
-  ros2_moveit_franka_bash_history:
-    driver: local
+  # Service for simulation (fake hardware)
+  simulation:
+    <<: *base
+    container_name: ros2_moveit_franka_sim
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+      - ROBOT_IP=192.168.1.59
+      - USE_FAKE_HARDWARE=true
+    command: >
+      bash -c "
+        echo '🔧 Starting MoveIt with SIMULATION (fake hardware)' &&
+        echo '✅ Safe for testing without real robot' &&
+        echo 'Press Ctrl+C to stop' &&
+        echo '' &&
+        ./launch_moveit.sh
+      "
+
+  # Service for running the demo
+  demo:
+    <<: *base
+    container_name: ros2_moveit_franka_demo
+    depends_on:
+      - real_robot
+    command: >
+      bash -c "
+        echo '🎯 Starting Franka FR3 Demo...' &&
+        echo 'Waiting for MoveIt to be ready...' &&
+        sleep 10 &&
+        ./run_demo.sh
+      "
+
+  # Interactive development container
+  dev:
+    <<: *base
+    container_name: ros2_moveit_franka_dev
+    volumes:
+      # Additional development volumes
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - .:/home/ros/ros2_moveit_franka_dev:rw
+      - ~/.gitconfig:/home/ros/.gitconfig:ro
+      - ~/.ssh:/home/ros/.ssh:ro
+    command: bash
+
+# Networks
+networks:
+  default:
+    driver: bridge

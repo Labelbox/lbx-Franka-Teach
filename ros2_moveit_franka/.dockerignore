@@ -1,13 +1,13 @@
-# Git files
-.git/
-.gitignore
-
 # Build artifacts
 build/
 install/
 log/
 *.pyc
 __pycache__/
+
+# Git
+.git/
+.gitignore
 
 # IDE files
 .vscode/
@@ -16,27 +16,32 @@ __pycache__/
 *.swo
 *~
 
-# OS generated files
+# OS files
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Documentation build
-docs/_build/
+# Documentation (keep only README.md)
+DOCKER_INTEGRATION.md
+GETTING_STARTED.md
 
-# Python
-*.egg-info/
-dist/
-.pytest_cache/
-
-# ROS
-*.bag
-*.mcap
+# Backup files
+*.backup
+*.bak
+*.orig
 
 # Temporary files
 *.tmp
-*.temp 
+*.temp
+
+# Archive files
+*.tar
+*.tar.gz
+*.zip
+
+# Node modules (if any)
+node_modules/
+
+# Python virtual environments
+venv/
+env/
+.env 

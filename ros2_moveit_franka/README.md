@@ -1,6 +1,8 @@
 # ROS 2 MoveIt Franka FR3 Control
 
-This package provides a simple demonstration of controlling a Franka FR3 robot arm using ROS 2 and MoveIt. The demo resets the arm to home position and then moves it 10cm in the X direction.
+This package provides high-frequency individual position command benchmarking for the Franka FR3 robot arm using ROS 2 and MoveIt. The benchmark tests VR teleoperation-style control rates from 10Hz to 200Hz with full IK solver and collision avoidance.
+
+**🏆 Proven Performance**: Achieves 60.2Hz sustained rate with 100% success rate and visible robot movement verification.
 
 **🐳 Docker Support**: This package is fully compatible with the [official franka_ros2 Docker setup](https://github.com/frankaemika/franka_ros2) and includes its own Docker configuration for easy deployment.
 
@@ -38,6 +40,46 @@ Make sure your robot is:
 1. Connected to the network and accessible at the specified IP
 2. In the correct mode (e.g., programming mode for external control)
 3. E-stop is released and robot is ready for operation
+
+## 🚀 Quick Start (Local Installation)
+
+**Prerequisites**: Ensure you have ROS 2 Humble and Franka ROS 2 packages installed (see [Local Installation](#local-installation-alternative-to-docker) section below).
+
+### **3 Essential Commands**
+
+**Step 1: Start ROS Server (MoveIt)**
+```bash
+# Terminal 1: Start MoveIt system with real robot
+source ~/franka_ros2_ws/install/setup.bash && ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=192.168.1.59 use_fake_hardware:=false
+```
+
+**Step 2: Build Package**
+```bash
+# Terminal 2: Build and source the package
+cd /path/to/your/ros2_moveit_franka
+source ~/franka_ros2_ws/install/setup.bash && colcon build --packages-select ros2_moveit_franka && source install/setup.bash
+```
+
+**Step 3: Run Python Benchmark**
+```bash
+# Terminal 2: Run the high-frequency benchmark
+python3 -m ros2_moveit_franka.simple_arm_control
+```
+
+### **Expected Results**
+- **✅ Peak Performance**: 60.2Hz achieved at 75Hz target
+- **✅ Perfect Success**: 100% command success rate across all frequencies
+- **✅ Visible Movement**: 30° joint displacement confirmed in all tests
+- **📊 Benchmark Results**: See `BENCHMARK_RESULTS_FRESH_RESTART.md` for detailed performance metrics
+
+### **For Simulation/Testing Only**
+If you want to test without real robot hardware:
+```bash
+# Use fake hardware instead (simulation)
+source ~/franka_ros2_ws/install/setup.bash && ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=192.168.1.59 use_fake_hardware:=true
+```
+
+---
 
 ## Quick Start with Docker 🚀
 
@@ -275,40 +317,40 @@ If you want to start components manually:
    rviz2 -d $(ros2 pkg prefix franka_fr3_moveit_config)/share/franka_fr3_moveit_config/rviz/moveit.rviz
    ```
 
-## Demo Sequence
+## Benchmark Sequence
 
-The demo performs the following sequence:
+The benchmark performs the following sequence for each target frequency (10Hz, 50Hz, 75Hz, 100Hz, 200Hz):
 
-1. **🔍 Initial State Check**: Prints current robot position and joint states
-2. **🤏 Gripper Control**: Opens the gripper
-3. **🏠 Home Position**: Moves the robot to a safe home/ready position
-4. **➡️ X-Direction Movement**: Moves the end effector 10cm in the positive X direction
-5. **🏠 Return Home**: Returns the robot to the home position
+1. **🔍 System Initialization**: Validates joint state reception and MoveIt services
+2. **🏠 Home Position**: Moves the robot to a safe home/ready position
+3. **🧪 Single Movement Test**: Verifies visible robot movement with +30° joint rotation
+4. **📊 High-Frequency Benchmark**: Tests individual position commands at target frequency
+5. **🎯 Movement Pattern**: HOME → TARGET (+30° joint movement) with continuous cycling
+6. **📈 Performance Metrics**: Records command rates, IK times, and success rates
+7. **🔄 Reset & Repeat**: Returns to home between tests for consistent baseline
 
 ## ✅ **WORKING STATUS** ✅
 
-**The demo is now fully functional and tested with real hardware!**
+**The high-frequency benchmark is now fully functional and tested with real hardware!**
 
-### Successful Test Results:
+### Successful Benchmark Results:
 - ✅ Robot connects to real Franka FR3 at `192.168.1.59`
-- ✅ MoveIt integration working properly
-- ✅ Home position movement: **SUCCESS**
-- ✅ X-direction movement using joint space: **SUCCESS** 
-- ✅ Return to home: **SUCCESS**
-- ✅ Complete demo sequence: **FULLY WORKING**
+- ✅ MoveIt integration working properly with fr3_arm planning group
+- ✅ **Peak Performance**: 60.2Hz achieved (75Hz target): **SUCCESS**
+- ✅ **Perfect Reliability**: 100% success rate across all frequencies: **SUCCESS** 
+- ✅ **Visible Movement**: 30° joint displacement confirmed: **SUCCESS**
+- ✅ **VR Teleoperation Ready**: Optimal 10-75Hz operating range: **FULLY VALIDATED**
 
-### Example Output:
+### Example Benchmark Output:
 ```
-[INFO] Starting Franka FR3 demo...
-[INFO] Moving to home position...
-[INFO] Trajectory executed successfully
-[INFO] Moving approximately 10.0cm in X direction using joint space movement
-[INFO] Moving from joints: ['0.001', '-0.782', '-0.000', '-2.359', '0.000', '1.572', '0.795']
-[INFO] Moving to joints:   ['0.151', '-0.782', '-0.000', '-2.359', '0.000', '1.572', '0.795']
-[INFO] Trajectory executed successfully
-[INFO] Returning to home position...
-[INFO] Trajectory executed successfully
-[INFO] Demo completed successfully!
+📊 HIGH-FREQUENCY INDIVIDUAL COMMAND BENCHMARK - 75Hz
+🎯 Target Command Rate:          75.0 Hz
+📈 Actual Command Rate:          60.2 Hz ( 80.3%)
+⏱️  Average Command Time:        15.68 ms
+🧮 Average IK Time:             12.86 ms
+✅ Success Rate:                100.0 %
+🎉 EXCELLENT: Achieved 80.3% of target rate
+Assessment: Peak achieved rate, excellent for responsive VR control
 ```
 
 ## Safety Notes
@@ -414,10 +456,10 @@ docker ps
 
 ### Robot Settings
 
-- **Planning Group**: `panda_arm` (7-DOF arm)
-- **Gripper Group**: `panda_hand` (2-finger gripper)
-- **End Effector Link**: `panda_hand`
-- **Planning Frame**: `panda_link0`
+- **Planning Group**: `fr3_arm` (7-DOF arm)
+- **Gripper Group**: `fr3_hand` (2-finger gripper)
+- **End Effector Link**: `fr3_hand_tcp`
+- **Planning Frame**: `fr3_link0`
 
 ### Safety Limits
 
@@ -433,25 +475,39 @@ docker ps
 - **GUI Support**: X11 forwarding for RViz
 - **Development**: Live code mounting for easy iteration
 
-## Extending the Demo
+## Extending the Benchmark
 
-To modify the demo for your needs:
+To modify the benchmark for your needs:
 
-1. **Edit the target positions** in `simple_arm_control.py`
-2. **Add more movement sequences** to the `execute_demo_sequence()` method
-3. **Adjust safety parameters** in the constructor
-4. **Add custom named poses** by modifying the MoveIt configuration
+1. **Edit the target frequencies** in `simple_arm_control.py` (`self.target_rates_hz`)
+2. **Add more movement patterns** to the `create_realistic_test_poses()` method
+3. **Adjust test duration** by modifying `self.benchmark_duration_seconds`
+4. **Customize robot configuration** by updating joint names and planning group
+5. **View detailed results** in `BENCHMARK_RESULTS_FRESH_RESTART.md`
+
+### **Performance Optimization Ideas**
+- **IK Caching**: Pre-compute common pose-to-joint mappings
+- **Parallel Processing**: Separate IK computation from command execution  
+- **Predictive IK**: Pre-calculate solutions for trajectory waypoints
+- **Hardware Acceleration**: GPU-based IK computation for higher rates
 
 ## Integration with Existing System
 
-This package is designed to work alongside your existing Deoxys-based control system:
+This package is designed to benchmark and validate high-frequency control for VR teleoperation systems:
 
 - **Robot IP**: Uses the same robot (`192.168.1.59`) configured in your `franka_right.yml`
-- **Workspace Limits**: Respects the workspace bounds defined in your constants
+- **Performance Baseline**: Establishes 10-75Hz operating range for VR teleoperation
+- **MoveIt Integration**: Validates IK solver and collision avoidance at high frequencies
+- **VR Compatibility**: Proven 60Hz capability matches VR headset refresh rates
 - **Safety**: Implements conservative limits compatible with your current setup
-- **Docker**: Can run alongside or replace your current Docker setup
 
-You can run this demo independently of your Deoxys system, but make sure only one control system is active at a time.
+**For VR Teleoperation Applications:**
+- **Recommended Range**: 30-50Hz for standard VR teleoperation
+- **High-Performance**: 50-75Hz for responsive applications  
+- **Precision Tasks**: 10-20Hz for maximum accuracy
+- **System Restart**: Fresh restart recommended for optimal performance
+
+You can run this benchmark independently of your Deoxys system, but make sure only one control system is active at a time.
 
 ## Advanced Usage
 

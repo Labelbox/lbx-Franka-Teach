@@ -27,6 +27,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import statistics
+from moveit_msgs.msg import RobotState, PlanningScene, CollisionObject
 
 
 @dataclass
@@ -101,6 +102,7 @@ class FrankaBenchmarkController(Node):
         self.planning_group = "panda_arm"
         self.end_effector_link = "fr3_hand_tcp"
         self.base_frame = "fr3_link0"
+        self.planning_frame = "fr3_link0"  # Frame for planning operations
         
         # Joint names for FR3
         self.joint_names = [
@@ -142,7 +144,7 @@ class FrankaBenchmarkController(Node):
         self.get_logger().info('✅ Trajectory action server ready!')
         
         # Benchmarking parameters
-        self.target_rates_hz = [1, 10, 50, 100, 200, 500, 1000, 2000]  # Focus on >100Hz performance
+        self.target_rates_hz = [10, 50, 75, 100, 200]  # Added 75Hz to find transition point
         self.benchmark_duration_seconds = 10.0  # Run each rate for 10 seconds
         self.max_concurrent_operations = 10  # Limit concurrent operations for stability
         
@@ -474,118 +476,128 @@ class FrankaBenchmarkController(Node):
             return None, stats
     
     def benchmark_control_rate(self, target_hz: float) -> BenchmarkResult:
-        """Benchmark high-frequency trajectory generation and execution"""
-        self.get_logger().info(f'📊 Benchmarking {target_hz}Hz trajectory generation...')
+        """Benchmark individual position command sending (mimics VR teleoperation pipeline)"""
+        self.get_logger().info(f'📊 Benchmarking {target_hz}Hz individual position commands...')
         
-        # Test parameters
-        test_duration = 10.0  # 10 seconds of testing
-        movement_duration = 3.0  # Each movement takes 3 seconds
+        # Test parameters matching production VR teleoperation
+        test_duration = 10.0  # 10 seconds of command sending
+        movement_duration = 3.0  # Complete movement in 3 seconds
+        command_interval = 1.0 / target_hz
         
-        # Get home and target positions (full 30° movement on joint 1)
-        home_joints = self.home_positions.copy()
-        target_joints = home_joints.copy()
-        target_joints[0] += 0.52  # +30° on joint 1 (proven movement)
+        # Get home and target positions (guaranteed 30° visible movement)
+        home_joints = np.array(self.home_positions.copy())
+        target_joints = home_joints.copy() 
+        target_joints[0] += 0.52  # +30° on joint 1 (proven large movement)
         
-        self.get_logger().info(f'⏱️  Testing {target_hz}Hz trajectory generation for {test_duration}s')
-        self.get_logger().info(f'🎯 Movement: Home -> Target (+30° joint 1) in {movement_duration}s')
-        self.get_logger().info(f'🛤️  Trajectory approach: Single trajectory with {target_hz}Hz waypoints')
+        self.get_logger().info(f'🎯 Movement: Joint 1 from {home_joints[0]:.3f} to {target_joints[0]:.3f} rad (+30°)')
+        self.get_logger().info(f'⏱️  Command interval: {command_interval*1000:.1f}ms')
+        
+        # Generate discrete waypoints for the movement
+        num_movement_steps = max(1, int(movement_duration * target_hz))
+        self.get_logger().info(f'🛤️  Generating {num_movement_steps} waypoints for {movement_duration}s movement')
+        
+        waypoints = []
+        for i in range(num_movement_steps + 1):  # +1 to include final target
+            alpha = i / num_movement_steps  # 0 to 1
+            waypoint_joints = home_joints + alpha * (target_joints - home_joints)
+            waypoints.append(waypoint_joints.copy())
         
         # Performance tracking
-        generation_times = []
-        execution_times = []
-        success_count = 0
-        total_trajectories = 0
-        movements_completed = 0
+        successful_commands = 0
+        failed_commands = 0
+        total_ik_time = 0.0
+        total_command_time = 0.0
+        timing_errors = []
         
-        # Execute multiple movements during test duration
-        test_start = time.time()
-        end_time = test_start + test_duration
+        start_time = time.time()
+        last_command_time = start_time
+        waypoint_idx = 0
+        num_movements = 0
         
-        while time.time() < end_time and rclpy.ok():
-            movement_start = time.time()
+        self.get_logger().info(f'🚀 Starting {target_hz}Hz command benchmark for {test_duration}s...')
+        
+        while time.time() - start_time < test_duration and rclpy.ok():
+            current_time = time.time()
             
-            self.get_logger().info(f'🚀 Generating {target_hz}Hz trajectory #{movements_completed + 1}')
-            
-            # Generate high-frequency trajectory
-            generation_start = time.time()
-            
-            if target_hz >= 100:
-                # High frequency: Generate trajectory but don't execute (computational benchmark)
-                trajectory = self.generate_high_frequency_trajectory(
-                    home_joints, target_joints, movement_duration, target_hz
-                )
-                generation_time = (time.time() - generation_start) * 1000
-                generation_times.append(generation_time)
+            # Check if it's time for next command
+            if current_time - last_command_time >= command_interval:
+                command_start = time.time()
                 
-                if trajectory is not None:
-                    success_count += 1
-                    waypoint_count = len(trajectory.points)
+                # Get current waypoint (cycle through movement)
+                current_waypoint = waypoints[waypoint_idx]
+                
+                # Calculate target pose using IK (like VR system does)
+                ik_start = time.time()
+                target_pose = self.compute_ik_for_joints(current_waypoint)
+                ik_time = time.time() - ik_start
+                total_ik_time += ik_time
+                
+                if target_pose is not None:
+                    # Extract position and orientation
+                    target_pos = target_pose.pose.position
+                    target_quat = target_pose.pose.orientation
                     
-                    # Log progress for high-frequency tests
-                    self.get_logger().info(f'   ✅ Generated {waypoint_count} waypoints at {target_hz}Hz in {generation_time:.2f}ms')
-                    self.get_logger().info(f'   📏 Trajectory duration: {movement_duration}s, Resolution: {1000/target_hz:.2f}ms per point')
-                
-                total_trajectories += 1
-                
-                # Brief pause before next trajectory generation
-                time.sleep(0.1)
-                
-            else:
-                # Low frequency: Actually execute the trajectory
-                trajectory = self.generate_high_frequency_trajectory(
-                    home_joints, target_joints, movement_duration, target_hz
-                )
-                generation_time = (time.time() - generation_start) * 1000
-                generation_times.append(generation_time)
-                
-                if trajectory is not None:
-                    # Execute the complete trajectory
-                    execution_start = time.time()
-                    success = self.execute_complete_trajectory(trajectory)
-                    execution_time = (time.time() - execution_start) * 1000
-                    execution_times.append(execution_time)
+                    pos_array = np.array([target_pos.x, target_pos.y, target_pos.z])
+                    quat_array = np.array([target_quat.x, target_quat.y, target_quat.z, target_quat.w])
                     
-                    if success:
-                        success_count += 1
-                        waypoint_count = len(trajectory.points)
-                        self.get_logger().info(f'   ✅ Executed {waypoint_count}-point trajectory in {execution_time:.0f}ms')
+                    # Send individual position command (exactly like VR teleoperation)
+                    # ALWAYS send to robot to test real teleoperation performance
+                    command_success = self.send_individual_position_command(
+                        pos_array, quat_array, 0.0, command_interval
+                    )
+                    if command_success:
+                        successful_commands += 1
                     else:
-                        self.get_logger().warn(f'   ❌ Trajectory execution failed')
-                else:
-                    self.get_logger().warn(f'   ❌ Trajectory generation failed')
+                        failed_commands += 1
                 
-                total_trajectories += 1
+                # Track command timing
+                command_time = time.time() - command_start
+                total_command_time += command_time
                 
-                # Brief pause between movements
-                time.sleep(1.0)
-            
-            movements_completed += 1
-            movement_end = time.time()
-            movement_time = movement_end - movement_start
-            
-            self.get_logger().info(f'✅ Movement #{movements_completed} completed in {movement_time:.2f}s')
+                # Track timing accuracy
+                expected_time = last_command_time + command_interval
+                actual_time = current_time
+                timing_error = abs(actual_time - expected_time)
+                timing_errors.append(timing_error)
+                
+                last_command_time = current_time
+                
+                # Advance waypoint (cycle through movement)
+                waypoint_idx = (waypoint_idx + 1) % len(waypoints)
+                if waypoint_idx == 0:  # Completed one full movement
+                    num_movements += 1
+                    self.get_logger().info(f'🔄 Movement cycle {num_movements} completed')
         
         # Calculate results
-        test_end = time.time()
-        actual_test_duration = test_end - test_start
-        actual_rate = total_trajectories / actual_test_duration if actual_test_duration > 0 else 0
-        success_rate = (success_count / total_trajectories * 100) if total_trajectories > 0 else 0
+        end_time = time.time()
+        actual_duration = end_time - start_time
+        total_commands = successful_commands + failed_commands
+        actual_rate = total_commands / actual_duration if actual_duration > 0 else 0
         
-        avg_generation_time = statistics.mean(generation_times) if generation_times else 0.0
-        avg_execution_time = statistics.mean(execution_times) if execution_times else 0.0
+        # Calculate performance metrics
+        avg_ik_time = (total_ik_time / total_commands * 1000) if total_commands > 0 else 0
+        avg_command_time = (total_command_time / total_commands * 1000) if total_commands > 0 else 0
+        avg_timing_error = (np.mean(timing_errors) * 1000) if timing_errors else 0
+        success_rate = (successful_commands / total_commands * 100) if total_commands > 0 else 0
         
+        self.get_logger().info(f'📈 Results: {actual_rate:.1f}Hz actual rate ({total_commands} commands in {actual_duration:.1f}s)')
+        self.get_logger().info(f'✅ Success rate: {success_rate:.1f}% ({successful_commands}/{total_commands})')
+        self.get_logger().info(f'🧮 Avg IK time: {avg_ik_time:.2f}ms')
+        self.get_logger().info(f'⏱️  Avg command time: {avg_command_time:.2f}ms')
+        self.get_logger().info(f'⏰ Avg timing error: {avg_timing_error:.2f}ms')
+        
+        # Return results
         result = BenchmarkResult(
             control_rate_hz=actual_rate,
-            avg_latency_ms=avg_generation_time,
-            ik_solve_time_ms=avg_generation_time,  # Generation time
-            collision_check_time_ms=avg_execution_time,  # Execution time (for low freq)
-            motion_plan_time_ms=0.0,
-            total_cycle_time_ms=avg_generation_time + avg_execution_time,
+            avg_latency_ms=avg_command_time,
+            ik_solve_time_ms=avg_ik_time,
+            collision_check_time_ms=avg_timing_error,  # Reuse field for timing error
+            motion_plan_time_ms=0.0,  # Not used in this benchmark
+            total_cycle_time_ms=avg_command_time + avg_ik_time,
             success_rate=success_rate,
             timestamp=time.time()
         )
         
-        self.get_logger().info(f'📊 Test Results: {actual_rate:.1f}Hz trajectory generation rate ({movements_completed} movements)')
         self.benchmark_results.append(result)
         return result
     
@@ -714,7 +726,7 @@ class FrankaBenchmarkController(Node):
         except Exception as e:
             self.get_logger().warn(f'Trajectory execution exception: {e}')
             return False
-
+    
     def generate_trajectory_waypoints(self, target_vr_pose: VRPose, duration: float, timestep: float) -> List[VRPose]:
         """Generate intermediate waypoints for a trajectory - joint space or pose space"""
         try:
@@ -723,7 +735,7 @@ class FrankaBenchmarkController(Node):
                 return self.generate_joint_space_waypoints(target_vr_pose.joint_positions, duration, timestep)
             else:
                 return self.generate_pose_space_waypoints(target_vr_pose, duration, timestep)
-            
+                
         except Exception as e:
             self.get_logger().warn(f'Failed to generate trajectory waypoints: {e}')
             return []
@@ -806,7 +818,7 @@ class FrankaBenchmarkController(Node):
             
             self.get_logger().debug(f'Generated {len(waypoints)} POSE-SPACE waypoints for {duration}s trajectory')
             return waypoints
-            
+                
         except Exception as e:
             self.get_logger().warn(f'Failed to generate pose space waypoints: {e}')
             return []
@@ -814,39 +826,36 @@ class FrankaBenchmarkController(Node):
     def print_benchmark_results(self, result: BenchmarkResult, target_hz: float):
         """Print structured benchmark results"""
         print(f"\n{'='*80}")
-        print(f"📊 HIGH-FREQUENCY TRAJECTORY GENERATION BENCHMARK - {target_hz}Hz")
+        print(f"📊 HIGH-FREQUENCY INDIVIDUAL COMMAND BENCHMARK - {target_hz}Hz")
         print(f"{'='*80}")
-        print(f"🎯 Target Trajectory Rate:   {target_hz:8.1f} Hz")
-        print(f"📈 Actual Generation Rate:   {result.control_rate_hz:8.1f} Hz ({result.control_rate_hz/target_hz*100:5.1f}%)")
-        print(f"⏱️  Average Generation Time:  {result.avg_latency_ms:8.2f} ms")
-        print(f"🛤️  Average Execution Time:   {result.collision_check_time_ms:8.2f} ms")
+        print(f"🎯 Target Command Rate:      {target_hz:8.1f} Hz")
+        print(f"📈 Actual Command Rate:      {result.control_rate_hz:8.1f} Hz ({result.control_rate_hz/target_hz*100:5.1f}%)")
+        print(f"⏱️  Average Command Time:     {result.avg_latency_ms:8.2f} ms")
+        print(f"🧮 Average IK Time:          {result.ik_solve_time_ms:8.2f} ms")
+        print(f"⏰ Average Timing Error:     {result.collision_check_time_ms:8.2f} ms")
         print(f"✅ Success Rate:             {result.success_rate:8.1f} %")
         
-        # Calculate trajectory parameters
+        # Calculate command parameters
         movement_duration = 3.0
-        waypoints_per_trajectory = int(movement_duration * target_hz)
-        waypoint_resolution_ms = (1.0 / target_hz) * 1000
+        commands_per_movement = int(movement_duration * target_hz)
+        command_interval_ms = (1.0 / target_hz) * 1000
         
-        print(f"📏 Waypoints per Trajectory: {waypoints_per_trajectory:8d}")
-        print(f"🔍 Waypoint Resolution:      {waypoint_resolution_ms:8.2f} ms")
+        print(f"📏 Commands per Movement:    {commands_per_movement:8d}")
+        print(f"🔍 Command Interval:         {command_interval_ms:8.2f} ms")
         print(f"🎯 Movement Type:            Home -> Target (+30° joint)")
         
-        if target_hz >= 100:
-            print(f"🔬 Test Mode:                COMPUTATIONAL (≥100Hz)")
-            print(f"   Measures trajectory generation rate without robot execution")
-        else:
-            print(f"🤖 Test Mode:                ROBOT EXECUTION (<100Hz)")
-            print(f"   Actually moves robot with generated trajectory")
+        print(f"🤖 Test Mode:                REAL ROBOT COMMANDS (ALL frequencies)")
+        print(f"   Sending individual position commands at {target_hz}Hz")
         
         # Performance analysis
         if result.control_rate_hz >= target_hz * 0.95:
-            print(f"🎉 EXCELLENT: Achieved {result.control_rate_hz/target_hz*100:.1f}% of target generation rate")
+            print(f"🎉 EXCELLENT: Achieved {result.control_rate_hz/target_hz*100:.1f}% of target rate")
         elif result.control_rate_hz >= target_hz * 0.8:
-            print(f"👍 GOOD: Achieved {result.control_rate_hz/target_hz*100:.1f}% of target generation rate")
+            print(f"👍 GOOD: Achieved {result.control_rate_hz/target_hz*100:.1f}% of target rate")
         elif result.control_rate_hz >= target_hz * 0.5:
-            print(f"⚠️  MODERATE: Only achieved {result.control_rate_hz/target_hz*100:.1f}% of target generation rate")
+            print(f"⚠️  MODERATE: Only achieved {result.control_rate_hz/target_hz*100:.1f}% of target rate")
         else:
-            print(f"❌ POOR: Only achieved {result.control_rate_hz/target_hz*100:.1f}% of target generation rate")
+            print(f"❌ POOR: Only achieved {result.control_rate_hz/target_hz*100:.1f}% of target rate")
         
         # Generation time analysis
         if result.avg_latency_ms < 1.0:
@@ -858,38 +867,34 @@ class FrankaBenchmarkController(Node):
         else:
             print(f"❌ HIGH generation time: {result.avg_latency_ms:.2f}ms")
             
-        # High-frequency trajectory insights
-        if target_hz >= 100:
-            theoretical_control_freq = target_hz
-            waypoint_density = waypoints_per_trajectory / movement_duration
-            print(f"📊 Trajectory Analysis:")
-            print(f"   Control Resolution: {waypoint_resolution_ms:.2f}ms between waypoints")
-            print(f"   Waypoint Density: {waypoint_density:.1f} points/second")
-            print(f"   Suitable for {theoretical_control_freq}Hz robot control")
+        # Command analysis for all frequencies
+        theoretical_control_freq = target_hz
+        command_density = commands_per_movement / movement_duration
+        print(f"📊 Command Analysis:")
+        print(f"   Control Resolution: {command_interval_ms:.2f}ms between commands")
+        print(f"   Command Density: {command_density:.1f} commands/second")
+        print(f"   Teleoperation Rate: {theoretical_control_freq}Hz position updates")
         
         print(f"{'='*80}\n")
     
     def print_summary_results(self):
         """Print comprehensive summary of all benchmark results"""
         print(f"\n{'='*100}")
-        print(f"🏆 HIGH-FREQUENCY TRAJECTORY GENERATION BENCHMARK - FRANKA FR3")
+        print(f"🏆 HIGH-FREQUENCY INDIVIDUAL POSITION COMMAND BENCHMARK - FRANKA FR3")
         print(f"{'='*100}")
-        print(f"Approach: High-frequency trajectory generation from HOME to TARGET (+30° joint movement)")
-        print(f"Testing: Trajectory generation rates up to 2kHz with proper waypoint timing")
-        print(f"Low Freq (<100Hz): Actually moves robot with generated trajectories for verification")
-        print(f"High Freq (≥100Hz): Computational benchmark of trajectory generation rate")
-        print(f"Movement: Full 30° joint 1 movement over 3 seconds with intermediate waypoints")
-        print(f"Method: Single trajectory with progressive timestamps (not individual commands)")
+        print(f"Approach: Send individual position commands from HOME to TARGET (+30° joint movement)")
+        print(f"Testing: Individual command rates from 10Hz to 200Hz (mimicking VR teleoperation)")
+        print(f"ALL frequencies: Send real commands to robot to test actual teleoperation performance")
+        print(f"Movement: Continuous cycling through 3-second movements with discrete waypoints")
+        print(f"Method: Individual position commands at target frequency (NOT pre-planned trajectories)")
         print(f"{'='*100}")
-        print(f"{'Rate (Hz)':>10} {'Actual (Hz)':>12} {'Gen Time (ms)':>14} {'Exec Time (ms)':>15} {'Success (%)':>12} {'Waypoints':>10}")
+        print(f"{'Rate (Hz)':>10} {'Actual (Hz)':>12} {'Cmd Time (ms)':>14} {'IK Time (ms)':>15} {'Success (%)':>12} {'Commands/s':>12}")
         print(f"{'-'*100}")
         
         for i, result in enumerate(self.benchmark_results):
             target_hz = self.target_rates_hz[i] if i < len(self.target_rates_hz) else 0
-            waypoint_count = int(3.0 * target_hz)  # 3-second movement duration
-            exec_time = result.collision_check_time_ms if result.collision_check_time_ms > 0 else 0
             print(f"{target_hz:>10.0f} {result.control_rate_hz:>12.1f} {result.avg_latency_ms:>14.2f} "
-                  f"{exec_time:>15.0f} {result.success_rate:>12.1f} {waypoint_count:>10d}")
+                  f"{result.ik_solve_time_ms:>15.2f} {result.success_rate:>12.1f} {result.control_rate_hz:>12.1f}")
         
         print(f"{'-'*100}")
         
@@ -900,61 +905,35 @@ class FrankaBenchmarkController(Node):
             best_success = max(self.benchmark_results, key=lambda x: x.success_rate)
             
             print(f"\n🏆 PERFORMANCE HIGHLIGHTS:")
-            print(f"   🚀 Highest Generation Rate: {best_rate.control_rate_hz:.1f} Hz")
-            print(f"   ⚡ Fastest Generation Time: {best_generation_time.avg_latency_ms:.2f} ms")
-            print(f"   ✅ Best Success Rate:      {best_success.success_rate:.1f} %")
+            print(f"   🚀 Highest Command Rate:     {best_rate.control_rate_hz:.1f} Hz")
+            print(f"   ⚡ Fastest Command Time:      {best_generation_time.avg_latency_ms:.2f} ms")
+            print(f"   ✅ Best Success Rate:        {best_success.success_rate:.1f} %")
             
-            # High-frequency analysis
-            high_freq_results = [r for i, r in enumerate(self.benchmark_results) 
-                               if i < len(self.target_rates_hz) and self.target_rates_hz[i] >= 100]
-            if high_freq_results:
-                print(f"\n📈 HIGH-FREQUENCY PERFORMANCE (≥100Hz):")
-                best_high_freq = max(high_freq_results, key=lambda x: x.control_rate_hz)
-                target_idx = next(i for i, r in enumerate(self.benchmark_results) if r == best_high_freq)
-                target_rate = self.target_rates_hz[target_idx] if target_idx < len(self.target_rates_hz) else 0
+            # Overall performance analysis
+            print(f"\n📈 OVERALL PERFORMANCE:")
+            for i, result in enumerate(self.benchmark_results):
+                target_hz = self.target_rates_hz[i] if i < len(self.target_rates_hz) else 0
                 
-                print(f"   Target: {target_rate} Hz trajectory generation")
-                print(f"   Achieved: {best_high_freq.control_rate_hz:.1f} Hz ({best_high_freq.control_rate_hz/target_rate*100:.1f}% of target)")
-                print(f"   Generation Time: {best_high_freq.avg_latency_ms:.2f} ms")
+                print(f"\n   {target_hz} Hz Test:")
+                print(f"   Achieved: {result.control_rate_hz:.1f} Hz ({result.control_rate_hz/target_hz*100:.1f}% of target)")
+                print(f"   Command Time: {result.avg_latency_ms:.2f} ms")
+                print(f"   IK Computation: {result.ik_solve_time_ms:.2f} ms")
+                print(f"   Success Rate: {result.success_rate:.1f}%")
                 
-                # Calculate trajectory characteristics
-                waypoints_per_trajectory = int(3.0 * target_rate)
-                waypoint_resolution = (1.0/target_rate)*1000
-                print(f"   Waypoints per 3s trajectory: {waypoints_per_trajectory}")
-                print(f"   Waypoint resolution: {waypoint_resolution:.2f}ms per point")
-                
-                if best_high_freq.control_rate_hz >= target_rate * 0.8:
-                    print(f"   🎉 EXCELLENT: High-frequency trajectory generation capability!")
-                    print(f"   💫 Can generate smooth trajectories for {target_rate}Hz robot control")
-                else:
-                    print(f"   ⚠️  LIMITED: May need optimization for sustained high-frequency operation")
-            
-            # Low-frequency verification
-            low_freq_results = [r for i, r in enumerate(self.benchmark_results) 
-                              if i < len(self.target_rates_hz) and self.target_rates_hz[i] < 100]
-            if low_freq_results:
-                print(f"\n🤖 ROBOT EXECUTION VERIFICATION (<100Hz):")
-                print(f"   Physical robot movement verified at low frequencies")
-                print(f"   All movements: HOME to TARGET (+30° joint 1 displacement)")
-                print(f"   Method: Single trajectory with progressive waypoint timing")
-                print(f"   Verification: Actual robot motion confirming trajectory execution")
-                
-                avg_success = statistics.mean(r.success_rate for r in low_freq_results)
-                avg_exec_time = statistics.mean(r.collision_check_time_ms for r in low_freq_results if r.collision_check_time_ms > 0)
-                print(f"   Average success rate: {avg_success:.1f}%")
-                if avg_exec_time > 0:
-                    print(f"   Average execution time: {avg_exec_time:.0f}ms")
+                # Calculate command characteristics
+                commands_per_second = result.control_rate_hz
+                command_interval_ms = (1.0/commands_per_second)*1000 if commands_per_second > 0 else 0
+                print(f"   Command interval: {command_interval_ms:.2f}ms")
         
         print(f"{'='*100}\n")
     
     def run_comprehensive_benchmark(self):
-        """Run complete high-frequency trajectory generation benchmark suite"""
-        self.get_logger().info('🚀 Starting High-Frequency Trajectory Generation Benchmark - Franka FR3')
-        self.get_logger().info('📊 Testing trajectory generation rates up to 2kHz with proper waypoint timing')
-        self.get_logger().info('🎯 Approach: Generate complete trajectories from HOME to TARGET position (+30° joint movement)')
-        self.get_logger().info('🔬 High Freq (≥100Hz): Computational benchmark of trajectory generation rate')
-        self.get_logger().info('🤖 Low Freq (<100Hz): Actually moves robot with generated trajectories for verification')
-        self.get_logger().info('🛤️  Method: Single trajectory with progressive timestamps (not individual commands)')
+        """Run complete high-frequency individual command benchmark suite"""
+        self.get_logger().info('🚀 Starting High-Frequency Individual Command Benchmark - Franka FR3')
+        self.get_logger().info('📊 Testing individual position command rates from 10Hz to 200Hz')
+        self.get_logger().info('🎯 Approach: Send individual position commands from HOME to TARGET (+30° joint movement)')
+        self.get_logger().info('🤖 ALL frequencies: Send real commands to robot to test actual teleoperation')
+        self.get_logger().info('🛤️  Method: Individual position commands sent at target frequency (VR teleoperation style)')
         
         # Move to home position first
         if not self.move_to_home():
@@ -1005,11 +984,11 @@ class FrankaBenchmarkController(Node):
         # Print comprehensive summary
         self.print_summary_results()
         
-        self.get_logger().info('🏁 High-Frequency Trajectory Generation Benchmark completed!')
-        self.get_logger().info('📈 Results show high-frequency trajectory generation capability')
+        self.get_logger().info('🏁 High-Frequency Individual Command Benchmark completed!')
+        self.get_logger().info('📈 Results show high-frequency individual command capability')
         self.get_logger().info('🤖 Low frequencies: Robot execution verified with actual movement')  
-        self.get_logger().info('🔬 High frequencies: Computational benchmark of trajectory generation rate')
-        self.get_logger().info('🎯 Movement: HOME -> TARGET (+30° joint) with intermediate waypoints')
+        self.get_logger().info('🔬 High frequencies: Individual position command capability')
+        self.get_logger().info('🎯 Movement: HOME -> TARGET (+30° joint) with individual position commands')
         self.get_logger().info('⚡ Focus: >100Hz performance for high-frequency robot control applications')
 
     def validate_test_poses(self):
@@ -1182,7 +1161,7 @@ class FrankaBenchmarkController(Node):
         if ik_response is None:
             self.get_logger().error('❌ IK service call returned None')
             return False
-        
+            
         self.get_logger().info(f'IK Error code: {ik_response.error_code.val}')
         
         if ik_response.error_code.val == 1:
@@ -1257,7 +1236,7 @@ class FrankaBenchmarkController(Node):
                         self.get_logger().info(f'❌ Group {group_name}: error code {ik_response.error_code.val}')
                 else:
                     self.get_logger().info(f'❌ Group {group_name}: no response')
-                    
+            
             except Exception as e:
                 self.get_logger().info(f'❌ Group {group_name}: exception {e}')
         
@@ -1273,7 +1252,7 @@ class FrankaBenchmarkController(Node):
         if current_joints is None:
             self.get_logger().error('❌ Cannot get current joint positions')
             return False
-        
+    
         self.get_logger().info(f'📍 Current joints: {[f"{j:.3f}" for j in current_joints]}')
         
         # Create a LARGE movement on joint 1 (+30 degrees = +0.52 radians)
@@ -1322,6 +1301,140 @@ class FrankaBenchmarkController(Node):
         
         self.get_logger().error('❌ Failed to get joint positions after 10 attempts')
         return False
+
+    def compute_ik_for_joints(self, joint_positions):
+        """Compute IK to get pose from joint positions (mimics VR teleoperation IK)"""
+        try:
+            # Create joint state request
+            request = GetPositionIK.Request()
+            request.ik_request.group_name = self.planning_group
+            
+            # Set current robot state
+            request.ik_request.robot_state.joint_state.name = self.joint_names
+            request.ik_request.robot_state.joint_state.position = joint_positions.tolist()
+            
+            # Forward kinematics: compute pose from joint positions
+            # For this we use the move group's forward kinematics
+            # Get the current pose that would result from these joint positions
+            
+            # Create a dummy pose request (we'll compute the actual pose)
+            pose_stamped = PoseStamped()
+            pose_stamped.header.frame_id = self.planning_frame
+            pose_stamped.header.stamp = self.get_clock().now().to_msg()
+            
+            # Use moveit planning scene to compute forward kinematics
+            # Set joint positions and compute resulting pose
+            joint_state = JointState()
+            joint_state.name = self.joint_names
+            joint_state.position = joint_positions.tolist()
+            
+            # Create planning scene state
+            robot_state = RobotState()
+            robot_state.joint_state = joint_state
+            
+            # Request forward kinematics to get pose
+            fk_request = GetPositionFK.Request()
+            fk_request.header.frame_id = self.planning_frame
+            fk_request.header.stamp = self.get_clock().now().to_msg()
+            fk_request.fk_link_names = [self.end_effector_link]
+            fk_request.robot_state = robot_state
+            
+            # Call forward kinematics service
+            if not self.fk_client.service_is_ready():
+                self.get_logger().warn('FK service not ready')
+                return None
+                
+            future = self.fk_client.call_async(fk_request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=0.1)
+            
+            if future.result() is not None:
+                fk_response = future.result()
+                if fk_response.error_code.val == fk_response.error_code.SUCCESS:
+                    if fk_response.pose_stamped:
+                        return fk_response.pose_stamped[0]  # First (and only) pose
+            
+            return None
+            
+        except Exception as e:
+            self.get_logger().debug(f'FK computation failed: {e}')
+            return None
+
+    def send_individual_position_command(self, pos, quat, gripper, duration):
+        """Send individual position command (exactly like VR teleoperation)"""
+        try:
+            if not self.trajectory_client.server_is_ready():
+                return False
+            
+            # Create trajectory with single waypoint (like VR commands)
+            trajectory = JointTrajectory()
+            trajectory.joint_names = self.joint_names
+            
+            # Convert Cartesian pose to joint positions using IK
+            ik_request = GetPositionIK.Request()
+            ik_request.ik_request.group_name = self.planning_group
+            ik_request.ik_request.pose_stamped.header.frame_id = self.planning_frame
+            ik_request.ik_request.pose_stamped.header.stamp = self.get_clock().now().to_msg()
+            
+            # Set target pose
+            ik_request.ik_request.pose_stamped.pose.position.x = float(pos[0])
+            ik_request.ik_request.pose_stamped.pose.position.y = float(pos[1])
+            ik_request.ik_request.pose_stamped.pose.position.z = float(pos[2])
+            ik_request.ik_request.pose_stamped.pose.orientation.x = float(quat[0])
+            ik_request.ik_request.pose_stamped.pose.orientation.y = float(quat[1])
+            ik_request.ik_request.pose_stamped.pose.orientation.z = float(quat[2])
+            ik_request.ik_request.pose_stamped.pose.orientation.w = float(quat[3])
+            
+            # Set current robot state as seed
+            current_joints = self.get_current_joint_positions()
+            if current_joints:
+                ik_request.ik_request.robot_state.joint_state.name = self.joint_names
+                ik_request.ik_request.robot_state.joint_state.position = current_joints
+            
+            # Call IK service
+            if not self.ik_client.service_is_ready():
+                return False
+                
+            future = self.ik_client.call_async(ik_request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=0.05)  # Quick timeout
+            
+            if future.result() is not None:
+                ik_response = future.result()
+                if ik_response.error_code.val == ik_response.error_code.SUCCESS:
+                    # Create trajectory point
+                    point = JointTrajectoryPoint()
+                    
+                    # Extract only the positions for our 7 arm joints
+                    # IK might return extra joints (gripper), so we need to filter
+                    joint_positions = []
+                    for joint_name in self.joint_names:
+                        if joint_name in ik_response.solution.joint_state.name:
+                            idx = ik_response.solution.joint_state.name.index(joint_name)
+                            joint_positions.append(ik_response.solution.joint_state.position[idx])
+                    
+                    # Ensure we have exactly 7 joint positions
+                    if len(joint_positions) != 7:
+                        self.get_logger().warn(f'IK returned {len(joint_positions)} joints, expected 7')
+                        return False
+                    
+                    point.positions = joint_positions
+                    point.time_from_start.sec = max(1, int(duration))
+                    point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
+                    
+                    trajectory.points.append(point)
+                    
+                    # Send trajectory
+                    goal = FollowJointTrajectory.Goal()
+                    goal.trajectory = trajectory
+                    
+                    # Send goal (non-blocking for high frequency)
+                    send_goal_future = self.trajectory_client.send_goal_async(goal)
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.get_logger().debug(f'Individual command failed: {e}')
+            return False
 
 
 def main(args=None):

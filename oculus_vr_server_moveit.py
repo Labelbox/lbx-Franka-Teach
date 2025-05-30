@@ -437,8 +437,8 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         
         # Ultra-smooth pose filtering for 60Hz operation
         self.pose_smoothing_enabled = True
-        self.pose_smoothing_alpha = 0.25  # Higher for 60Hz robot commands (0.25 vs 0.15)
-        self.velocity_smoothing_alpha = 0.15  # Slightly higher for 60Hz responsiveness
+        self.pose_smoothing_alpha = 0.35  # More responsive (was 0.25) since basic control works
+        self.velocity_smoothing_alpha = 0.25  # More responsive for better tracking
         self._smoothed_target_pos = None
         self._smoothed_target_quat = None
         self._smoothed_target_gripper = None
@@ -446,7 +446,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._pose_history = deque(maxlen=3)  # Smaller history for 60Hz (3 vs 5)
         
         # Adaptive command rate for smooth motion
-        self.min_command_interval = 0.1  # 10Hz robot commands (was 60Hz - too fast for 300ms trajectories)
+        self.min_command_interval = 0.067  # 15Hz robot commands (optimized up from 10Hz)
         self.adaptive_smoothing = True  # Adjust smoothing based on motion speed
         
         # Async components
@@ -482,15 +482,15 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._trajectory_failure_count = 0
         
         # Print status
-        print("\n🎮 Oculus VR Server - MoveIt Edition (Smooth 10Hz)")
+        print("\n🎮 Oculus VR Server - MoveIt Edition (Optimized 15Hz)")
         print(f"   Using {'RIGHT' if right_controller else 'LEFT'} controller")
         print(f"   Mode: {'DEBUG' if debug else 'LIVE ROBOT CONTROL'}")
         print(f"   Robot: {'SIMULATED FR3' if simulation else 'REAL HARDWARE'}")
         print(f"   VR Processing: {self.control_hz}Hz (Ultra-low latency)")
-        print(f"   Robot Commands: 10Hz (Smooth, safe execution)")
+        print(f"   Robot Commands: 15Hz (Optimized responsiveness)")
         print(f"   Position gain: {self.pos_action_gain}")
         print(f"   Rotation gain: {self.rot_action_gain}")
-        print(f"   MoveIt integration: IK solver + collision avoidance + ultra-safe trajectories")
+        print(f"   MoveIt integration: IK solver + collision avoidance + velocity-limited trajectories")
         
         print("\n📋 Controls:")
         print("   - HOLD grip button: Enable teleoperation")
@@ -847,23 +847,29 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             return None
 
     def execute_single_point_trajectory(self, joint_positions):
-        """Execute single-point trajectory (VR-style individual command) with ultra-conservative settings"""
+        """Execute single-point trajectory (VR-style individual command) with optimized velocity limiting"""
         trajectory = JointTrajectory()
         trajectory.joint_names = self.joint_names
         
         point = JointTrajectoryPoint()
         point.positions = joint_positions
-        # Much longer execution time to prevent velocity violations
+        # Keep 300ms execution time but optimize velocity profiles
         point.time_from_start.sec = 0
-        point.time_from_start.nanosec = int(0.3 * 1e9)  # 300ms execution (was 100ms - way too fast)
+        point.time_from_start.nanosec = int(0.3 * 1e9)  # 300ms execution
         
-        # Add much more conservative velocity profiles 
-        # Calculate smooth velocities based on pose smoothing
+        # Add velocity profiles with smart limiting based on actual tolerance (0.5 rad/s)
         if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
             position_deltas = np.array(joint_positions) - np.array(self._last_joint_positions)
-            # Much slower velocity profile for 300ms execution
+            # Calculate velocities for 300ms execution
             smooth_velocities = position_deltas / 0.3  # Velocity to reach target in 300ms
-            smooth_velocities *= 0.3  # Scale down much more for ultra-smooth motion
+            smooth_velocities *= 0.25  # Scale down to stay well under 0.5 rad/s limit
+            
+            # Apply per-joint velocity limiting to stay under tolerance (0.4 rad/s max)
+            max_velocity = 0.4  # Stay well under 0.5 rad/s tolerance
+            for i in range(len(smooth_velocities)):
+                if abs(smooth_velocities[i]) > max_velocity:
+                    smooth_velocities[i] = max_velocity * np.sign(smooth_velocities[i])
+            
             point.velocities = smooth_velocities.tolist()
         else:
             point.velocities = [0.0] * len(joint_positions)  # Stop at target for first command
@@ -876,10 +882,10 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = trajectory
         
-        # Ultra-forgiving tolerances to prevent all rejections
+        # Optimized tolerances - slightly more forgiving than current limits
         goal.path_tolerance = [
-            # Much more forgiving tolerances to prevent ANY rejections
-            JointTolerance(name=name, position=0.05, velocity=0.5, acceleration=0.5) 
+            # Fine-tuned tolerances just above current robot limits
+            JointTolerance(name=name, position=0.05, velocity=0.6, acceleration=0.5) 
             for name in self.joint_names
         ]
         
@@ -1362,7 +1368,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
     
     def _robot_comm_worker(self):
         """Handles robot communication via MoveIt services/actions"""
-        self.get_logger().info("🔌 Robot communication thread started (MoveIt - 10Hz Smooth)")
+        self.get_logger().info("🔌 Robot communication thread started (MoveIt - 15Hz Optimized)")
         
         comm_count = 0
         total_comm_time = 0
@@ -1376,7 +1382,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 if command is None:  # Poison pill
                     break
                 
-                # Use the new smart rate limiting for 10Hz
+                # Use the optimized rate limiting for 15Hz
                 if not self.should_send_robot_command():
                     continue
                 
@@ -1417,7 +1423,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                     avg_comm_time = total_comm_time / comm_count
                     actual_rate = comm_count / 10.0
                     self.get_logger().info(f"📡 Avg MoveIt comm: {avg_comm_time*1000:.1f}ms ({comm_count} commands)")
-                    self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 10Hz)")
+                    self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 15Hz)")
                     if self.debug_comm_stats:
                         self.print_moveit_stats()
                     stats_last_printed = time.time()
@@ -1736,12 +1742,26 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
             gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
             
-            # Debug movement commands
+            # Debug movement commands with velocity info
             if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
                 movement_delta = np.linalg.norm(target_pos - self.robot_pos)
                 print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
                 print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
                 print(f"   Gripper: {gripper_state} (trigger: {trigger_value:.2f})")
+                
+                # Show velocity limiting info if we have previous joint positions
+                if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
+                    # Simulate the velocity calculation for debugging
+                    joint_positions = self.get_current_joint_positions()
+                    if joint_positions:
+                        test_ik = self.compute_ik_for_pose(target_pos, target_quat)
+                        if test_ik:
+                            deltas = np.array(test_ik) - np.array(self._last_joint_positions)
+                            test_velocities = deltas / 0.3 * 0.25
+                            max_vel = max(abs(v) for v in test_velocities)
+                            print(f"   Max joint velocity: {max_vel:.3f} rad/s (limit: 0.4 rad/s)")
+                            if max_vel > 0.4:
+                                print(f"   ⚠️  Velocity limiting active!")
             
             # Send action to robot (MoveIt style)
             if not self.debug:
@@ -2077,7 +2097,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         """Determine if we should send a new robot command based on rate limiting and motion"""
         current_time = time.time()
         
-        # Always respect minimum command interval (10Hz = 100ms)
+        # Always respect minimum command interval (15Hz = 67ms)
         if current_time - self._last_command_time < self.min_command_interval:
             return False
         
@@ -2089,9 +2109,9 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             # Calculate motion since last command
             pos_delta = np.linalg.norm(recent_pose['pos'] - older_pose['pos'])
             
-            # Reasonable motion detection for 10Hz - not too sensitive
-            # Allow commands for any meaningful movement
-            if pos_delta < 0.001 and current_time - self._last_command_time < 0.2:  # 200ms max delay
+            # Optimized motion detection for 15Hz - good balance of responsiveness
+            # Allow commands for meaningful movement
+            if pos_delta < 0.0008 and current_time - self._last_command_time < 0.15:  # 150ms max delay
                 return False
         
         return True

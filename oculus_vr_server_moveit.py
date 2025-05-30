@@ -56,6 +56,9 @@ from control_msgs.action import FollowJointTrajectory
 from control_msgs.msg import JointTolerance
 from std_msgs.msg import Header
 
+# Add gripper action imports
+from franka_msgs.action import Grasp
+
 # Import the Oculus Reader
 from oculus_reader.reader import OculusReader
 
@@ -245,6 +248,11 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             self, FollowJointTrajectory, '/fr3_arm_controller/follow_joint_trajectory'
         )
         
+        # Create gripper action client for Franka gripper control
+        self.gripper_client = ActionClient(
+            self, Grasp, '/fr3_gripper/grasp'
+        )
+        
         # Joint state subscriber
         self.joint_state = None
         self.joint_state_sub = self.create_subscription(
@@ -278,6 +286,12 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             services_ready = False
         else:
             self.get_logger().info("✅ Trajectory action server ready")
+            
+        if not self.gripper_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error("❌ Gripper action server not available")
+            services_ready = False
+        else:
+            self.get_logger().info("✅ Gripper action server ready")
             
         if not services_ready:
             if not self.debug:
@@ -495,8 +509,8 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         print("\n📋 Controls:")
         print("   - HOLD grip button: Enable teleoperation")
         print("   - RELEASE grip button: Pause teleoperation")
-        print("   - PRESS trigger: Close gripper")
-        print("   - RELEASE trigger: Open gripper")
+        print("   - PULL index finger trigger: Close gripper")
+        print("   - RELEASE index finger trigger: Open gripper")
         
         if self.enable_recording:
             print("\n📹 Recording Controls:")
@@ -533,11 +547,16 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self.vr_origin = None
         self.vr_state = None
         
+        # Robot state - uses quaternions directly
         self.robot_pos = None
         self.robot_quat = None
         self.robot_euler = None
         self.robot_gripper = 0.0
         self.robot_joint_positions = None
+        
+        # Add gripper state tracking
+        self._last_gripper_command = None
+        self._gripper_command_time = 0.0
         
         self.prev_joystick_state = False
         self.prev_grip_state = False
@@ -907,8 +926,25 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             if joint_positions is None:
                 return False
             
-            # Execute single-point trajectory (like VR teleoperation)
-            return self.execute_single_point_trajectory(joint_positions)
+            # Execute arm movement via single-point trajectory
+            arm_success = self.execute_single_point_trajectory(joint_positions)
+            
+            # Execute gripper command if state has changed
+            gripper_success = True
+            if hasattr(command, 'gripper'):
+                # Check if gripper state has changed to avoid unnecessary commands
+                current_gripper = self.get_current_gripper_state()
+                if current_gripper != command.gripper:
+                    if self.debug_moveit:
+                        gripper_action = "CLOSE" if command.gripper == GRIPPER_CLOSE else "OPEN"
+                        self.get_logger().info(f"🔧 Executing gripper: {current_gripper} → {gripper_action}")
+                    gripper_success = self.execute_gripper_command(command.gripper)
+                    if self.debug_moveit and gripper_success:
+                        self.get_logger().info(f"🔧 Gripper command: {'CLOSE' if command.gripper == GRIPPER_CLOSE else 'OPEN'}")
+                elif self.debug_moveit:
+                    self.get_logger().info(f"🔧 Gripper unchanged: {'CLOSE' if command.gripper == GRIPPER_CLOSE else 'OPEN'}")
+            
+            return arm_success and gripper_success
             
         except Exception as e:
             if self.debug_moveit:
@@ -925,12 +961,12 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         
         # First, check if services are ready
         print("🔍 Checking MoveIt services...")
-        if not self.ik_client.service_is_ready():
+        if not self.ik_client.wait_for_service(timeout_sec=5.0):
             print("⚠️  IK service not ready, waiting...")
             if not self.ik_client.wait_for_service(timeout_sec=5.0):
                 print("❌ IK service still not ready after 5s")
         
-        if not self.fk_client.service_is_ready():
+        if not self.fk_client.wait_for_service(timeout_sec=5.0):
             print("⚠️  FK service not ready, waiting...")
             if not self.fk_client.wait_for_service(timeout_sec=5.0):
                 print("❌ FK service still not ready after 5s")
@@ -939,6 +975,11 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             print("⚠️  Trajectory server not ready, waiting...")
             if not self.trajectory_client.wait_for_server(timeout_sec=5.0):
                 print("❌ Trajectory server still not ready after 5s")
+        
+        if not self.gripper_client.server_is_ready():
+            print("⚠️  Gripper service not ready, waiting...")
+            if not self.gripper_client.wait_for_server(timeout_sec=5.0):
+                print("❌ Gripper service still not ready after 5s")
         
         # Wait for joint states to be available
         print("🔍 Waiting for joint states...")
@@ -961,6 +1002,29 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             # Give time for robot to settle
             print(f"⏱️  Waiting for robot to settle...")
             time.sleep(1.0)
+            
+            # Test gripper functionality during reset
+            if not self.debug:
+                print(f"🔧 Testing gripper functionality...")
+                
+                print(f"   → Testing gripper CLOSE...")
+                close_success = self.execute_gripper_command(GRIPPER_CLOSE, timeout=3.0, wait_for_completion=True)
+                if close_success:
+                    print(f"   ✅ Gripper CLOSE completed successfully")
+                else:
+                    print(f"   ❌ Gripper CLOSE command failed")
+                
+                print(f"   → Testing gripper OPEN...")
+                open_success = self.execute_gripper_command(GRIPPER_OPEN, timeout=3.0, wait_for_completion=True)
+                if open_success:
+                    print(f"   ✅ Gripper OPEN completed successfully")
+                else:
+                    print(f"   ❌ Gripper OPEN command failed")
+                
+                if close_success and open_success:
+                    print(f"   ✅ Gripper test PASSED - ready for VR control!")
+                else:
+                    print(f"   ⚠️  Gripper test FAILED - check gripper action server")
             
             # Get new position via FK
             print(f"📍 Reading final robot state...")
@@ -1236,7 +1300,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             transformed_rot_mat = self.global_to_env_mat[:3, :3] @ self.vr_to_global_mat[:3, :3] @ rot_mat[:3, :3]
             vr_quat = rmat_to_quat(transformed_rot_mat)
         
-        vr_gripper = self._state["buttons"]["rightTrig" if self.controller_id == "r" else "leftTrig"][0]
+        vr_gripper = self._state["buttons"].get("rightTrig" if self.controller_id == "r" else "leftTrig", [0.0])[0]
         
         self.vr_state = {"pos": vr_pos, "quat": vr_quat, "gripper": vr_gripper}
     
@@ -1401,11 +1465,14 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                     joint_positions = self.get_current_joint_positions()
                     
                     if pos is not None and quat is not None:
+                        # Get actual gripper state from robot instead of echoing command
+                        actual_gripper_state = self.get_current_gripper_state()
+                        
                         # Create response in same format as Deoxys
                         response = type('RobotState', (), {
                             'pos': pos,
                             'quat': quat,
-                            'gripper': command.gripper,
+                            'gripper': actual_gripper_state,
                             'joint_positions': np.array(joint_positions) if joint_positions else None
                         })()
                         
@@ -1738,16 +1805,54 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                     target_pos, target_quat, target_gripper
                 )
             
-            # Handle gripper control
-            trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
-            gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
+            # Handle gripper control - use original Meta Quest trigger mapping  
+            # rightTrig/leftTrig return pressure values as tuples (1.0,) or arrays [1.0]
+            trigger_key = "rightTrig" if self.controller_id == "r" else "leftTrig"
+            trigger_data = self._state["buttons"].get(trigger_key, [0.0])
+            
+            # Handle both tuple (1.0,) and list [1.0] formats
+            if isinstance(trigger_data, (tuple, list)) and len(trigger_data) > 0:
+                trigger_value = trigger_data[0]
+            else:
+                trigger_value = 0.0
+                
+            gripper_state = GRIPPER_CLOSE if trigger_value > 0.05 else GRIPPER_OPEN  # Lower threshold
+            
+            # ALWAYS log trigger values for debugging (even in live mode)
+            if hasattr(self, '_last_trigger_log_time'):
+                if time.time() - self._last_trigger_log_time > 2.0:  # Every 2 seconds
+                    print(f"🎯 Trigger: {trigger_key}={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
+                    print(f"🔍 Controller ID: {self.controller_id} ({'RIGHT' if self.right_controller else 'LEFT'})")
+                    print(f"🔍 ALL BUTTONS DEBUG:")
+                    for key, value in self._state["buttons"].items():
+                        if isinstance(value, list):
+                            print(f"    {key}: {value} (array)")
+                        else:
+                            print(f"    {key}: {value} (bool)")
+                    print(f"🔍 TRIGGER BUTTONS ONLY:")
+                    for key, value in self._state["buttons"].items():
+                        if 'trig' in key.lower():
+                            print(f"    {key}: {value}")
+                    self._last_trigger_log_time = time.time()
+            else:
+                self._last_trigger_log_time = time.time()
+            
+            # Debug gripper values for troubleshooting
+            if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
+                print(f"   🎯 Gripper Debug: key={trigger_key}, raw_data={trigger_data}, value={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
+                print(f"   🎯 Available buttons: {list(self._state['buttons'].keys())}")
+                # Show some button values for debugging
+                for key, value in self._state["buttons"].items():
+                    if 'trig' in key.lower() or 'grip' in key.lower():
+                        print(f"      {key}: {value}")
             
             # Debug movement commands with velocity info
             if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
                 movement_delta = np.linalg.norm(target_pos - self.robot_pos)
                 print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
                 print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
-                print(f"   Gripper: {gripper_state} (trigger: {trigger_value:.2f})")
+                print(f"   Gripper: {gripper_state} (trigger: {trigger_value > 0.05})")
+                print(f"   🎯 Trigger DEBUG: {trigger_key}={trigger_value:.3f}")
                 
                 # Show velocity limiting info if we have previous joint positions
                 if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
@@ -2115,6 +2220,106 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 return False
         
         return True
+
+    # =====================================
+    # GRIPPER CONTROL METHODS
+    # =====================================
+    
+    def execute_gripper_command(self, gripper_state, timeout=2.0, wait_for_completion=False):
+        """Execute gripper command (open/close) using Franka gripper action"""
+        if self.debug:
+            if self.debug_moveit:
+                self.get_logger().info(f"🔧 [DEBUG] Would execute gripper: {'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
+            return True
+            
+        # Rate limiting: avoid sending commands too frequently
+        current_time = time.time()
+        if (self._last_gripper_command == gripper_state and 
+            current_time - self._gripper_command_time < 0.5):  # 500ms cooldown
+            return True  # Command already sent recently
+            
+        if not self.gripper_client.server_is_ready():
+            if self.debug_moveit:
+                self.get_logger().warn("Gripper action server not ready")
+            return False
+        
+        # Create gripper action goal
+        goal = Grasp.Goal()
+        
+        if gripper_state == GRIPPER_CLOSE:
+            # Close gripper - grasp with some force
+            goal.width = 0.0  # Fully close
+            goal.speed = 0.1  # Moderate speed
+            goal.force = 60.0  # Grasping force (N)
+            goal.epsilon.inner = 0.005  # Tolerance for grasping
+            goal.epsilon.outer = 0.005
+        else:
+            # Open gripper
+            goal.width = 0.08  # Fully open (80mm)
+            goal.speed = 0.1   # Moderate speed
+            goal.force = 0.0   # No force needed for opening
+            goal.epsilon.inner = 0.005
+            goal.epsilon.outer = 0.005
+        
+        # Send goal
+        send_goal_future = self.gripper_client.send_goal_async(goal)
+        
+        # Update tracking
+        self._last_gripper_command = gripper_state
+        self._gripper_command_time = current_time
+        
+        # Debug output to confirm command was sent
+        if self.debug_moveit:
+            action_type = "CLOSE" if gripper_state == GRIPPER_CLOSE else "OPEN"
+            self.get_logger().info(f"🔧 Gripper command sent: {action_type} (width: {goal.width}, force: {goal.force})")
+        
+        # Optionally wait for completion (for testing)
+        if wait_for_completion:
+            # Wait for goal to be accepted
+            rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=2.0)
+            
+            if not send_goal_future.done():
+                print(f"❌ Gripper goal send timeout")
+                return False
+                
+            goal_handle = send_goal_future.result()
+            
+            if not goal_handle.accepted:
+                print(f"❌ Gripper goal was rejected")
+                return False
+            
+            # Wait for execution to complete
+            result_future = goal_handle.get_result_async()
+            rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
+            
+            if not result_future.done():
+                print(f"❌ Gripper execution timeout after {timeout}s")
+                return False
+            
+            result = result_future.result()
+            return result.result.success
+        
+        # For VR control, we don't wait for completion to maintain responsiveness
+        # The gripper will execute in the background
+        return True
+    
+    def get_current_gripper_state(self):
+        """Get current gripper state from joint states"""
+        if self.joint_state is None:
+            return GRIPPER_OPEN
+            
+        # Look for gripper joint in joint states
+        gripper_joints = ['fr3_finger_joint1', 'fr3_finger_joint2']
+        gripper_position = 0.0
+        
+        for joint_name in gripper_joints:
+            if joint_name in self.joint_state.name:
+                idx = self.joint_state.name.index(joint_name)
+                gripper_position = max(gripper_position, self.joint_state.position[idx])
+        
+        # Convert joint position to gripper state
+        # FR3 gripper: 0.0 = closed, ~0.04 = open
+        return GRIPPER_OPEN if gripper_position > 0.02 else GRIPPER_CLOSE
 
 
 def main():

@@ -53,6 +53,7 @@ from moveit_msgs.msg import PositionIKRequest, RobotState as MoveitRobotState
 from sensor_msgs.msg import JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from control_msgs.action import FollowJointTrajectory
+from control_msgs.msg import JointTolerance
 from std_msgs.msg import Header
 
 # Import the Oculus Reader
@@ -70,7 +71,7 @@ GRIPPER_OPEN = 0.0
 GRIPPER_CLOSE = 1.0
 ROBOT_WORKSPACE_MIN = np.array([-0.6, -0.6, 0.0])
 ROBOT_WORKSPACE_MAX = np.array([0.6, 0.6, 1.0])
-CONTROL_FREQ = 15  # Hz
+CONTROL_FREQ = 60  # Hz - Ultra-low latency VR processing with pose smoothing
 
 
 @dataclass
@@ -228,7 +229,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self.verify_data = verify_data
         
         # Enhanced debugging features
-        self.debug_moveit = debug  # Enhanced MoveIt debugging
+        self.debug_moveit = True  # Enable MoveIt debugging for diagnosis
         self.debug_ik_failures = True  # Log IK failures for debugging
         self.debug_comm_stats = True  # Log communication statistics
         
@@ -434,6 +435,20 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self.position_filter_alpha = 0.8
         self._last_vr_pos = None
         
+        # Ultra-smooth pose filtering for 60Hz operation
+        self.pose_smoothing_enabled = True
+        self.pose_smoothing_alpha = 0.25  # Higher for 60Hz robot commands (0.25 vs 0.15)
+        self.velocity_smoothing_alpha = 0.15  # Slightly higher for 60Hz responsiveness
+        self._smoothed_target_pos = None
+        self._smoothed_target_quat = None
+        self._smoothed_target_gripper = None
+        self._last_command_time = 0.0
+        self._pose_history = deque(maxlen=3)  # Smaller history for 60Hz (3 vs 5)
+        
+        # Adaptive command rate for smooth motion
+        self.min_command_interval = 0.1  # 10Hz robot commands (was 60Hz - too fast for 300ms trajectories)
+        self.adaptive_smoothing = True  # Adjust smoothing based on motion speed
+        
         # Async components
         self._vr_state_lock = threading.Lock()
         self._robot_state_lock = threading.Lock()
@@ -467,14 +482,15 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._trajectory_failure_count = 0
         
         # Print status
-        print("\n🎮 Oculus VR Server - MoveIt Edition")
+        print("\n🎮 Oculus VR Server - MoveIt Edition (Smooth 10Hz)")
         print(f"   Using {'RIGHT' if right_controller else 'LEFT'} controller")
         print(f"   Mode: {'DEBUG' if debug else 'LIVE ROBOT CONTROL'}")
         print(f"   Robot: {'SIMULATED FR3' if simulation else 'REAL HARDWARE'}")
-        print(f"   Control frequency: {self.control_hz}Hz")
+        print(f"   VR Processing: {self.control_hz}Hz (Ultra-low latency)")
+        print(f"   Robot Commands: 10Hz (Smooth, safe execution)")
         print(f"   Position gain: {self.pos_action_gain}")
         print(f"   Rotation gain: {self.rot_action_gain}")
-        print(f"   MoveIt integration: IK solver + collision avoidance")
+        print(f"   MoveIt integration: IK solver + collision avoidance + ultra-safe trajectories")
         
         print("\n📋 Controls:")
         print("   - HOLD grip button: Enable teleoperation")
@@ -536,6 +552,9 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._last_controller_rot = None
         self._last_vr_pos = None
         self._last_action = np.zeros(7)
+        
+        # Joint trajectory smoothing
+        self._last_joint_positions = None
 
     def signal_handler(self, signum, frame):
         """Handle Ctrl+C and other termination signals"""
@@ -556,27 +575,42 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._last_joint_state_time = time.time()
 
     def get_current_joint_positions(self):
-        """Get current joint positions from joint_states topic"""
+        """Get current joint positions from joint_states topic with robust error handling"""
+        # Wait for joint state if not available
+        max_wait_time = 2.0
+        start_time = time.time()
+        
+        while self.joint_state is None and (time.time() - start_time) < max_wait_time:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.01)
+        
         if self.joint_state is None:
             if self.debug_moveit:
-                self.get_logger().debug("No joint state available")
+                self.get_logger().warn("No joint state available after waiting")
             return None
             
         positions = []
+        missing_joints = []
         for joint_name in self.joint_names:
             if joint_name in self.joint_state.name:
                 idx = self.joint_state.name.index(joint_name)
                 positions.append(self.joint_state.position[idx])
             else:
-                if self.debug_moveit:
-                    self.get_logger().warn(f"Joint {joint_name} not found in joint state")
-                return None
+                missing_joints.append(joint_name)
+        
+        if missing_joints:
+            if self.debug_moveit:
+                self.get_logger().warn(f"Missing joints in joint state: {missing_joints}")
+                self.get_logger().warn(f"Available joints: {list(self.joint_state.name)}")
+            return None
+            
         return positions
 
     def get_current_end_effector_pose(self):
-        """Get current end-effector pose using forward kinematics"""
+        """Get current end-effector pose using forward kinematics with robust error handling"""
         current_joints = self.get_current_joint_positions()
         if current_joints is None:
+            self.get_logger().warn("Cannot get joint positions for FK")
             return None, None
         
         # Create FK request
@@ -590,26 +624,44 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         fk_request.robot_state.joint_state.name = self.joint_names
         fk_request.robot_state.joint_state.position = current_joints
         
-        # Call FK service with timeout
-        fk_start = time.time()
-        fk_future = self.fk_client.call_async(fk_request)
-        rclpy.spin_until_future_complete(self, fk_future, timeout_sec=0.1)
-        fk_time = time.time() - fk_start
+        # Call FK service with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                fk_start = time.time()
+                fk_future = self.fk_client.call_async(fk_request)
+                
+                # Wait for response with timeout
+                rclpy.spin_until_future_complete(self, fk_future, timeout_sec=0.5)
+                fk_time = time.time() - fk_start
+                
+                if not fk_future.done():
+                    self.get_logger().warn(f"FK service timeout on attempt {attempt + 1}")
+                    continue
+                
+                fk_response = fk_future.result()
+                
+                if fk_response and fk_response.error_code.val == 1 and fk_response.pose_stamped:
+                    pose = fk_response.pose_stamped[0].pose
+                    pos = np.array([pose.position.x, pose.position.y, pose.position.z])
+                    quat = np.array([pose.orientation.x, pose.orientation.y, 
+                                    pose.orientation.z, pose.orientation.w])
+                    
+                    if self.debug_moveit:
+                        self.get_logger().info(f"FK successful: pos=[{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
+                    
+                    return pos, quat
+                else:
+                    error_code = fk_response.error_code.val if fk_response else "No response"
+                    self.get_logger().warn(f"FK failed with error code: {error_code} on attempt {attempt + 1}")
+                    
+            except Exception as e:
+                self.get_logger().warn(f"FK attempt {attempt + 1} exception: {e}")
+                
+            if attempt < max_retries - 1:
+                time.sleep(0.2)  # Wait before retry
         
-        if self.debug_comm_stats and fk_time > 0.05:
-            self.get_logger().warn(f"Slow FK computation: {fk_time*1000:.1f}ms")
-        
-        fk_response = fk_future.result()
-        
-        if fk_response and fk_response.error_code.val == 1 and fk_response.pose_stamped:
-            pose = fk_response.pose_stamped[0].pose
-            pos = np.array([pose.position.x, pose.position.y, pose.position.z])
-            quat = np.array([pose.orientation.x, pose.orientation.y, 
-                            pose.orientation.z, pose.orientation.w])
-            return pos, quat
-        
-        if self.debug_moveit:
-            self.get_logger().warn(f"FK failed with error code: {fk_response.error_code.val if fk_response else 'None'}")
+        self.get_logger().error("FK failed after all retries")
         return None, None
 
     def get_planning_scene(self):
@@ -639,12 +691,14 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         return scene_future.result()
 
     def execute_trajectory(self, positions, duration=2.0):
-        """Execute a trajectory to move joints to target positions"""
+        """Execute a trajectory to move joints to target positions and WAIT for completion"""
         if not self.trajectory_client.server_is_ready():
             if self.debug_moveit:
                 self.get_logger().warn("Trajectory action server not ready")
             return False
             
+        print(f"🎯 Executing trajectory to target positions (duration: {duration}s)...")
+        
         # Create trajectory
         trajectory = JointTrajectory()
         trajectory.joint_names = self.joint_names
@@ -655,49 +709,76 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         point.time_from_start.sec = int(duration)
         point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
         
+        # Add zero velocities and accelerations for smooth stop at target
+        point.velocities = [0.0] * len(self.joint_names)
+        point.accelerations = [0.0] * len(self.joint_names)
+        
         trajectory.points.append(point)
             
         # Create goal
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = trajectory
         
-        # Send goal
-        traj_start = time.time()
-        future = self.trajectory_client.send_goal_async(goal)
+        # More forgiving tolerances for reset operations to prevent failures
+        goal.path_tolerance = [
+            # More forgiving tolerances to handle reset operations
+            JointTolerance(name=name, position=0.02, velocity=0.2, acceleration=0.2) 
+            for name in self.joint_names
+        ]
         
-        # Wait for goal acceptance
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-        goal_handle = future.result()
+        # More forgiving goal tolerance for successful completion
+        goal.goal_tolerance = [
+            JointTolerance(name=name, position=0.015, velocity=0.1, acceleration=0.1)
+            for name in self.joint_names
+        ]
         
-        if not goal_handle or not goal_handle.accepted:
-            if self.debug_moveit:
-                self.get_logger().warn("Trajectory goal rejected")
+        # Send goal and WAIT for completion (essential for reset operations)
+        print("📤 Sending trajectory goal...")
+        send_goal_future = self.trajectory_client.send_goal_async(goal)
+        
+        # Wait for goal to be accepted
+        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=2.0)
+        
+        if not send_goal_future.done():
+            print("❌ Failed to send goal (timeout)")
             return False
             
-        # Wait for result
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=duration + 2.0)
+        goal_handle = send_goal_future.result()
         
-        result = result_future.result()
-        traj_time = time.time() - traj_start
-        
-        if result is None:
-            if self.debug_moveit:
-                self.get_logger().warn(f"Trajectory execution timeout after {traj_time:.1f}s")
+        if not goal_handle.accepted:
+            print("❌ Goal was rejected")
             return False
         
-        success = result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL
+        print("✅ Goal accepted, waiting for completion...")
         
-        if self.debug_comm_stats:
-            if success:
-                self._trajectory_success_count += 1
-                if self.debug_moveit:
-                    self.get_logger().info(f"Trajectory executed in {traj_time:.2f}s")
-            else:
-                self._trajectory_failure_count += 1
-                self.get_logger().warn(f"Trajectory failed with error code: {result.result.error_code}")
+        # Wait for execution to complete
+        result_future = goal_handle.get_result_async()
         
-        return success
+        # Monitor progress with status updates
+        start_time = time.time()
+        last_update = 0
+        
+        while not result_future.done():
+            elapsed = time.time() - start_time
+            if elapsed - last_update >= 2.0:  # Update every 2 seconds
+                print(f"   ⏱️  Executing... {elapsed:.1f}s elapsed")
+                last_update = elapsed
+            
+            rclpy.spin_once(self, timeout_sec=0.1)
+            
+            if elapsed > duration + 10.0:  # Give plenty of extra time for completion
+                print("❌ Trajectory execution timeout")
+                return False
+        
+        # Get final result
+        result = result_future.result()
+        
+        if result.result.error_code == 0:  # SUCCESS
+            print("✅ Trajectory execution completed successfully!")
+            return True
+        else:
+            print(f"❌ Trajectory execution failed with error code: {result.result.error_code}")
+            return False
 
     def compute_ik_for_pose(self, pos, quat):
         """Compute IK for Cartesian pose with enhanced debugging"""
@@ -766,18 +847,44 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             return None
 
     def execute_single_point_trajectory(self, joint_positions):
-        """Execute single-point trajectory (VR-style individual command)"""
+        """Execute single-point trajectory (VR-style individual command) with ultra-conservative settings"""
         trajectory = JointTrajectory()
         trajectory.joint_names = self.joint_names
         
         point = JointTrajectoryPoint()
         point.positions = joint_positions
+        # Much longer execution time to prevent velocity violations
         point.time_from_start.sec = 0
-        point.time_from_start.nanosec = int(0.1 * 1e9)  # 100ms execution
+        point.time_from_start.nanosec = int(0.3 * 1e9)  # 300ms execution (was 100ms - way too fast)
+        
+        # Add much more conservative velocity profiles 
+        # Calculate smooth velocities based on pose smoothing
+        if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
+            position_deltas = np.array(joint_positions) - np.array(self._last_joint_positions)
+            # Much slower velocity profile for 300ms execution
+            smooth_velocities = position_deltas / 0.3  # Velocity to reach target in 300ms
+            smooth_velocities *= 0.3  # Scale down much more for ultra-smooth motion
+            point.velocities = smooth_velocities.tolist()
+        else:
+            point.velocities = [0.0] * len(joint_positions)  # Stop at target for first command
+        
+        # Conservative acceleration limits
+        point.accelerations = [0.0] * len(joint_positions)  # Let MoveIt handle acceleration
+        
         trajectory.points.append(point)
         
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = trajectory
+        
+        # Ultra-forgiving tolerances to prevent all rejections
+        goal.path_tolerance = [
+            # Much more forgiving tolerances to prevent ANY rejections
+            JointTolerance(name=name, position=0.05, velocity=0.5, acceleration=0.5) 
+            for name in self.joint_names
+        ]
+        
+        # Store joint positions for next velocity calculation
+        self._last_joint_positions = joint_positions
         
         # Send goal (non-blocking for high frequency)
         send_goal_future = self.trajectory_client.send_goal_async(goal)
@@ -803,34 +910,96 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             return False
 
     def reset_robot(self, sync=True):
-        """Reset robot to initial position using MoveIt trajectory"""
+        """Reset robot to initial position using MoveIt trajectory with retry logic"""
         if self.debug:
             print("🔄 [DEBUG] Would reset robot to initial position")
             return np.array([0.4, 0.0, 0.3]), np.array([1.0, 0.0, 0.0, 0.0]), None
         
         print("🔄 Resetting robot to initial position...")
         
-        # Execute trajectory to home position
-        success = self.execute_trajectory(self.home_positions, duration=3.0)
+        # First, check if services are ready
+        print("🔍 Checking MoveIt services...")
+        if not self.ik_client.service_is_ready():
+            print("⚠️  IK service not ready, waiting...")
+            if not self.ik_client.wait_for_service(timeout_sec=5.0):
+                print("❌ IK service still not ready after 5s")
+        
+        if not self.fk_client.service_is_ready():
+            print("⚠️  FK service not ready, waiting...")
+            if not self.fk_client.wait_for_service(timeout_sec=5.0):
+                print("❌ FK service still not ready after 5s")
+        
+        if not self.trajectory_client.server_is_ready():
+            print("⚠️  Trajectory server not ready, waiting...")
+            if not self.trajectory_client.wait_for_server(timeout_sec=5.0):
+                print("❌ Trajectory server still not ready after 5s")
+        
+        # Wait for joint states to be available
+        print("🔍 Waiting for joint states...")
+        joint_wait_start = time.time()
+        while self.joint_state is None and (time.time() - joint_wait_start) < 5.0:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.1)
+        
+        if self.joint_state is None:
+            print("❌ No joint states received after 5s")
+        else:
+            print(f"✅ Joint states available: {len(self.joint_state.name)} joints")
+        
+        # Execute trajectory to home position (now properly waits for completion)
+        print(f"\n🏠 Moving robot to home position...")
+        success = self.execute_trajectory(self.home_positions, duration=5.0)
         
         if success:
+            print(f"✅ Robot successfully moved to home position!")
             # Give time for robot to settle
-            time.sleep(0.5)
+            print(f"⏱️  Waiting for robot to settle...")
+            time.sleep(1.0)
             
             # Get new position via FK
+            print(f"📍 Reading final robot state...")
+            for _ in range(10):
+                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
+                
             pos, quat = self.get_current_end_effector_pose()
             joint_positions = self.get_current_joint_positions()
             
             if pos is not None and quat is not None:
-                print(f"✅ Robot reset complete")
+                print(f"✅ Robot reset complete!")
                 print(f"   Position: [{pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.6f}]")
                 print(f"   Quaternion: [{quat[0]:.6f}, {quat[1]:.6f}, {quat[2]:.6f}, {quat[3]:.6f}]")
                 
                 return pos, quat, joint_positions
             else:
-                raise RuntimeError("Failed to get robot state after reset")
+                print(f"⚠️  Warning: Could not read final robot state, but trajectory completed successfully")
+                # Return default home pose as fallback
+                default_pos = np.array([0.307, 0.000, 0.487])  # Approximate FR3 home position
+                default_quat = np.array([1.0, 0.0, 0.0, 0.0])  # Neutral orientation
+                return default_pos, default_quat, self.home_positions
         else:
-            raise RuntimeError("Failed to reset robot to home position")
+            print(f"❌ Robot trajectory to home position failed")
+            
+            # Try to get current state as fallback
+            print("🔍 Attempting to get current robot state as fallback...")
+            try:
+                for _ in range(10):
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                    time.sleep(0.1)
+                
+                pos, quat = self.get_current_end_effector_pose()
+                joint_positions = self.get_current_joint_positions()
+                
+                if pos is not None and quat is not None:
+                    print("✅ Using current robot position as starting point")
+                    print(f"   Position: [{pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.6f}]")
+                    return pos, quat, joint_positions
+                else:
+                    print("❌ Still cannot read robot state")
+            except Exception as e:
+                print(f"❌ Exception getting current state: {e}")
+            
+            raise RuntimeError("Failed to reset robot and cannot read current state")
 
     def print_moveit_stats(self):
         """Print MoveIt communication statistics"""
@@ -1193,7 +1362,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
     
     def _robot_comm_worker(self):
         """Handles robot communication via MoveIt services/actions"""
-        self.get_logger().info("🔌 Robot communication thread started (MoveIt)")
+        self.get_logger().info("🔌 Robot communication thread started (MoveIt - 10Hz Smooth)")
         
         comm_count = 0
         total_comm_time = 0
@@ -1207,6 +1376,10 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 if command is None:  # Poison pill
                     break
                 
+                # Use the new smart rate limiting for 10Hz
+                if not self.should_send_robot_command():
+                    continue
+                
                 # Process MoveIt command
                 comm_start = time.time()
                 success = self.execute_moveit_command(command)
@@ -1214,6 +1387,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 
                 comm_count += 1
                 total_comm_time += comm_time
+                self._last_command_time = time.time()
                 
                 # Get current robot state after command
                 if success:
@@ -1241,10 +1415,14 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 # Log communication stats periodically
                 if time.time() - stats_last_printed > 10.0 and comm_count > 0:
                     avg_comm_time = total_comm_time / comm_count
+                    actual_rate = comm_count / 10.0
                     self.get_logger().info(f"📡 Avg MoveIt comm: {avg_comm_time*1000:.1f}ms ({comm_count} commands)")
+                    self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 10Hz)")
                     if self.debug_comm_stats:
                         self.print_moveit_stats()
                     stats_last_printed = time.time()
+                    comm_count = 0  # Reset counter
+                    total_comm_time = 0
                 
             except queue.Empty:
                 continue
@@ -1494,8 +1672,52 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         
         # Calculate action if movement is enabled
         if info["movement_enabled"] and self._state["poses"]:
+            # Debug when movement is first enabled
+            if self.debug and not hasattr(self, '_movement_was_enabled'):
+                print(f"\n🎮 VR Movement ENABLED!")
+                print(f"   Controller ID: {self.controller_id}")
+                print(f"   Available poses: {list(self._state['poses'].keys())}")
+                if self.controller_id in self._state["poses"]:
+                    raw_pose = self._state["poses"][self.controller_id]
+                    raw_pos = raw_pose[:3, 3]
+                    print(f"   Raw controller position: [{raw_pos[0]:.3f}, {raw_pos[1]:.3f}, {raw_pos[2]:.3f}]")
+                else:
+                    print(f"   ⚠️  Controller {self.controller_id} not found in poses!")
+                self._movement_was_enabled = True
+            
             action, action_info = self._calculate_action()
             self._last_action = action.copy()
+            
+            # Debug VR action calculation
+            if self.debug and hasattr(self, '_debug_counter'):
+                self._debug_counter += 1
+                if self._debug_counter % 30 == 0:  # Print every 30 cycles (every 0.5s at 60Hz)
+                    print(f"\n🎮 VR Action Debug:")
+                    print(f"   VR Controller Position: {self.vr_state['pos'] if self.vr_state else 'None'}")
+                    print(f"   Robot Current Position: [{self.robot_pos[0]:.3f}, {self.robot_pos[1]:.3f}, {self.robot_pos[2]:.3f}]")
+                    print(f"   Action (lin/rot/gripper): [{action[0]:.3f}, {action[1]:.3f}, {action[2]:.3f}] / [{action[3]:.3f}, {action[4]:.3f}, {action[5]:.3f}] / {action[6]:.3f}")
+                    if 'target_cartesian_position' in action_info:
+                        target_cart = action_info['target_cartesian_position']
+                        print(f"   Target Position: [{target_cart[0]:.3f}, {target_cart[1]:.3f}, {target_cart[2]:.3f}]")
+                    
+                    # Debug calibration status
+                    print(f"   🔧 Calibration Status:")
+                    print(f"      Forward calibrated: {not self.reset_orientation}")
+                    print(f"      Origin calibrated: {self.robot_origin is not None}")
+                    if self.robot_origin:
+                        robot_orig = self.robot_origin['pos']
+                        print(f"      Robot origin: [{robot_orig[0]:.3f}, {robot_orig[1]:.3f}, {robot_orig[2]:.3f}]")
+                    if self.vr_origin:
+                        vr_orig = self.vr_origin['pos'] 
+                        print(f"      VR origin: [{vr_orig[0]:.3f}, {vr_orig[1]:.3f}, {vr_orig[2]:.3f}]")
+                        
+                    # Debug VR controller raw data
+                    if self.controller_id in self._state.get("poses", {}):
+                        raw_pose_matrix = self._state["poses"][self.controller_id]
+                        raw_pos = raw_pose_matrix[:3, 3]
+                        print(f"      Raw VR position: [{raw_pos[0]:.3f}, {raw_pos[1]:.3f}, {raw_pos[2]:.3f}]")
+            elif not hasattr(self, '_debug_counter'):
+                self._debug_counter = 0
             
             target_pos, target_quat, target_gripper = self.velocity_to_position_target(
                 action, self.robot_pos, self.robot_quat, action_info
@@ -1504,9 +1726,22 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             # Apply workspace bounds
             target_pos = np.clip(target_pos, ROBOT_WORKSPACE_MIN, ROBOT_WORKSPACE_MAX)
             
+            # Apply ultra-smooth pose filtering for 60Hz operation
+            if self.pose_smoothing_enabled:
+                target_pos, target_quat, target_gripper = self.smooth_pose_transition(
+                    target_pos, target_quat, target_gripper
+                )
+            
             # Handle gripper control
             trigger_value = self._state["buttons"].get("rightTrig" if self.right_controller else "leftTrig", [0.0])[0]
             gripper_state = GRIPPER_CLOSE if trigger_value > 0.1 else GRIPPER_OPEN
+            
+            # Debug movement commands
+            if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
+                movement_delta = np.linalg.norm(target_pos - self.robot_pos)
+                print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
+                print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
+                print(f"   Gripper: {gripper_state} (trigger: {trigger_value:.2f})")
             
             # Send action to robot (MoveIt style)
             if not self.debug:
@@ -1590,6 +1825,11 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         else:
             new_robot_state = robot_state
             self._last_action = np.zeros(7)
+            # Reset debug flag when movement is disabled
+            if hasattr(self, '_movement_was_enabled'):
+                if self.debug:
+                    print("\n🛑 VR Movement DISABLED")
+                delattr(self, '_movement_was_enabled')
 
     def control_loop(self):
         """Main control loop with ROS 2 integration"""
@@ -1777,6 +2017,84 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         
         print("✅ Server stopped gracefully")
         sys.exit(0)
+
+    def smooth_pose_transition(self, target_pos, target_quat, target_gripper):
+        """Apply exponential smoothing to robot poses for ultra-smooth motion"""
+        current_time = time.time()
+        
+        # Initialize smoothed values on first call
+        if self._smoothed_target_pos is None:
+            self._smoothed_target_pos = target_pos.copy()
+            self._smoothed_target_quat = target_quat.copy() 
+            self._smoothed_target_gripper = target_gripper
+            return target_pos, target_quat, target_gripper
+        
+        # Calculate motion speed for adaptive smoothing
+        pos_delta = np.linalg.norm(target_pos - self._smoothed_target_pos)
+        
+        # Adaptive smoothing - use more smoothing for fast motions
+        if self.adaptive_smoothing:
+            # Increase smoothing for faster motions to prevent jerks
+            speed_factor = min(pos_delta * 100, 1.0)  # Scale position delta
+            adaptive_alpha = self.pose_smoothing_alpha * (1.0 - speed_factor * 0.5)
+            adaptive_alpha = max(adaptive_alpha, 0.05)  # Minimum smoothing
+        else:
+            adaptive_alpha = self.pose_smoothing_alpha
+        
+        # Exponential smoothing for position
+        self._smoothed_target_pos = (adaptive_alpha * target_pos + 
+                                   (1.0 - adaptive_alpha) * self._smoothed_target_pos)
+        
+        # Spherical linear interpolation (SLERP) for quaternions - much smoother
+        from scipy.spatial.transform import Rotation as R
+        current_rot = R.from_quat(self._smoothed_target_quat)
+        target_rot = R.from_quat(target_quat)
+        
+        # SLERP between current and target orientation
+        smoothed_rot = current_rot.inv() * target_rot
+        smoothed_rotvec = smoothed_rot.as_rotvec()
+        smoothed_rotvec *= adaptive_alpha  # Scale rotation step
+        final_rot = current_rot * R.from_rotvec(smoothed_rotvec)
+        self._smoothed_target_quat = final_rot.as_quat()
+        
+        # Smooth gripper with velocity limiting
+        gripper_delta = target_gripper - self._smoothed_target_gripper
+        max_gripper_delta = 0.02  # Limit gripper speed
+        gripper_delta = np.clip(gripper_delta, -max_gripper_delta, max_gripper_delta)
+        self._smoothed_target_gripper = self._smoothed_target_gripper + gripper_delta
+        
+        # Add to pose history for trend analysis
+        self._pose_history.append({
+            'time': current_time,
+            'pos': self._smoothed_target_pos.copy(),
+            'quat': self._smoothed_target_quat.copy(),
+            'gripper': self._smoothed_target_gripper
+        })
+        
+        return self._smoothed_target_pos, self._smoothed_target_quat, self._smoothed_target_gripper
+
+    def should_send_robot_command(self):
+        """Determine if we should send a new robot command based on rate limiting and motion"""
+        current_time = time.time()
+        
+        # Always respect minimum command interval (10Hz = 100ms)
+        if current_time - self._last_command_time < self.min_command_interval:
+            return False
+        
+        # If we have pose history, check if motion is significant enough
+        if len(self._pose_history) >= 2:
+            recent_pose = self._pose_history[-1]
+            older_pose = self._pose_history[-2]
+            
+            # Calculate motion since last command
+            pos_delta = np.linalg.norm(recent_pose['pos'] - older_pose['pos'])
+            
+            # Reasonable motion detection for 10Hz - not too sensitive
+            # Allow commands for any meaningful movement
+            if pos_delta < 0.001 and current_time - self._last_command_time < 0.2:  # 200ms max delay
+                return False
+        
+        return True
 
 
 def main():

@@ -94,6 +94,29 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
    # Follow instructions in oculus_reader_app/README.md
    ```
 
+5. **Configure IP Addresses** ⚠️ **Important**
+   
+   You must update the IP addresses in the configuration files to match your network setup:
+   
+   ```bash
+   # Edit the deoxys configuration files
+   cd frankateach/configs
+   
+   # For right robot:
+   vim deoxys_right.yml
+   # Update:
+   # - PC.IP: Your Lambda machine's IP address
+   # - NUC.IP: Your NUC's IP address (same as PC.IP if running on same machine)
+   # - ROBOT.IP: Your Franka robot's IP address (e.g., 192.168.1.59)
+   
+   # For left robot (if applicable):
+   vim deoxys_left.yml
+   # Update the same fields with appropriate IP addresses
+   ```
+   
+   **Note**: The `franka_server.py` will fail to connect with "Waiting for the robot to connect..." 
+   if these IP addresses don't match your actual network configuration.
+
 ### Network Proxy Setup
 
 1. **Install FoxyProxy extension** in Chrome/Firefox
@@ -232,6 +255,19 @@ Edit `
 - Ensure Oculus is connected via USB or network
 - Check with `adb devices` for USB connection
 - For network: use `--ip <quest-ip-address>`
+
+### Franka Server Connection Issues
+If `franka_server.py` shows "Waiting for the robot to connect..." indefinitely:
+- **Check IP configuration**: The most common cause is incorrect IP addresses in `frankateach/configs/deoxys_right.yml` or `deoxys_left.yml`
+- **Verify network connectivity**: Can you ping the robot from the Lambda machine?
+- **Check if deoxys is already running**: Only one process can connect to the robot at a time
+  ```bash
+  # Check for running deoxys processes
+  ps aux | grep -E "(franka-interface|gripper-interface)"
+  # Kill if necessary
+  sudo pkill -f "franka-interface|gripper-interface"
+  ```
+- **Ensure robot is in FCI mode**: Check Franka Desk interface
 
 ## Additional Documentation
 

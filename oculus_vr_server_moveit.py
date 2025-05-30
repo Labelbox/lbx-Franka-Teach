@@ -231,8 +231,8 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self.running = True
         self.verify_data = verify_data
         
-        # Enhanced debugging features
-        self.debug_moveit = True  # Enable MoveIt debugging for diagnosis
+        # Enhanced debugging features - DISABLED FOR CLEAN OPERATION
+        self.debug_moveit = False  # Disable MoveIt debugging for cleaner logs (was True)
         self.debug_ik_failures = True  # Log IK failures for debugging
         self.debug_comm_stats = True  # Log communication statistics
         
@@ -667,7 +667,9 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                                     pose.orientation.z, pose.orientation.w])
                     
                     if self.debug_moveit:
-                        self.get_logger().info(f"FK successful: pos=[{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
+                        # DISABLED FOR CLEAN OPERATION
+                        # self.get_logger().info(f"FK successful: pos=[{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]")
+                        pass
                     
                     return pos, quat
                 else:
@@ -1481,11 +1483,11 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                             except:
                                 pass
                 
-                # Log communication stats periodically
-                if time.time() - stats_last_printed > 10.0 and comm_count > 0:
+                # Log communication stats periodically (reduced frequency for clean operation)
+                if time.time() - stats_last_printed > 30.0 and comm_count > 0:  # 30s instead of 10s
                     avg_comm_time = total_comm_time / comm_count
-                    actual_rate = comm_count / 10.0
-                    self.get_logger().info(f"📡 Avg MoveIt comm: {avg_comm_time*1000:.1f}ms ({comm_count} commands)")
+                    actual_rate = comm_count / 30.0  # Update calculation for 30s window
+                    self.get_logger().info(f"📡 Avg MoveIt comm: {avg_comm_time*1000:.1f}ms ({comm_count} commands in 30s)")
                     self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 15Hz)")
                     if self.debug_comm_stats:
                         self.print_moveit_stats()
@@ -1814,49 +1816,50 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 
             gripper_state = GRIPPER_CLOSE if trigger_value > 0.02 else GRIPPER_OPEN  # Ultra-responsive threshold
             
-            # ALWAYS log trigger values for debugging (even in live mode)
-            if hasattr(self, '_last_trigger_log_time'):
-                if time.time() - self._last_trigger_log_time > 5.0:  # Every 5 seconds (less frequent)
-                    print(f"🎯 Trigger: {trigger_key}={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
-                    print(f"🔍 Controller ID: {self.controller_id} ({'RIGHT' if self.right_controller else 'LEFT'})")
-                    print(f"🔍 TRIGGER BUTTONS ONLY:")
-                    for key, value in self._state["buttons"].items():
-                        if 'trig' in key.lower():
-                            print(f"    {key}: {value}")
-                    self._last_trigger_log_time = time.time()
-            else:
-                self._last_trigger_log_time = time.time()
+            # ALWAYS log trigger values for debugging (even in live mode) - DISABLED FOR CLEAN OPERATION
+            # if hasattr(self, '_last_trigger_log_time'):
+            #     if time.time() - self._last_trigger_log_time > 5.0:  # Every 5 seconds (less frequent)
+            #         print(f"🎯 Trigger: {trigger_key}={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
+            #         print(f"🔍 Controller ID: {self.controller_id} ({'RIGHT' if self.right_controller else 'LEFT'})")
+            #         print(f"🔍 TRIGGER BUTTONS ONLY:")
+            #         for key, value in self._state["buttons"].items():
+            #             if 'trig' in key.lower():
+            #                 print(f"    {key}: {value}")
+            #         self._last_trigger_log_time = time.time()
+            # else:
+            #     self._last_trigger_log_time = time.time()
             
             # Debug gripper values for troubleshooting
-            if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
-                print(f"   🎯 Gripper Debug: key={trigger_key}, raw_data={trigger_data}, value={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
-                print(f"   🎯 Available buttons: {list(self._state['buttons'].keys())}")
-                # Show some button values for debugging
-                for key, value in self._state["buttons"].items():
-                    if 'trig' in key.lower() or 'grip' in key.lower():
-                        print(f"      {key}: {value}")
+            # DISABLED FOR CLEAN OPERATION
+            # if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
+            #     print(f"   🎯 Gripper Debug: key={trigger_key}, raw_data={trigger_data}, value={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
+            #     print(f"   🎯 Available buttons: {list(self._state['buttons'].keys())}")
+            #     # Show some button values for debugging
+            #     for key, value in self._state["buttons"].items():
+            #         if 'trig' in key.lower() or 'grip' in key.lower():
+            #             print(f"      {key}: {value}")
             
-            # Debug movement commands with velocity info
-            if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
-                movement_delta = np.linalg.norm(target_pos - self.robot_pos)
-                print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
-                print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
-                print(f"   Gripper: {gripper_state} (trigger: {trigger_value > 0.02})")
-                print(f"   🎯 Trigger DEBUG: {trigger_key}={trigger_value:.3f}")
-                
-                # Show velocity limiting info if we have previous joint positions
-                if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
-                    # Simulate the velocity calculation for debugging
-                    joint_positions = self.get_current_joint_positions()
-                    if joint_positions:
-                        test_ik = self.compute_ik_for_pose(target_pos, target_quat)
-                        if test_ik:
-                            deltas = np.array(test_ik) - np.array(self._last_joint_positions)
-                            test_velocities = deltas / 0.3 * 0.25
-                            max_vel = max(abs(v) for v in test_velocities)
-                            print(f"   Max joint velocity: {max_vel:.3f} rad/s (limit: 0.4 rad/s)")
-                            if max_vel > 0.4:
-                                print(f"   ⚠️  Velocity limiting active!")
+            # Debug movement commands with velocity info - DISABLED FOR CLEAN OPERATION
+            # if self.debug and hasattr(self, '_debug_counter') and self._debug_counter % 30 == 0:
+            #     movement_delta = np.linalg.norm(target_pos - self.robot_pos)
+            #     print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
+            #     print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
+            #     print(f"   Gripper: {gripper_state} (trigger: {trigger_value > 0.02})")
+            #     print(f"   🎯 Trigger DEBUG: {trigger_key}={trigger_value:.3f}")
+            #     
+            #     # Show velocity limiting info if we have previous joint positions
+            #     if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
+            #         # Simulate the velocity calculation for debugging
+            #         joint_positions = self.get_current_joint_positions()
+            #         if joint_positions:
+            #             test_ik = self.compute_ik_for_pose(target_pos, target_quat)
+            #             if test_ik:
+            #                 deltas = np.array(test_ik) - np.array(self._last_joint_positions)
+            #                 test_velocities = deltas / 0.3 * 0.25
+            #                 max_vel = max(abs(v) for v in test_velocities)
+            #                 print(f"   Max joint velocity: {max_vel:.3f} rad/s (limit: 0.4 rad/s)")
+            #                 if max_vel > 0.4:
+            #                     print(f"   ⚠️  Velocity limiting active!")
             
             # Send action to robot (or simulate)
             if not self.debug:

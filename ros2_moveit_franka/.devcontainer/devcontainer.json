@@ -1,0 +1,133 @@
+{
+  "name": "ROS 2 MoveIt Franka Development",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "ros2_moveit_franka",
+  "workspaceFolder": "/workspace/ros2_ws",
+
+  // Configure container user
+  "remoteUser": "root",
+
+  // Keep container running after VS Code closes
+  "shutdownAction": "stopCompose",
+
+  // Features and extensions
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // ROS extensions
+        "ms-iot.vscode-ros",
+        "ajshort.ros2",
+        "nonamelive.ros2-snippets",
+
+        // Python extensions
+        "ms-python.python",
+        "ms-python.pylint",
+        "ms-python.black-formatter",
+        "ms-python.isort",
+
+        // C++ extensions (for potential C++ development)
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "ms-vscode.cmake-tools",
+
+        // Development tools
+        "eamodio.gitlens",
+        "ms-vscode.vscode-json",
+        "redhat.vscode-yaml",
+        "ms-vscode.hexeditor",
+
+        // Docker support
+        "ms-azuretools.vscode-docker",
+
+        // XML support (for launch files and URDF)
+        "redhat.vscode-xml",
+
+        // Markdown support
+        "yzhang.markdown-all-in-one"
+      ],
+      "settings": {
+        // Python settings
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black",
+        "python.sortImports.args": ["--profile", "black"],
+
+        // ROS settings
+        "ros.distro": "humble",
+        "ros.rosSetupScript": "/opt/ros/humble/setup.bash",
+
+        // Editor settings
+        "editor.rulers": [88, 120],
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": true
+        },
+
+        // File associations
+        "files.associations": {
+          "*.launch": "xml",
+          "*.urdf": "xml",
+          "*.xacro": "xml",
+          "*.sdf": "xml"
+        },
+
+        // Terminal settings
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "/bin/bash",
+            "args": ["-l"],
+            "env": {
+              "ROS_DISTRO": "humble"
+            }
+          }
+        }
+      }
+    }
+  },
+
+  // Port forwarding for ROS communication
+  "forwardPorts": [7400, 7401, 7402, 7403, 7404],
+  "portsAttributes": {
+    "7400": {
+      "label": "ROS DDS Discovery"
+    },
+    "7401": {
+      "label": "ROS DDS User Data"
+    }
+  },
+
+  // Environment variables
+  "containerEnv": {
+    "ROS_DISTRO": "humble",
+    "ROS_DOMAIN_ID": "42",
+    "ROBOT_IP": "192.168.1.59",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+
+  // Post-create setup
+  "postCreateCommand": [
+    "bash",
+    "-c",
+    "echo 'Setting up development environment...' && source /opt/ros/humble/setup.bash && source /workspace/franka_ros2_ws/install/setup.bash && cd /workspace/ros2_ws && colcon build --packages-select ros2_moveit_franka --symlink-install && echo 'source /workspace/ros2_ws/install/setup.bash' >> ~/.bashrc && echo '✅ Development environment ready!' && echo 'Run: ros2 launch ros2_moveit_franka franka_demo.launch.py use_fake_hardware:=true'"
+  ],
+
+  // Mount host's X11 socket for GUI applications
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind,consistency=cached",
+    "source=${localWorkspaceFolder},target=/workspace/ros2_ws/src/ros2_moveit_franka,type=bind,consistency=cached"
+  ],
+
+  // Additional container capabilities
+  "capAdd": ["SYS_NICE", "NET_ADMIN"],
+
+  // Run arguments for GUI support
+  "runArgs": [
+    "--network=host",
+    "--env",
+    "DISPLAY=${localEnv:DISPLAY}",
+    "--env",
+    "QT_X11_NO_MITSHM=1"
+  ]
+}

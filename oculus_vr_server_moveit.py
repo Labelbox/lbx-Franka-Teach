@@ -929,20 +929,16 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             # Execute arm movement via single-point trajectory
             arm_success = self.execute_single_point_trajectory(joint_positions)
             
-            # Execute gripper command if state has changed
+            # Execute gripper command if state has changed AND we're actively teloperating
             gripper_success = True
             if hasattr(command, 'gripper'):
-                # Check if gripper state has changed to avoid unnecessary commands
-                current_gripper = self.get_current_gripper_state()
-                if current_gripper != command.gripper:
+                # Only check/send gripper commands during active teleoperation
+                if self._should_send_gripper_command(command.gripper):
                     if self.debug_moveit:
-                        gripper_action = "CLOSE" if command.gripper == GRIPPER_CLOSE else "OPEN"
-                        self.get_logger().info(f"🔧 Executing gripper: {current_gripper} → {gripper_action}")
+                        old_state = "CLOSE" if self._last_gripper_command == GRIPPER_CLOSE else "OPEN" 
+                        new_state = "CLOSE" if command.gripper == GRIPPER_CLOSE else "OPEN"
+                        self.get_logger().info(f"🔧 Gripper state change: {old_state} → {new_state}")
                     gripper_success = self.execute_gripper_command(command.gripper)
-                    if self.debug_moveit and gripper_success:
-                        self.get_logger().info(f"🔧 Gripper command: {'CLOSE' if command.gripper == GRIPPER_CLOSE else 'OPEN'}")
-                elif self.debug_moveit:
-                    self.get_logger().info(f"🔧 Gripper unchanged: {'CLOSE' if command.gripper == GRIPPER_CLOSE else 'OPEN'}")
             
             return arm_success and gripper_success
             
@@ -1816,19 +1812,13 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             else:
                 trigger_value = 0.0
                 
-            gripper_state = GRIPPER_CLOSE if trigger_value > 0.05 else GRIPPER_OPEN  # Lower threshold
+            gripper_state = GRIPPER_CLOSE if trigger_value > 0.02 else GRIPPER_OPEN  # Ultra-responsive threshold
             
             # ALWAYS log trigger values for debugging (even in live mode)
             if hasattr(self, '_last_trigger_log_time'):
-                if time.time() - self._last_trigger_log_time > 2.0:  # Every 2 seconds
+                if time.time() - self._last_trigger_log_time > 5.0:  # Every 5 seconds (less frequent)
                     print(f"🎯 Trigger: {trigger_key}={trigger_value:.3f}, state={'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
                     print(f"🔍 Controller ID: {self.controller_id} ({'RIGHT' if self.right_controller else 'LEFT'})")
-                    print(f"🔍 ALL BUTTONS DEBUG:")
-                    for key, value in self._state["buttons"].items():
-                        if isinstance(value, list):
-                            print(f"    {key}: {value} (array)")
-                        else:
-                            print(f"    {key}: {value} (bool)")
                     print(f"🔍 TRIGGER BUTTONS ONLY:")
                     for key, value in self._state["buttons"].items():
                         if 'trig' in key.lower():
@@ -1851,7 +1841,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 movement_delta = np.linalg.norm(target_pos - self.robot_pos)
                 print(f"   Movement Delta: {movement_delta*1000:.1f}mm")
                 print(f"   Smoothed Target: [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
-                print(f"   Gripper: {gripper_state} (trigger: {trigger_value > 0.05})")
+                print(f"   Gripper: {gripper_state} (trigger: {trigger_value > 0.02})")
                 print(f"   🎯 Trigger DEBUG: {trigger_key}={trigger_value:.3f}")
                 
                 # Show velocity limiting info if we have previous joint positions
@@ -1868,16 +1858,19 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                             if max_vel > 0.4:
                                 print(f"   ⚠️  Velocity limiting active!")
             
-            # Send action to robot (MoveIt style)
+            # Send action to robot (or simulate)
             if not self.debug:
-                # Create MoveIt-compatible action
+                # Create MoveIt-compatible action - only include gripper if movement is enabled
                 robot_action = type('MoveitAction', (), {
                     'pos': target_pos.flatten().astype(np.float32),
                     'quat': target_quat.flatten().astype(np.float32),
-                    'gripper': gripper_state,
                     'reset': False,
                     'timestamp': time.time(),
                 })()
+                
+                # Only add gripper control when movement is enabled
+                if info["movement_enabled"]:
+                    robot_action.gripper = gripper_state
                 
                 # Queue command for async sending
                 try:
@@ -1954,7 +1947,14 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             if hasattr(self, '_movement_was_enabled'):
                 if self.debug:
                     print("\n🛑 VR Movement DISABLED")
+                # Reset gripper tracking when movement stops to allow fresh state detection
+                self._last_gripper_command = None
+                if self.debug:
+                    print("🔄 Reset gripper tracking (movement disabled)")
                 delattr(self, '_movement_was_enabled')
+        
+        # Note: Data recording is now handled by the dedicated recording thread
+        # which runs at the target frequency independent of robot control
 
     def control_loop(self):
         """Main control loop with ROS 2 integration"""
@@ -2225,19 +2225,26 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
     # GRIPPER CONTROL METHODS
     # =====================================
     
+    def _should_send_gripper_command(self, desired_gripper_state):
+        """Determine if we should send a gripper command based on state changes"""
+        # Always send first command
+        if self._last_gripper_command is None:
+            return True
+        
+        # Only send if state has actually changed
+        if self._last_gripper_command != desired_gripper_state:
+            return True
+        
+        # Don't send duplicate commands
+        return False
+    
     def execute_gripper_command(self, gripper_state, timeout=2.0, wait_for_completion=False):
         """Execute gripper command (open/close) using Franka gripper action"""
         if self.debug:
             if self.debug_moveit:
                 self.get_logger().info(f"🔧 [DEBUG] Would execute gripper: {'CLOSE' if gripper_state == GRIPPER_CLOSE else 'OPEN'}")
             return True
-            
-        # Rate limiting: avoid sending commands too frequently
-        current_time = time.time()
-        if (self._last_gripper_command == gripper_state and 
-            current_time - self._gripper_command_time < 0.5):  # 500ms cooldown
-            return True  # Command already sent recently
-            
+        
         if not self.gripper_client.server_is_ready():
             if self.debug_moveit:
                 self.get_logger().warn("Gripper action server not ready")
@@ -2249,14 +2256,14 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         if gripper_state == GRIPPER_CLOSE:
             # Close gripper - grasp with some force
             goal.width = 0.0  # Fully close
-            goal.speed = 0.1  # Moderate speed
+            goal.speed = 0.5  # Maximum speed for responsiveness (was 0.3)
             goal.force = 60.0  # Grasping force (N)
             goal.epsilon.inner = 0.005  # Tolerance for grasping
             goal.epsilon.outer = 0.005
         else:
             # Open gripper
             goal.width = 0.08  # Fully open (80mm)
-            goal.speed = 0.1   # Moderate speed
+            goal.speed = 0.5   # Maximum speed for responsiveness (was 0.3)
             goal.force = 0.0   # No force needed for opening
             goal.epsilon.inner = 0.005
             goal.epsilon.outer = 0.005
@@ -2266,10 +2273,10 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         
         # Update tracking
         self._last_gripper_command = gripper_state
-        self._gripper_command_time = current_time
+        self._gripper_command_time = time.time()
         
-        # Debug output to confirm command was sent
-        if self.debug_moveit:
+        # Only log during testing/reset, not during normal VR operation
+        if wait_for_completion and self.debug_moveit:
             action_type = "CLOSE" if gripper_state == GRIPPER_CLOSE else "OPEN"
             self.get_logger().info(f"🔧 Gripper command sent: {action_type} (width: {goal.width}, force: {goal.force})")
         

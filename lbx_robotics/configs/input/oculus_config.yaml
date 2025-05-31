@@ -1,0 +1,22 @@
+# Configuration for the Oculus Input Node
+
+oculus_input_node:
+  ros__parameters:
+    # Connection mode: 'usb' or 'network'
+    connection_mode: "usb" # Default to USB
+
+    # Network settings (only used if connection_mode is 'network')
+    oculus_ip_address: "192.168.1.123" # Replace with your Oculus Quest IP
+    oculus_port: 5555
+
+    # Data publishing settings
+    publish_rate_hz: 60.0 # Rate to query Oculus and publish data
+
+    # TF and Frame ID settings
+    publish_tf: True # Whether to publish TF transforms for controllers
+    base_frame_id: "oculus_world" # Base frame for Oculus controller poses (e.g., a world frame or robot base_link)
+    left_controller_frame_id: "oculus_left_controller"
+    right_controller_frame_id: "oculus_right_controller"
+
+    # OculusReader internal FPS counter (for debugging, not ROS publishing rate)
+    print_fps: False

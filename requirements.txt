@@ -25,6 +25,8 @@ pyyaml  # For camera configuration files
 # VR dependencies
 requests
 websocket-client
+pure-python-adb
+tf-transformations
 
 # Optional dependencies for development
 pytest  # For running tests

@@ -3,7 +3,7 @@
 <package format="3">
   <name>ros2_moveit_franka</name>
   <version>0.0.1</version>
-  <description>ROS 2 MoveIt package for controlling Franka FR3 arm</description>
+  <description>ROS 2 MoveIt package for controlling Franka FR3 arm with robust error handling</description>
   
   <maintainer email="your.email@example.com">Your Name</maintainer>
   <license>MIT</license>
@@ -13,6 +13,7 @@
   <depend>moveit_commander</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>diagnostic_msgs</depend>
   <depend>franka_hardware</depend>
   <depend>franka_fr3_moveit_config</depend>
   <depend>franka_msgs</depend>

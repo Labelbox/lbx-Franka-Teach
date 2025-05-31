@@ -51,11 +51,13 @@ print_help() {
     echo "  $0 --enable-cameras       # Run with camera recording"
     echo ""
     echo "Prerequisites:"
-    echo "  1. Start MoveIt first:"
-    echo "     ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=$ROBOT_IP"
+    echo "  1. Start the robust Franka system first:"
+    echo "     cd ros2_moveit_franka && ./run_robust_franka.sh --robot-ip $ROBOT_IP"
     echo ""
-    echo "  2. Ensure all MoveIt services are running:"
-    echo "     ros2 service list | grep -E '(compute_ik|compute_fk|get_planning_scene)'"
+    echo "  2. Ensure the system shows 'Robot state: READY' in the output"
+    echo ""
+    echo "  3. Verify services are available:"
+    echo "     ros2 service list | grep -E '(get_planning_scene|compute_cartesian_path|apply_planning_scene)'"
     echo ""
 }
 
@@ -87,15 +89,32 @@ check_dependencies() {
     fi
     echo -e "${GREEN}✅ VR server file found${NC}"
     
-    # Check if MoveIt is running (optional check)
+    # Check if MoveIt is running - updated to check for actual service names
     echo -e "${YELLOW}⚠️  Checking if MoveIt is running...${NC}"
-    timeout 5 ros2 service list | grep -q compute_ik
-    if [ $? -eq 0 ]; then
+    
+    # Source ROS environment to ensure we can see services
+    if [ -f "/opt/ros/humble/setup.bash" ]; then
+        source /opt/ros/humble/setup.bash
+    fi
+    
+    # Set ROS_DOMAIN_ID to match the robust system
+    export ROS_DOMAIN_ID=42
+    
+    # Check for the actual MoveIt services that are available
+    timeout 10 bash -c 'ros2 service list' > /tmp/services_list 2>/dev/null
+    if [ $? -eq 0 ] && ( grep -q "get_planning_scene\|compute_cartesian_path\|apply_planning_scene" /tmp/services_list ); then
         echo -e "${GREEN}✅ MoveIt services detected${NC}"
+        rm -f /tmp/services_list
     else
         echo -e "${YELLOW}⚠️  MoveIt services not detected${NC}"
-        echo "   Start MoveIt with:"
-        echo "   ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=$ROBOT_IP"
+        echo "   Available services:"
+        if [ -f /tmp/services_list ]; then
+            grep -E "(planning|moveit|compute|move_)" /tmp/services_list | head -5 || echo "   No MoveIt-related services found"
+            rm -f /tmp/services_list
+        fi
+        echo ""
+        echo "   Make sure the robust Franka system is running in another terminal:"
+        echo "   cd ros2_moveit_franka && ./run_robust_franka.sh --robot-ip $ROBOT_IP"
         echo ""
         echo "   Continue anyway? (y/N)"
         read -r response

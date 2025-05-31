@@ -1,3 +1,0 @@
-[0.000000] (-) TimerEvent: {}
-[0.000123] (-) JobUnselected: {'identifier': 'ros2_moveit_franka'}
-[0.000514] (-) EventReactorShutdown: {}

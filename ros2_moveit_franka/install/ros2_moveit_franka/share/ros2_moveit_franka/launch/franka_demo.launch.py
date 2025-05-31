@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Launch file for Franka FR3 MoveIt demo
-This launch file starts the Franka MoveIt configuration and runs the simple arm control demo.
+This launch file starts the Franka MoveIt configuration and runs the robust control demo.
 """
 
 from launch import LaunchDescription
@@ -55,11 +55,11 @@ def generate_launch_description():
         }.items()
     )
     
-    # Launch our demo node
+    # Launch our robust demo node
     demo_node = Node(
         package='ros2_moveit_franka',
-        executable='simple_arm_control',
-        name='franka_demo_controller',
+        executable='robust_franka_control',
+        name='franka_robust_controller',
         output='screen',
         parameters=[
             {'use_sim_time': False}

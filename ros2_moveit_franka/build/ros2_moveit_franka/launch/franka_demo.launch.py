@@ -1,1 +1,0 @@
-/home/labelbox/projects/moveit/lbx-Franka-Teach/ros2_moveit_franka/launch/franka_demo.launch.py

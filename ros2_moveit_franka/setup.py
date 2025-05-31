@@ -13,19 +13,23 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml') if os.path.exists('config') else []),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        'psutil',  # For system monitoring
+        'dataclasses',  # For health metrics
+    ],
     zip_safe=True,
     maintainer='Your Name',
     maintainer_email='your.email@example.com',
-    description='ROS 2 MoveIt package for controlling Franka FR3 arm',
+    description='ROS 2 MoveIt package for controlling Franka FR3 arm with robust error handling',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'franka_moveit_control = ros2_moveit_franka.franka_moveit_control:main',
-            'simple_arm_control = ros2_moveit_franka.simple_arm_control:main',
+            'robust_franka_control = ros2_moveit_franka.robust_franka_control:main',
+            'system_health_monitor = ros2_moveit_franka.system_health_monitor:main',
         ],
     },
 ) 

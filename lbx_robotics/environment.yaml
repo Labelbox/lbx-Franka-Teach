@@ -1,8 +1,8 @@
 # Conda environment for lbx_robotics
 name: lbx_robotics_env
 channels:
-  - intel # For pyrealsense2
-  - conda-forge # For many scientific and ROS-related packages
+  - conda-forge # Prioritize conda-forge for broader package availability
+  - intel # Keep as fallback or if specific Intel builds are needed
   - defaults
 dependencies:
   # --- Python Version ---
@@ -23,8 +23,9 @@ dependencies:
   - psutil # Latest compatible version via conda
 
   # --- Vision & Sensors ---
-  - librealsense # Dependency for pyrealsense2
-  - pyrealsense2 # From Intel channel typically
+  # Try from conda-forge first, as Intel channel might be inaccessible
+  - librealsense
+  - pyrealsense2
 
   # --- Data Recording & Visualization ---
   - mcap # From conda-forge if available, else pip

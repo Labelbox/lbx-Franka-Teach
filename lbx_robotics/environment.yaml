@@ -30,7 +30,7 @@ dependencies:
   # --- Data Recording & Visualization ---
   - mcap
   - blosc
-  - foxglove-websocket
+  # - foxglove-websocket # To be installed via pip
 
   # --- Development & Code Quality ---
   - black

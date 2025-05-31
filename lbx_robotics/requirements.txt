@@ -12,7 +12,7 @@
 
 # If mcap or foxglove-websocket are not found on Conda channels, uncomment them here:
 # mcap
-# foxglove-websocket
+foxglove-websocket
 
 # Python 3.10+ compatible packages (latest versions)
 

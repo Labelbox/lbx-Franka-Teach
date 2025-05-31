@@ -10,7 +10,7 @@ blosc
 mcap
 mcap-ros2-support
 foxglove-schemas-protobuf
-protobuf==3.20.3
+protobuf
 
 # Camera dependencies
 pyrealsense2==2.55.1.6486  # Latest stable Intel RealSense SDK

@@ -317,8 +317,8 @@ class OculusVRServer:
                 # Create ZMQ context and publisher
                 self.context = zmq.Context()
                 self.controller_publisher = self.context.socket(zmq.PUB)
-                self.controller_publisher.bind("tcp://192.168.1.54:5555")
-                print("📡 Controller state publisher bound to tcp://192.168.1.54:5555")
+                self.controller_publisher.bind("tcp://0.0.0.0:5555")
+                print("📡 Controller state publisher bound to tcp://0.0.0.0:5555")
             except Exception as e:
                 print(f"❌ Failed to connect to robot: {e}")
                 sys.exit(1)

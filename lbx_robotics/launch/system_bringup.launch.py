@@ -4,7 +4,7 @@ Main system bringup launch file for the LBX Robotics workspace.
 This file orchestrates the launch of all core components:
 - MoveIt Server (including robot drivers and RViz)
 - Oculus Input Node
-- RealSense Vision Node
+- Generic Vision/Camera Node (e.g., for RealSense or ZED)
 - Franka Control/Teleoperation Node
 - Data Recorder Node
 
@@ -16,8 +16,10 @@ import os
 import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, GroupAction, OpaqueFunction
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 def load_yaml_config(context, config_file_name):
@@ -30,136 +32,190 @@ def load_yaml_config(context, config_file_name):
         with open(config_path, 'r') as f:
             return yaml.safe_load(f)
     except Exception as e:
-        LogInfo(msg=f"Error loading {config_file_name}: {e}").execute(context)
+        print(f"[ERROR] Error loading {config_file_name}: {e}")
         return {}
 
 def launch_setup(context, *args, **kwargs):
     # --- Load Configurations ---
-    ws_config = load_yaml_config(context, 'workspace_config.yaml').get('workspace', {})
-    franka_config = load_yaml_config(context, 'franka_config.yaml').get('franka_fr3', {})
-    packages_config = load_yaml_config(context, 'workspace_config.yaml').get('packages', {})
+    ws_config_path_obj = PathJoinSubstitution([
+        FindPackageShare('lbx_robotics'), 'configs', 'workspace_config.yaml'
+    ])
+    franka_config_path_obj = PathJoinSubstitution([
+        FindPackageShare('lbx_robotics'), 'configs', 'moveit', 'franka_config.yaml'
+    ])
+    # Camera config determination logic is now primarily within CameraNode.
+    # We pass the 'active_camera_type' to potentially influence which *default* config CameraNode tries to load
+    # if no specific camera_config_file is given to it.
+    # However, for clarity in system_bringup, we can still construct a potential path to pass.
+    active_camera_type_val = context.launch_configurations.get('active_camera_type', 'realsense')
+    camera_config_file_override = context.launch_configurations.get('camera_config_file_override', '')
+    
+    specific_camera_config_path = ''
+    if camera_config_file_override and camera_config_file_override != '':
+        specific_camera_config_path = camera_config_file_override
+    else:
+        if active_camera_type_val == 'realsense':
+            specific_camera_config_path = PathJoinSubstitution([
+                FindPackageShare('lbx_robotics'), 'configs', 'sensors', 'realsense_cameras.yaml']
+            ).perform(context)
+        elif active_camera_type_val == 'zed':
+            specific_camera_config_path = PathJoinSubstitution([
+                FindPackageShare('lbx_robotics'), 'configs', 'sensors', 'zed_camera.yaml'] # Ensure this file exists
+            ).perform(context)
+        # If 'none' or 'opencv', specific_camera_config_path remains empty, letting CameraNode try defaults or fail.
 
-    # --- Declare Launch Arguments (with defaults from config) ---
-    robot_ip = LaunchConfiguration('robot_ip', default=franka_config.get('robot_ip', '192.168.1.59'))
-    use_fake_hardware = LaunchConfiguration('use_fake_hardware', default=str(franka_config.get('use_fake_hardware', False)))
-    enable_rviz = LaunchConfiguration('enable_rviz', default=str(franka_config.get('enable_rviz', True)))
-    log_level = LaunchConfiguration('log_level', default=ws_config.get('logging', {}).get('default_level', 'INFO'))
+    ws_config_path = ws_config_path_obj.perform(context)
+    franka_config_path = franka_config_path_obj.perform(context)
 
-    # --- Create list of actions to launch ---
+    ws_config = {}
+    franka_config_main = {}
+    packages_config = {}
+
+    try:
+        with open(ws_config_path, 'r') as f:
+            full_ws_config = yaml.safe_load(f)
+            ws_config = full_ws_config.get('workspace', {})
+            packages_config = full_ws_config.get('packages', {})
+    except Exception as e:
+        print(f"[ERROR] system_bringup: Error loading workspace_config.yaml: {e}")
+
+    try:
+        with open(franka_config_path, 'r') as f:
+            franka_config_main = yaml.safe_load(f).get('franka_fr3', {})
+    except Exception as e:
+        print(f"[ERROR] system_bringup: Error loading franka_config.yaml: {e}")
+
+    # --- Access Launch Arguments (which might override YAML values) ---
+    robot_ip_val = context.launch_configurations.get('robot_ip')
+    use_fake_hardware_val = context.launch_configurations.get('use_fake_hardware')
+    enable_rviz_val = context.launch_configurations.get('enable_rviz')
+    log_level_val = context.launch_configurations.get('log_level')
+    enable_oculus_val = context.launch_configurations.get('enable_oculus')
+    vr_namespace_val = context.launch_configurations.get('vr_namespace')
+    enable_vision_val = context.launch_configurations.get('enable_vision')
+    enable_recorder_val = context.launch_configurations.get('enable_recorder')
+    robot_namespace_val = context.launch_configurations.get('robot_namespace')
+
     launch_actions = []
 
-    # --- 1. MoveIt Server (includes robot drivers, MoveGroup, etc.) ---
+    # --- 1. MoveIt Server ---
     if packages_config.get('lbx_franka_moveit', True):
         moveit_server_launch = IncludeLaunchDescription(
             PythonLaunchDescriptionSource([
-                PathJoinSubstitution([
-                    FindPackageShare('lbx_franka_moveit'),
-                    'launch',
-                    'moveit_server.launch.py'
-                ])
+                PathJoinSubstitution([FindPackageShare('lbx_franka_moveit'), 'launch', 'moveit_server.launch.py'])
             ]),
             launch_arguments={
-                'robot_ip': robot_ip,
-                'use_fake_hardware': use_fake_hardware,
-                'enable_rviz': enable_rviz,
-                'load_gripper': str(franka_config.get('load_gripper', True)),
+                'robot_ip': robot_ip_val,
+                'use_fake_hardware': use_fake_hardware_val,
+                'start_rviz': enable_rviz_val,
+                'franka_config_file': franka_config_path,
             }.items()
         )
         launch_actions.append(moveit_server_launch)
 
     # --- 2. Oculus Input Node ---
     if packages_config.get('lbx_input_oculus', True):
-        oculus_input_node = Node(
-            package='lbx_input_oculus',
-            executable='oculus_node.py', # Assuming Python executable
-            name='oculus_input_node',
-            namespace=LaunchConfiguration('vr_namespace', default=ws_config.get('core',{}).get('vr_namespace', '/vr')),
-            output='screen',
-            parameters=[{
-                'log_level': log_level,
-                # Add other Oculus specific parameters from a config file if needed
-            }],
-            condition=PythonExpression(["'true' == '", use_fake_hardware, "' or ", "'true' == '", LaunchConfiguration('enable_oculus', default='true') , "'"]) # Example condition
+        oculus_launch_file_path = PathJoinSubstitution([
+            FindPackageShare('lbx_input_oculus'), 'launch', 'oculus_input.launch.py'
+        ])
+        oculus_input_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(oculus_launch_file_path),
+            condition=PythonExpression(["'true' == '", enable_oculus_val, "'"])
         )
-        launch_actions.append(oculus_input_node)
+        namespaced_oculus_launch = GroupAction(
+            actions=[
+                PushRosNamespace(namespace=vr_namespace_val),
+                oculus_input_launch
+            ],
+        )
+        launch_actions.append(namespaced_oculus_launch)
 
-    # --- 3. RealSense Vision Node ---
-    if packages_config.get('lbx_vision_realsense', True):
-        realsense_node_launch = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([
-                PathJoinSubstitution([
-                    FindPackageShare('lbx_vision_realsense'),
-                    'launch',
-                    'realsense.launch.py' # Assuming this launch file exists
-                ])
-            ]),
-            launch_arguments={
-                'log_level': log_level,
-                'config_file': PathJoinSubstitution([
-                    FindPackageShare('lbx_robotics'), 'configs', 'realsense_cameras.yaml'
-                ])
-            }.items(),
-            condition=PythonExpression(["'true' == '", use_fake_hardware, "' or ", "'true' == '", LaunchConfiguration('enable_realsense', default='true') , "'"]) # Example condition
+    # --- 3. Generic Vision/Camera Node ---
+    if packages_config.get('lbx_vision_camera', True) and enable_vision_val == 'true' and active_camera_type_val != 'none':
+        vision_launch_args = {
+            'camera_config_file': specific_camera_config_path, 
+            'enable_publishing': 'true',
+            'run_startup_tests': 'true',
+            'log_level': log_level_val,
+        }
+        # Only add auto_config_generation_dir if specific_camera_config_path is empty, signaling auto-detection path
+        if not specific_camera_config_path or specific_camera_config_path == '':
+            vision_launch_args['auto_config_generation_dir'] = PathJoinSubstitution([
+                FindPackageShare('lbx_robotics'), 'configs', 'sensors']
+            ).perform(context)
+            
+        vision_camera_launch = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource([PathJoinSubstitution([FindPackageShare('lbx_vision_camera'), 'launch', 'camera.launch.py'])]),
+            launch_arguments=vision_launch_args.items(),
+            condition=PythonExpression(["'true' == '", enable_vision_val, "'"]) # Redundant if check above, but good practice
         )
-        launch_actions.append(realsense_node_launch)
+        launch_actions.append(vision_camera_launch)
         
     # --- 4. Franka Control/Teleoperation Node ---
     if packages_config.get('lbx_franka_control', True):
+        teleop_config_path = PathJoinSubstitution([FindPackageShare('lbx_franka_control'), 'config', 'teleop_config.yaml'])
         franka_control_node = Node(
             package='lbx_franka_control',
-            executable='teleop_node.py', # Assuming Python executable
+            executable='teleop_node.py',
             name='franka_teleop_node',
-            namespace=LaunchConfiguration('robot_namespace', default=ws_config.get('core',{}).get('robot_namespace', '/fr3')),
+            namespace=robot_namespace_val,
             output='screen',
             parameters=[
-                PathJoinSubstitution([FindPackageShare('lbx_robotics'), 'configs', 'franka_config.yaml']),
-                PathJoinSubstitution([FindPackageShare('lbx_franka_control'), 'config', 'teleop_config.yaml']), # Assuming a teleop_config.yaml
+                franka_config_path,
+                teleop_config_path,
                 {
-                    'log_level': log_level,
-                    'control_mode': franka_config.get('control_mode', 'moveit')
                 }
-            ]
+            ],
+            arguments=['--ros-args', '--log-level', log_level_val]
         )
         launch_actions.append(franka_control_node)
 
     # --- 5. Data Recorder Node ---
     if packages_config.get('lbx_data_recorder', True):
+        recorder_config_path = PathJoinSubstitution([FindPackageShare('lbx_data_recorder'), 'config', 'recorder_config.yaml'])
         data_recorder_node = Node(
             package='lbx_data_recorder',
-            executable='mcap_recorder_node.py', # Assuming Python executable
+            executable='mcap_recorder_node.py',
             name='mcap_recorder_node',
             output='screen',
-            parameters=[{
-                'log_level': log_level,
-                'default_format': ws_config.get('recording', {}).get('default_format', 'mcap'),
-                'topics_to_record': ws_config.get('recording', {}).get('topics_to_record', [])
-            }],
-            condition=LaunchConfiguration('enable_recorder', default='false')
+            parameters=[recorder_config_path],
+            arguments=['--ros-args', '--log-level', log_level_val],
+            condition=PythonExpression(["'true' == '", enable_recorder_val, "'"])
         )
         launch_actions.append(data_recorder_node)
 
-    # --- Logging Information ---
-    launch_actions.append(LogInfo(msg=[
-        "LBX Robotics System Bringup Launching...\n",
-        "Robot IP: ", robot_ip, "\n",
-        "Use Fake Hardware: ", use_fake_hardware, "\n",
-        "Log Level: ", log_level, "\n",
-        "Enabled Packages: ", str({k:v for k,v in packages_config.items() if v}),
-    ]))
+    log_actions = [
+        LogInfo(msg=f"--- LBX Robotics System Bringup ---"),
+        LogInfo(msg=f"Robot IP: {robot_ip_val}"),
+        LogInfo(msg=f"Use Fake Hardware: {use_fake_hardware_val}"),
+        LogInfo(msg=f"Global Log Level: {log_level_val}"),
+        LogInfo(msg=f"Oculus Enabled: {enable_oculus_val}, Namespace: {vr_namespace_val}"),
+        LogInfo(msg=f"Vision: {enable_vision_val} (ActiveType: {active_camera_type_val}, ConfigUsed: {specific_camera_config_path or 'NodeAutoDetected'})"),
+        LogInfo(msg=f"Recorder Enabled: {enable_recorder_val}"),
+        LogInfo(msg=f"Packages Configured to Launch (from workspace_config.yaml): { {k:v for k,v in packages_config.items() if v} }")
+    ]
 
-    return [GroupAction(actions=launch_actions)]
+    return [GroupAction(actions=log_actions + launch_actions)]
 
 def generate_launch_description():
-    declared_arguments = []
-
-    declared_arguments.append(DeclareLaunchArgument('robot_ip', description='IP address of the Franka robot.'))
-    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', description='Use fake hardware for testing.'))
-    declared_arguments.append(DeclareLaunchArgument('enable_rviz', description='Enable RViz visualization.'))
-    declared_arguments.append(DeclareLaunchArgument('log_level', description='Logging level for nodes.'))
-    declared_arguments.append(DeclareLaunchArgument('vr_namespace', default_value='/vr', description='Namespace for VR components.'))
-    declared_arguments.append(DeclareLaunchArgument('robot_namespace', default_value='/fr3', description='Namespace for robot components.'))
-    declared_arguments.append(DeclareLaunchArgument('enable_oculus', default_value='true', description='Enable Oculus input node.'))
-    declared_arguments.append(DeclareLaunchArgument('enable_realsense', default_value='true', description='Enable RealSense vision node.'))
-    declared_arguments.append(DeclareLaunchArgument('enable_recorder', default_value='false', description='Enable data recorder node.'))
+    default_ws_config = PathJoinSubstitution([FindPackageShare('lbx_robotics'), 'configs', 'workspace_config.yaml'])
+    default_franka_config = PathJoinSubstitution([FindPackageShare('lbx_robotics'), 'configs', 'moveit', 'franka_config.yaml'])
+    
+    declared_arguments = [
+        DeclareLaunchArgument('robot_ip', default_value='192.168.1.59', description='IP address of the Franka robot.'),
+        DeclareLaunchArgument('use_fake_hardware', default_value='false', description='Use fake hardware for testing.'),
+        DeclareLaunchArgument('enable_rviz', default_value='true', description='Enable RViz visualization.'),
+        DeclareLaunchArgument('log_level', default_value='info', description='Global logging level for most nodes.'),
+        DeclareLaunchArgument('vr_namespace', default_value='/vr', description='Namespace for VR components.'),
+        DeclareLaunchArgument('robot_namespace', default_value='/fr3', description='Namespace for robot components.'),
+        DeclareLaunchArgument('enable_oculus', default_value='true', description='Enable Oculus input node.'),
+        DeclareLaunchArgument('enable_vision', default_value='true', description='Enable generic vision camera node.'),
+        DeclareLaunchArgument('active_camera_type', default_value='realsense', choices=['realsense', 'zed', 'none'], description='Primary camera type to configure/use (realsense, zed, or none).'),
+        DeclareLaunchArgument('camera_config_file_override', default_value='', description='Full path to a specific camera config YAML to override auto-selection.'),
+        DeclareLaunchArgument('enable_recorder', default_value='false', description='Enable data recorder node.'),
+        
+        DeclareLaunchArgument('workspace_config_file', default_value=default_ws_config, description='Path to workspace_config.yaml'),
+        DeclareLaunchArgument('franka_config_file', default_value=default_franka_config, description='Path to franka_config.yaml for MoveIt')
+    ]
 
     return LaunchDescription(declared_arguments + [OpaqueFunction(function=launch_setup)]) 

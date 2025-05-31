@@ -10,7 +10,11 @@ oculus_input_node:
     oculus_port: 5555
 
     # Data publishing settings
-    publish_rate_hz: 60.0 # Rate to query Oculus and publish data
+    publish_rate_hz: 60.0 # Rate to query Oculus and publish data to ROS topics
+
+    # Oculus polling settings (how fast to get data from the device itself)
+    poll_rate_hz: 60.0 # Rate to poll the OculusReader for new data
+    queue_size: 10 # Size of the internal queue buffering Oculus data before publishing
 
     # TF and Frame ID settings
     publish_tf: True # Whether to publish TF transforms for controllers

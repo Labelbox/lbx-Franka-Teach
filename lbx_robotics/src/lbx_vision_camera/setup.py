@@ -2,7 +2,8 @@ from setuptools import find_packages, setup
 import os
 from glob import glob
 
-package_name = 'lbx_input_oculus'
+package_name = 'lbx_vision_camera'
+# The camera_utilities submodule will remain as is internally for now
 
 setup(
     name=package_name,
@@ -14,24 +15,30 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
-        (os.path.join('share', package_name, 'oculus_reader', 'APK'), glob(os.path.join('lbx_input_oculus', 'oculus_reader', 'APK', '*.apk'))),
     ],
     install_requires=[
         'setuptools',
+        'rclpy',
+        'sensor_msgs',
+        'geometry_msgs',
+        'cv_bridge',
+        'tf2_ros_py',
+        'opencv-python',
+        'PyYAML',
         'numpy',
-        'pure-python-adb',
-        'tf-transformations',
+        'pyrealsense2', # Keep realsense for now, can be made optional later
+        # Add ZED SDK python dep here if it becomes a direct pip installable item
         'diagnostic_updater',
     ],
     zip_safe=True,
     maintainer='User',
     maintainer_email='user@example.com',
-    description='ROS2 package to read and publish Oculus Quest controller data.',
+    description='ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED).',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'oculus_node = lbx_input_oculus.oculus_node:main',
+            'camera_node = lbx_vision_camera.camera_node:main', # Renamed executable and node file
         ],
     },
 ) 

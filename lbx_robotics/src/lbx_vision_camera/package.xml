@@ -1,25 +1,27 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>lbx_input_oculus</name>
+  <name>lbx_vision_camera</name>
   <version>0.0.1</version>
-  <description>ROS2 package to read and publish Oculus Quest controller data.</description>
+  <description>ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED).</description>
   <maintainer email="user@example.com">User</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
-  <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>cv_bridge</depend>
   <depend>tf2_ros_py</depend>
-  <depend>python3-numpy</depend> <!-- Or just numpy if managed via pip -->
+  <depend>python3-opencv</depend>
+  <depend>python3-yaml</depend>
+  <depend>python3-numpy</depend>
   <depend>diagnostic_updater</depend>
   <depend>diagnostic_msgs</depend>
 
-  <!-- For ppadb, typically installed via pip. Add to requirements.txt or ensure system availability. -->
-  <!-- <exec_depend>python3-ppadb</exec_depend> -->
-
+  <!-- SDKs like pyrealsense2 or ZED SDK Python API are typically installed via pip or from source -->
+  <!-- Ensure system availability or add to a global requirements.txt -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

@@ -1,11 +1,10 @@
 #!/bin/bash
-# Setup script for the lbx_robotics Conda environment and franka_ros2 integration
+# Setup script for the lbx_robotics Conda environment with integrated franka_ros2
 
 # --- Configuration ---
 ENV_NAME="lbx_robotics_env"
 ENV_FILE="environment.yaml"
 REQ_FILE="requirements.txt"
-FRANKA_WS_DIR="$HOME/franka_ros2_ws"
 # Get the directory of this script to ensure relative paths work
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
@@ -40,8 +39,8 @@ echo_step() {
 }
 
 # --- Pre-flight Checks ---
-echo_info "Starting environment setup for '$ENV_NAME' with franka_ros2 integration..."
-echo_info "This script will set up both conda environment and ROS 2 franka_ros2 workspace."
+echo_info "Starting environment setup for '$ENV_NAME' with integrated franka_ros2..."
+echo_info "This script will set up conda environment and integrate franka_ros2 into lbx_robotics workspace."
 echo_info "Script location: $SCRIPT_DIR"
 
 if ! command -v conda &> /dev/null; then
@@ -90,6 +89,14 @@ if [ -f "$SCRIPT_DIR/$REQ_FILE" ]; then
     fi
 else
     echo_info "Pip requirements file '$REQ_FILE' not found in $SCRIPT_DIR/. Skipping pip installation."
+fi
+
+# --- Install additional Python packages needed for franka_ros2 in conda environment ---
+echo_step "Installing additional Python packages for franka_ros2 integration..."
+if conda run -n "$ENV_NAME" --no-capture-output --live-stream pip install catkin_pkg empy lark; then
+    echo_success "Additional Python packages for franka_ros2 installed successfully."
+else
+    echo_warn "Some additional packages may not have installed correctly. Continuing anyway."
 fi
 
 # --- ROS 2 Humble Installation ---
@@ -141,37 +148,39 @@ fi
 echo_info "Updating rosdep..."
 rosdep update
 
-# --- franka_ros2 Workspace Setup ---
-echo_step "Setting up franka_ros2 workspace..."
+# --- Integrate franka_ros2 into lbx_robotics workspace ---
+echo_step "Integrating franka_ros2 packages into lbx_robotics workspace..."
 
-# Create workspace directory
-if [ ! -d "$FRANKA_WS_DIR" ]; then
-    echo_info "Creating franka_ros2 workspace at $FRANKA_WS_DIR..."
-    mkdir -p "$FRANKA_WS_DIR/src"
-else
-    echo_info "franka_ros2 workspace already exists at $FRANKA_WS_DIR."
+# Ensure we're in the lbx_robotics directory
+cd "$SCRIPT_DIR"
+
+# Create src directory if it doesn't exist
+if [ ! -d "$SCRIPT_DIR/src" ]; then
+    echo_info "Creating src directory in lbx_robotics workspace..."
+    mkdir -p "$SCRIPT_DIR/src"
 fi
 
-cd "$FRANKA_WS_DIR"
-
-# Clone franka_ros2 repository if not already present
-if [ ! -d "$FRANKA_WS_DIR/src/franka_ros2" ] && [ ! -d "$FRANKA_WS_DIR/src/.git" ]; then
-    echo_info "Cloning franka_ros2 repository..."
-    if git clone https://github.com/frankaemika/franka_ros2.git src; then
-        echo_success "franka_ros2 repository cloned successfully."
+# Clone franka_ros2 repository into src if not already present
+if [ ! -d "$SCRIPT_DIR/src/franka_ros2" ]; then
+    echo_info "Cloning franka_ros2 repository into lbx_robotics/src/..."
+    cd "$SCRIPT_DIR/src"
+    if git clone https://github.com/frankaemika/franka_ros2.git; then
+        echo_success "franka_ros2 repository cloned successfully into lbx_robotics workspace."
     else
         echo_error "Failed to clone franka_ros2 repository."
         exit 1
     fi
+    cd "$SCRIPT_DIR"
 else
-    echo_info "franka_ros2 repository already present in workspace."
+    echo_info "franka_ros2 repository already present in lbx_robotics/src/."
 fi
 
-# Import additional dependencies
-echo_info "Importing franka_ros2 dependencies..."
-if [ -f "$FRANKA_WS_DIR/src/franka.repos" ]; then
-    if vcs import src < src/franka.repos --recursive --skip-existing; then
-        echo_success "franka_ros2 dependencies imported successfully."
+# Import franka_ros2 dependencies into the lbx_robotics workspace
+echo_info "Importing franka_ros2 dependencies into lbx_robotics workspace..."
+if [ -f "$SCRIPT_DIR/src/franka_ros2/franka.repos" ]; then
+    cd "$SCRIPT_DIR"
+    if vcs import src < src/franka_ros2/franka.repos --recursive --skip-existing; then
+        echo_success "franka_ros2 dependencies imported successfully into lbx_robotics workspace."
     else
         echo_warn "Some dependencies may not have imported correctly. Continuing anyway."
     fi
@@ -179,22 +188,13 @@ else
     echo_warn "franka.repos file not found. Some dependencies may be missing."
 fi
 
-# Install dependencies with rosdep
+# Install dependencies with rosdep for the entire lbx_robotics workspace
 echo_info "Installing workspace dependencies with rosdep..."
+cd "$SCRIPT_DIR"
 if rosdep install --from-paths src --ignore-src --rosdistro humble -y; then
     echo_success "Workspace dependencies installed successfully."
 else
     echo_warn "Some dependencies may not have installed correctly. Continuing anyway."
-fi
-
-# Build the workspace
-echo_step "Building franka_ros2 workspace..."
-if colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release; then
-    echo_success "franka_ros2 workspace built successfully."
-else
-    echo_error "Failed to build franka_ros2 workspace."
-    echo_info "You may need to resolve build errors manually."
-    exit 1
 fi
 
 # --- Final Instructions / Activation ---
@@ -211,22 +211,26 @@ echo ""
 echo -e "${CYAN}${BOLD}2. Source ROS 2 environment:${NC}"
 echo -e "   ${CYAN}source /opt/ros/humble/setup.bash${NC}"
 echo ""
-echo -e "${CYAN}${BOLD}3. Source franka_ros2 workspace:${NC}"
-echo -e "   ${CYAN}source $FRANKA_WS_DIR/install/setup.bash${NC}"
-echo ""
-echo -e "${CYAN}${BOLD}4. Navigate to your lbx_robotics workspace:${NC}"
+echo -e "${CYAN}${BOLD}3. Navigate to lbx_robotics workspace:${NC}"
 echo -e "   ${CYAN}cd $SCRIPT_DIR${NC}"
 echo ""
-echo_info "The complete environment includes:"
+echo -e "${CYAN}${BOLD}4. Build the unified workspace:${NC}"
+echo -e "   ${CYAN}colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release${NC}"
+echo ""
+echo -e "${CYAN}${BOLD}5. Source the built workspace:${NC}"
+echo -e "   ${CYAN}source install/setup.bash${NC}"
+echo ""
+echo_info "The unified workspace now includes:"
+echo_info "  • Your custom lbx_robotics packages"
+echo_info "  • Official franka_ros2 packages integrated"
 echo_info "  • Conda environment with Python packages"
 echo_info "  • ROS 2 Humble with development tools"
-echo_info "  • franka_ros2 packages for Franka robot control"
 echo_info "  • Intel RealSense camera support"
 echo_info "  • Oculus VR input capabilities"
 echo_info "  • MCAP data recording"
 echo ""
 echo -e "${GREEN}${BOLD}Test your setup:${NC}"
 echo -e "  • Test franka_ros2: ${CYAN}ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=dont-care use_fake_hardware:=true${NC}"
-echo -e "  • Build lbx_robotics: ${CYAN}colcon build${NC} (from lbx_robotics directory)"
+echo -e "  • List all packages: ${CYAN}ros2 pkg list | grep -E '(franka|lbx)'${NC}"
 echo ""
-echo_info "franka_ros2 workspace location: $FRANKA_WS_DIR" 
+echo_info "All packages are now in a single unified workspace at: $SCRIPT_DIR" 

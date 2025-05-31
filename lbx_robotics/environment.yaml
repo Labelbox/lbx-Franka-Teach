@@ -2,39 +2,39 @@
 name: lbx_robotics_env
 channels:
   - conda-forge # Prioritize conda-forge for broader package availability
-  - intel # Keep as fallback or if specific Intel builds are needed
   - defaults
+  # - intel            # Commenting out Intel channel due to access issues
 dependencies:
   # --- Python Version ---
   - python=3.10 # Align with ROS Humble
 
   # --- Core Processing & Numerics ---
-  - numpy # Latest via conda
-  - scipy # Latest via conda
-  - opencv # Latest via conda-forge
-  - pyyaml # Latest via conda-forge
+  - numpy
+  - scipy
+  - opencv
+  - pyyaml
 
   # --- Communication & Networking ---
-  - protobuf # Latest compatible version via conda
-  - websocket-client # Latest via conda-forge
-  - websockets # Latest via conda-forge
-  - requests # Latest via conda-forge
-  - pyzmq # Latest via conda-forge
-  - psutil # Latest compatible version via conda
+  - protobuf
+  - websocket-client
+  - websockets
+  - requests
+  - pyzmq
+  - psutil
 
   # --- Vision & Sensors ---
-  # Try from conda-forge first, as Intel channel might be inaccessible
-  - librealsense
-  - pyrealsense2
+  # Explicitly try from conda-forge
+  - conda-forge::librealsense
+  - conda-forge::pyrealsense2
 
   # --- Data Recording & Visualization ---
-  - mcap # From conda-forge if available, else pip
-  - blosc # From conda-forge
-  - foxglove-websocket # From conda-forge if available, else pip
+  - mcap
+  - blosc
+  - foxglove-websocket
 
   # --- Development & Code Quality ---
-  - black # From conda-forge
-  - flake8 # From conda-forge
+  - black
+  - flake8
 
   # --- Pip for packages not on conda or for specific versions ---
   - pip

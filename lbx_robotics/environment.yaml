@@ -1,0 +1,43 @@
+# Conda environment for lbx_robotics
+name: lbx_robotics_env
+channels:
+  - intel # For pyrealsense2
+  - conda-forge # For many scientific and ROS-related packages
+  - defaults
+dependencies:
+  # --- Python Version ---
+  - python=3.10 # Align with ROS Humble
+
+  # --- Core Processing & Numerics ---
+  - numpy # Latest via conda
+  - scipy # Latest via conda
+  - opencv # Latest via conda-forge
+  - pyyaml # Latest via conda-forge
+
+  # --- Communication & Networking ---
+  - protobuf # Latest compatible version via conda
+  - websocket-client # Latest via conda-forge
+  - websockets # Latest via conda-forge
+  - requests # Latest via conda-forge
+  - pyzmq # Latest via conda-forge
+  - psutil # Latest compatible version via conda
+
+  # --- Vision & Sensors ---
+  - librealsense # Dependency for pyrealsense2
+  - pyrealsense2 # From Intel channel typically
+
+  # --- Data Recording & Visualization ---
+  - mcap # From conda-forge if available, else pip
+  - blosc # From conda-forge
+  - foxglove-websocket # From conda-forge if available, else pip
+
+  # --- Development & Code Quality ---
+  - black # From conda-forge
+  - flake8 # From conda-forge
+
+  # --- Pip for packages not on conda or for specific versions ---
+  - pip
+  # Pip can be used for packages listed in requirements.txt after env creation
+  # e.g., using a pip section here or a separate requirements.txt file:
+  # - pip:
+  #   - some-pip-only-package

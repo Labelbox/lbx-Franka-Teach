@@ -1,4 +1,19 @@
-# LBX Robotics Python Dependencies
+# LBX Robotics Python Dependencies (for pip, after Conda setup)
+# Use this file for packages best installed via pip within the Conda environment.
+
+# Example for a pip-only package or a specific version:
+# some-pip-only-package==1.2.3
+
+# Most dependencies should be managed by environment.yaml for better compatibility.
+# This file is primarily for:
+# 1. Packages not available on Conda channels (intel, conda-forge).
+# 2. When a very specific version available only on PyPI is needed.
+# 3. Development tools or utilities that are typically pip-installed.
+
+# If mcap or foxglove-websocket are not found on Conda channels, uncomment them here:
+# mcap
+# foxglove-websocket
+
 # Python 3.10+ compatible packages (latest versions)
 
 # Core data processing
@@ -24,9 +39,7 @@ psutil
 pyrealsense2
 
 # Data Recording & Visualization
-mcap
 blosc
-foxglove-websocket
 
 # Development & Code Quality
 black

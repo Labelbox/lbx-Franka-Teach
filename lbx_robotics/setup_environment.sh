@@ -36,6 +36,9 @@ echo_warn() {
 
 # --- Pre-flight Checks ---
 echo_info "Starting environment setup for '$ENV_NAME'..."
+echo_info "This script assumes it is run from the 'lbx_robotics' directory,"
+echo_info "and that '$ENV_FILE' and '$REQ_FILE' are also in this directory."
+echo_info "Script location: $SCRIPT_DIR"
 
 if ! command -v conda &> /dev/null; then
     echo_error "Conda is not installed or not in your PATH. Please install Miniconda or Anaconda."
@@ -45,6 +48,7 @@ echo_success "Conda found."
 
 if [ ! -f "$SCRIPT_DIR/$ENV_FILE" ]; then
     echo_error "Environment file '$ENV_FILE' not found in $SCRIPT_DIR/"
+    echo_error "Please ensure you are running this script from the root of the 'lbx_robotics' workspace."
     exit 1
 fi
 
@@ -58,29 +62,29 @@ if conda env list | grep -q "^$ENV_NAME\s"; then
     # Optionally, add logic here to ask if the user wants to update or remove & recreate.
     # For now, we'll proceed to ensure pip packages are installed/updated.
 else
-    echo_info "Conda environment '$ENV_NAME' not found. Creating it from $ENV_FILE..."
+    echo_info "Conda environment '$ENV_NAME' not found. Creating it from $SCRIPT_DIR/$ENV_FILE..."
     if conda env create -f "$SCRIPT_DIR/$ENV_FILE" -n "$ENV_NAME"; then
         echo_success "Conda environment '$ENV_NAME' created successfully."
     else
-        echo_error "Failed to create Conda environment '$ENV_NAME' from $ENV_FILE."
+        echo_error "Failed to create Conda environment '$ENV_NAME' from $SCRIPT_DIR/$ENV_FILE."
         exit 1
     fi
 fi
 
 # --- Install Pip Dependencies --- 
-echo_info "Installing/updating pip packages from $REQ_FILE into '$ENV_NAME' environment..."
+echo_info "Installing/updating pip packages from $SCRIPT_DIR/$REQ_FILE into '$ENV_NAME' environment..."
 if [ -f "$SCRIPT_DIR/$REQ_FILE" ]; then
     # Use conda run to execute pip install within the target environment
     # --no-capture-output and --live-stream allow seeing pip's output directly
     if conda run -n "$ENV_NAME" --no-capture-output --live-stream pip install -r "$SCRIPT_DIR/$REQ_FILE"; then
-        echo_success "Pip packages installed/updated successfully from $REQ_FILE."
+        echo_success "Pip packages installed/updated successfully from $SCRIPT_DIR/$REQ_FILE."
     else
-        echo_error "Failed to install/update pip packages from $REQ_FILE."
-        echo_info "You might need to activate the environment (\`conda activate $ENV_NAME\`) and run \`pip install -r $REQ_FILE\` manually to troubleshoot."
+        echo_error "Failed to install/update pip packages from $SCRIPT_DIR/$REQ_FILE."
+        echo_info "You might need to activate the environment (\`conda activate $ENV_NAME\`) and run \`pip install -r $SCRIPT_DIR/$REQ_FILE\` manually to troubleshoot."
         exit 1 # Exit if pip install fails, as it might be critical
     fi
 else
-    echo_info "Pip requirements file '$REQ_FILE' not found. Skipping pip installation."
+    echo_info "Pip requirements file '$REQ_FILE' not found in $SCRIPT_DIR/. Skipping pip installation."
 fi
 
 # --- Final Instructions / Activation ---
@@ -103,9 +107,9 @@ if [ -f "$_CONDA_ACTIVATE_SCRIPT" ]; then
     source "$_CONDA_ACTIVATE_SCRIPT"
     conda activate "$ENV_NAME"
     if [ "$CONDA_DEFAULT_ENV" == "$ENV_NAME" ]; then
-        echo_success "Environment '$ENV_NAME' is now active."
-        echo_info "Starting a new shell session within the environment..."
-        exec "$SHELL" -l # Start a login shell to ensure .bashrc/.zshrc etc. are sourced if they modify prompt
+        echo_success "Environment '$ENV_NAME' is now active in this script's context."
+        echo_info "Starting a new interactive shell session. If the prompt doesn't show '$ENV_NAME', the environment is still active; your shell prompt settings might need adjustment or a new terminal."
+        exec "$SHELL" # Try non-login interactive shell
     else
         echo_error "Failed to automatically activate Conda environment '$ENV_NAME'."
         echo_info "Please activate it manually: ${CYAN}conda activate $ENV_NAME${NC}"
@@ -120,4 +124,10 @@ fi
 
 # The script should ideally not reach here if exec was successful
 echo_error "If you see this message, automatic shell replacement might not have fully worked."
-echo_info "The environment '$ENV_NAME' should be active. If not, please activate manually: ${CYAN}conda activate $ENV_NAME${NC}" 
+echo_info "The environment '$ENV_NAME' should be active. If not, please activate manually: ${CYAN}conda activate $ENV_NAME${NC}"
+
+# Fallback message if script somehow continues past all logic above
+echo_error "An unexpected state was reached after attempting activation."
+echo_info "Please try activating the environment manually:"
+echo -e "  ${CYAN}${BOLD}conda activate $ENV_NAME${NC}"
+exit 1 

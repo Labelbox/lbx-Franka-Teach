@@ -1,10 +1,11 @@
 #!/bin/bash
-# Setup script for the lbx_robotics Conda environment
+# Setup script for the lbx_robotics Conda environment and franka_ros2 integration
 
 # --- Configuration ---
 ENV_NAME="lbx_robotics_env"
 ENV_FILE="environment.yaml"
 REQ_FILE="requirements.txt"
+FRANKA_WS_DIR="$HOME/franka_ros2_ws"
 # Get the directory of this script to ensure relative paths work
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 
@@ -34,10 +35,13 @@ echo_warn() {
     echo -e "${YELLOW}${BOLD}WARNING:${NC}${YELLOW} $1${NC}"
 }
 
+echo_step() {
+    echo -e "${CYAN}${BOLD}STEP:${NC}${CYAN} $1${NC}"
+}
+
 # --- Pre-flight Checks ---
-echo_info "Starting environment setup for '$ENV_NAME'..."
-echo_info "This script assumes it is run from the 'lbx_robotics' directory,"
-echo_info "and that '$ENV_FILE' and '$REQ_FILE' are also in this directory."
+echo_info "Starting environment setup for '$ENV_NAME' with franka_ros2 integration..."
+echo_info "This script will set up both conda environment and ROS 2 franka_ros2 workspace."
 echo_info "Script location: $SCRIPT_DIR"
 
 if ! command -v conda &> /dev/null; then
@@ -57,6 +61,7 @@ if [ ! -f "$SCRIPT_DIR/$REQ_FILE" ]; then
 fi
 
 # --- Create or Update Conda Environment ---
+echo_step "Setting up Conda environment..."
 if conda env list | grep -q "^$ENV_NAME\s"; then
     echo_info "Conda environment '$ENV_NAME' already exists."
     # Optionally, add logic here to ask if the user wants to update or remove & recreate.
@@ -72,7 +77,7 @@ else
 fi
 
 # --- Install Pip Dependencies --- 
-echo_info "Installing/updating pip packages from $SCRIPT_DIR/$REQ_FILE into '$ENV_NAME' environment..."
+echo_step "Installing pip dependencies..."
 if [ -f "$SCRIPT_DIR/$REQ_FILE" ]; then
     # Use conda run to execute pip install within the target environment
     # --no-capture-output and --live-stream allow seeing pip's output directly
@@ -87,47 +92,141 @@ else
     echo_info "Pip requirements file '$REQ_FILE' not found in $SCRIPT_DIR/. Skipping pip installation."
 fi
 
-# --- Final Instructions / Activation ---
-echo ""
-echo_success "-------------------------------------------------------------"
-echo_success " Environment setup complete for '$ENV_NAME'! "
-echo_success "-------------------------------------------------------------"
-echo ""
-echo_info "To use the environment in future sessions, run:"
-echo_info "  ${CYAN}conda activate $ENV_NAME${NC}"
-echo ""
-echo_info "Attempting to activate the environment and start a new interactive shell session..."
+# --- ROS 2 Humble Installation ---
+echo_step "Installing ROS 2 Humble..."
 
-# Try to ensure conda is initialized for the current shell and then activate & exec.
-# This makes the script more robust when called in various ways.
-_CONDA_ACTIVATE_SCRIPT="$(conda info --base)/etc/profile.d/conda.sh"
-if [ -f "$_CONDA_ACTIVATE_SCRIPT" ]; then
-    # Source conda.sh to make `conda activate` available in the current script's subshell
-    # This is often more reliable than `eval $(conda shell.bash hook)` for script execution context
-    source "$_CONDA_ACTIVATE_SCRIPT"
-    conda activate "$ENV_NAME"
-    if [ "$CONDA_DEFAULT_ENV" == "$ENV_NAME" ]; then
-        echo_success "Environment '$ENV_NAME' is now active in this script's context."
-        echo_info "Starting a new interactive shell session. If the prompt doesn't show '$ENV_NAME', the environment is still active; your shell prompt settings might need adjustment or a new terminal."
-        exec "$SHELL" # Try non-login interactive shell
+# Check if ROS 2 Humble is already installed
+if dpkg -l | grep -q "ros-humble-desktop"; then
+    echo_success "ROS 2 Humble Desktop already installed."
+elif dpkg -l | grep -q "ros-humble-ros-base"; then
+    echo_success "ROS 2 Humble Base already installed."
+else
+    echo_info "Installing ROS 2 Humble Desktop and development tools..."
+    
+    # Update package index
+    sudo apt update
+    
+    # Install ROS 2 Humble Desktop (includes visualization tools)
+    if sudo apt install -y ros-humble-desktop ros-dev-tools; then
+        echo_success "ROS 2 Humble Desktop and development tools installed successfully."
     else
-        echo_error "Failed to automatically activate Conda environment '$ENV_NAME'."
-        echo_info "Please activate it manually: ${CYAN}conda activate $ENV_NAME${NC}"
+        echo_error "Failed to install ROS 2 Humble. Please check your internet connection and system compatibility."
         exit 1
     fi
+fi
+
+# Source ROS 2 environment
+if [ -f "/opt/ros/humble/setup.bash" ]; then
+    source /opt/ros/humble/setup.bash
+    echo_success "ROS 2 Humble environment sourced."
 else
-    echo_error "Conda activation script not found at $_CONDA_ACTIVATE_SCRIPT."
-    echo_info "Please ensure Conda is properly installed and initialized for your shell."
-    echo_info "Then, activate the environment manually: ${CYAN}conda activate $ENV_NAME${NC}"
+    echo_error "ROS 2 Humble setup.bash not found. Installation may have failed."
     exit 1
 fi
 
-# The script should ideally not reach here if exec was successful
-echo_error "If you see this message, automatic shell replacement might not have fully worked."
-echo_info "The environment '$ENV_NAME' should be active. If not, please activate manually: ${CYAN}conda activate $ENV_NAME${NC}"
+# --- Install additional tools ---
+echo_step "Installing additional ROS 2 tools..."
+if sudo apt install -y python3-vcstool python3-rosdep python3-colcon-common-extensions; then
+    echo_success "Additional ROS 2 tools installed successfully."
+else
+    echo_warn "Some additional tools may not have installed correctly. Continuing anyway."
+fi
 
-# Fallback message if script somehow continues past all logic above
-echo_error "An unexpected state was reached after attempting activation."
-echo_info "Please try activating the environment manually:"
-echo -e "  ${CYAN}${BOLD}conda activate $ENV_NAME${NC}"
-exit 1 
+# Initialize rosdep if not already done
+if [ ! -f "/etc/ros/rosdep/sources.list.d/20-default.list" ]; then
+    echo_info "Initializing rosdep..."
+    sudo rosdep init
+fi
+
+echo_info "Updating rosdep..."
+rosdep update
+
+# --- franka_ros2 Workspace Setup ---
+echo_step "Setting up franka_ros2 workspace..."
+
+# Create workspace directory
+if [ ! -d "$FRANKA_WS_DIR" ]; then
+    echo_info "Creating franka_ros2 workspace at $FRANKA_WS_DIR..."
+    mkdir -p "$FRANKA_WS_DIR/src"
+else
+    echo_info "franka_ros2 workspace already exists at $FRANKA_WS_DIR."
+fi
+
+cd "$FRANKA_WS_DIR"
+
+# Clone franka_ros2 repository if not already present
+if [ ! -d "$FRANKA_WS_DIR/src/franka_ros2" ] && [ ! -d "$FRANKA_WS_DIR/src/.git" ]; then
+    echo_info "Cloning franka_ros2 repository..."
+    if git clone https://github.com/frankaemika/franka_ros2.git src; then
+        echo_success "franka_ros2 repository cloned successfully."
+    else
+        echo_error "Failed to clone franka_ros2 repository."
+        exit 1
+    fi
+else
+    echo_info "franka_ros2 repository already present in workspace."
+fi
+
+# Import additional dependencies
+echo_info "Importing franka_ros2 dependencies..."
+if [ -f "$FRANKA_WS_DIR/src/franka.repos" ]; then
+    if vcs import src < src/franka.repos --recursive --skip-existing; then
+        echo_success "franka_ros2 dependencies imported successfully."
+    else
+        echo_warn "Some dependencies may not have imported correctly. Continuing anyway."
+    fi
+else
+    echo_warn "franka.repos file not found. Some dependencies may be missing."
+fi
+
+# Install dependencies with rosdep
+echo_info "Installing workspace dependencies with rosdep..."
+if rosdep install --from-paths src --ignore-src --rosdistro humble -y; then
+    echo_success "Workspace dependencies installed successfully."
+else
+    echo_warn "Some dependencies may not have installed correctly. Continuing anyway."
+fi
+
+# Build the workspace
+echo_step "Building franka_ros2 workspace..."
+if colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release; then
+    echo_success "franka_ros2 workspace built successfully."
+else
+    echo_error "Failed to build franka_ros2 workspace."
+    echo_info "You may need to resolve build errors manually."
+    exit 1
+fi
+
+# --- Final Instructions / Activation ---
+echo ""
+echo_success "-------------------------------------------------------------"
+echo_success " Environment setup complete for '$ENV_NAME' + franka_ros2! "
+echo_success "-------------------------------------------------------------"
+echo ""
+echo_info "To use the complete environment, run these commands in order:"
+echo ""
+echo -e "${CYAN}${BOLD}1. Activate Conda environment:${NC}"
+echo -e "   ${CYAN}conda activate $ENV_NAME${NC}"
+echo ""
+echo -e "${CYAN}${BOLD}2. Source ROS 2 environment:${NC}"
+echo -e "   ${CYAN}source /opt/ros/humble/setup.bash${NC}"
+echo ""
+echo -e "${CYAN}${BOLD}3. Source franka_ros2 workspace:${NC}"
+echo -e "   ${CYAN}source $FRANKA_WS_DIR/install/setup.bash${NC}"
+echo ""
+echo -e "${CYAN}${BOLD}4. Navigate to your lbx_robotics workspace:${NC}"
+echo -e "   ${CYAN}cd $SCRIPT_DIR${NC}"
+echo ""
+echo_info "The complete environment includes:"
+echo_info "  • Conda environment with Python packages"
+echo_info "  • ROS 2 Humble with development tools"
+echo_info "  • franka_ros2 packages for Franka robot control"
+echo_info "  • Intel RealSense camera support"
+echo_info "  • Oculus VR input capabilities"
+echo_info "  • MCAP data recording"
+echo ""
+echo -e "${GREEN}${BOLD}Test your setup:${NC}"
+echo -e "  • Test franka_ros2: ${CYAN}ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=dont-care use_fake_hardware:=true${NC}"
+echo -e "  • Build lbx_robotics: ${CYAN}colcon build${NC} (from lbx_robotics directory)"
+echo ""
+echo_info "franka_ros2 workspace location: $FRANKA_WS_DIR" 

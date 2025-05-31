@@ -3,14 +3,17 @@ from pathlib import Path
 import pickle
 import time
 import numpy as np
+import zmq
 
 from deoxys.utils import YamlConfig
-from deoxys.franka_interface import FrankaInterface
 from deoxys.utils import transform_utils
 from deoxys.utils.config_utils import (
     get_default_controller_config,
     verify_controller_config,
 )
+
+# Import protobuf messages
+import deoxys.proto.franka_interface.franka_robot_state_pb2 as franka_robot_state_pb2
 
 from frankateach.utils import notify_component_start
 from frankateach.network import create_response_socket
@@ -79,15 +82,42 @@ class FrankaServer:
             self.action_socket.close()
 
 
-class Robot(FrankaInterface):
+class Robot:
     def __init__(self, cfg, control_freq):
-        super(Robot, self).__init__(
-            general_cfg_file=os.path.join(CONFIG_ROOT, cfg),
-            use_visualizer=False,
-            control_freq=control_freq,
-            has_gripper=True,
-            automatic_gripper_reset=True
-        )
+        # Load configuration
+        self.config = YamlConfig(os.path.join(CONFIG_ROOT, cfg)).as_easydict()
+        self.control_freq = control_freq
+        
+        # Initialize ZMQ subscribers for deoxys services
+        self.context = zmq.Context()
+        
+        # Arm state subscriber (connects to deoxys franka-interface on port 5570)
+        self.arm_subscriber = self.context.socket(zmq.SUB)
+        self.arm_subscriber.setsockopt(zmq.CONFLATE, 1)
+        self.arm_subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.arm_subscriber.connect(f"tcp://localhost:{self.config.NUC.PUB_PORT}")
+        
+        # Gripper state subscriber (connects to deoxys gripper-interface on port 5572)
+        self.gripper_subscriber = self.context.socket(zmq.SUB)
+        self.gripper_subscriber.setsockopt(zmq.CONFLATE, 1)
+        self.gripper_subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.gripper_subscriber.connect(f"tcp://localhost:{self.config.NUC.GRIPPER_PUB_PORT}")
+        
+        # Control publisher (publishes to deoxys on port 5571)
+        self.arm_publisher = self.context.socket(zmq.PUB)
+        self.arm_publisher.bind(f"tcp://*:{self.config.NUC.SUB_PORT}")
+        
+        # Gripper control publisher (publishes to deoxys on port 5573)
+        self.gripper_publisher = self.context.socket(zmq.PUB)
+        self.gripper_publisher.bind(f"tcp://*:{self.config.NUC.GRIPPER_SUB_PORT}")
+        
+        # State variables
+        self.last_eef_quat_and_pos = (None, None)
+        self.last_gripper_action = None
+        self.last_q = None
+        self.received_states = False
+        
+        # Controller config
         self.velocity_controller_cfg = verify_controller_config(
             YamlConfig(
                 os.path.join(CONFIG_ROOT, "osc-pose-controller.yml")
@@ -96,94 +126,108 @@ class Robot(FrankaInterface):
         self.last_gripper_dim = 6
 
     def reset_robot(self):
-        self.reset()
-
         print("Waiting for the robot to connect...")
-        while len(self._state_buffer) == 0:
+        
+        # Start state receiving threads
+        import threading
+        
+        def arm_state_receiver():
+            while True:
+                try:
+                    message = self.arm_subscriber.recv(flags=zmq.NOBLOCK)
+                    robot_state = franka_robot_state_pb2.FrankaRobotStateMessage()
+                    robot_state.ParseFromString(message)
+                    
+                    # Extract end-effector pose from 4x4 transformation matrix
+                    # O_T_EE is a flattened 4x4 matrix: [r11,r12,r13,tx, r21,r22,r23,ty, r31,r32,r33,tz, 0,0,0,1]
+                    ee_pos = np.array([
+                        robot_state.O_T_EE[3],   # tx
+                        robot_state.O_T_EE[7],   # ty  
+                        robot_state.O_T_EE[11],  # tz
+                    ]).reshape(3, 1)
+                    
+                    # Extract 3x3 rotation matrix and convert to quaternion
+                    rot_mat = np.array([
+                        [robot_state.O_T_EE[0], robot_state.O_T_EE[1], robot_state.O_T_EE[2]],
+                        [robot_state.O_T_EE[4], robot_state.O_T_EE[5], robot_state.O_T_EE[6]],
+                        [robot_state.O_T_EE[8], robot_state.O_T_EE[9], robot_state.O_T_EE[10]]
+                    ])
+                    ee_quat = transform_utils.mat2quat(rot_mat).reshape(4, 1)
+                    
+                    # Extract joint positions
+                    joint_pos = list(robot_state.q)
+                    
+                    self.last_eef_quat_and_pos = (ee_quat, ee_pos)
+                    self.last_q = joint_pos
+                    self.received_states = True
+                    
+                except zmq.Again:
+                    time.sleep(0.001)
+                except Exception as e:
+                    print(f"Error receiving arm state: {e}")
+                    time.sleep(0.001)
+        
+        def gripper_state_receiver():
+            while True:
+                try:
+                    message = self.gripper_subscriber.recv(flags=zmq.NOBLOCK)
+                    gripper_state = franka_robot_state_pb2.FrankaGripperStateMessage()
+                    gripper_state.ParseFromString(message)
+                    
+                    # Convert gripper width to action (-1 to 1 range)
+                    gripper_width = gripper_state.width
+                    max_width = gripper_state.max_width
+                    self.last_gripper_action = (gripper_width / max_width) * 2 - 1  # Scale to [-1, 1]
+                    
+                except zmq.Again:
+                    time.sleep(0.001)
+                except Exception as e:
+                    print(f"Error receiving gripper state: {e}")
+                    time.sleep(0.001)
+        
+        # Start receiver threads
+        arm_thread = threading.Thread(target=arm_state_receiver, daemon=True)
+        gripper_thread = threading.Thread(target=gripper_state_receiver, daemon=True)
+        arm_thread.start()
+        gripper_thread.start()
+        
+        # Wait for initial state
+        while not self.received_states or self.last_gripper_action is None:
             time.sleep(0.01)
 
         print("Franka is connected")
 
+    def check_nonzero_configuration(self):
+        """Check if the robot is in a valid configuration"""
+        if self.last_q is None:
+            return False
+        return not all(abs(q) < 1e-6 for q in self.last_q)
+
+    def close(self):
+        """Close ZMQ connections"""
+        self.arm_subscriber.close()
+        self.gripper_subscriber.close()
+        self.arm_publisher.close()
+        self.gripper_publisher.close()
+        self.context.term()
+
     def osc_move(self, target_pos, target_quat, gripper_state):
-        num_steps = 3
+        """Send OSC control command to the robot"""
+        # This would need to be implemented to send control commands
+        # to the deoxys services via ZMQ publishers
+        # For now, just updating the target internally
+        pass
 
-        for _ in range(num_steps):
-            target_mat = transform_utils.pose2mat(pose=(target_pos, target_quat))
-
-            current_quat, current_pos = self.last_eef_quat_and_pos
-            current_mat = transform_utils.pose2mat(
-                pose=(current_pos.flatten(), current_quat.flatten())
-            )
-
-            pose_error = transform_utils.get_pose_error(
-                target_pose=target_mat, current_pose=current_mat
-            )
-
-            if np.dot(target_quat, current_quat) < 0.0:
-                current_quat = -current_quat
-
-            quat_diff = transform_utils.quat_distance(target_quat, current_quat)
-            axis_angle_diff = transform_utils.quat2axisangle(quat_diff)
-
-            action_pos = pose_error[:3]
-            action_axis_angle = axis_angle_diff.flatten()
-
-            action = action_pos.tolist() + action_axis_angle.tolist() + [gripper_state]
-
-            self.control(
-                controller_type="OSC_POSE",
-                action=action,
-                controller_cfg=self.velocity_controller_cfg,
-            )
-
-    def reset_joints(
-        self,
-        timeout=7,
-        gripper_open=False,
-    ):
-        start_joint_pos = [
-            0.09162008114028396,
-            -0.19826458111314524,
-            -0.01990020486871322,
-            -2.4732269941140346,
-            -0.01307073642274261,
-            2.30396583422025,
-            0.8480939705504309,
-        ]
-        assert type(start_joint_pos) is list or type(start_joint_pos) is np.ndarray
-        controller_cfg = get_default_controller_config(controller_type="JOINT_POSITION")
-
-        if gripper_open:
-            gripper_action = -1
-        else:
-            gripper_action = 1
-
-        # This is for varying initialization of joints a little bit to
-        # increase data variation.
-        # start_joint_pos = [
-        #     e + np.clip(np.random.randn() * 0.005, -0.005, 0.005)
-        #     for e in start_joint_pos
-        # ]
-        if type(start_joint_pos) is list:
-            action = start_joint_pos + [gripper_action]
-        else:
-            action = start_joint_pos.tolist() + [gripper_action]
-        start_time = time.time()
-        while True:
-            if self.received_states and self.check_nonzero_configuration():
-                if (
-                    np.max(np.abs(np.array(self.last_q) - np.array(start_joint_pos)))
-                    < 1e-3
-                ):
-                    break
-            self.control(
-                controller_type="JOINT_POSITION",
-                action=action,
-                controller_cfg=controller_cfg,
-            )
-            end_time = time.time()
-
-            # Add timeout
-            if end_time - start_time > timeout:
-                break
+    def reset_joints(self, timeout=7, gripper_open=False):
+        """Reset robot to initial joint configuration"""
+        # This would need to be implemented to send joint position commands
+        # to the deoxys services via ZMQ publishers
+        # For now, just a placeholder
         return True
+
+    def control(self, controller_type, action, controller_cfg):
+        """Send control command to deoxys services"""
+        # This would need to be implemented to send control commands
+        # to the deoxys services via ZMQ publishers
+        # For now, just a placeholder
+        pass

@@ -1,0 +1,42 @@
+# LBX Robotics Python Dependencies
+# Python 3.10+ compatible packages (latest versions)
+
+# Core data processing
+numpy
+scipy
+opencv-python
+pyyaml
+
+# ROS2 Interaction (usually handled by ROS environment, good for venv)
+# rclpy # part of ROS installation
+# launch # part of ROS installation
+# launch_ros # part of ROS installation
+
+# Communication & Networking
+protobuf
+websocket-client
+websockets
+requests
+pyzmq
+psutil
+
+# Vision & Sensors
+pyrealsense2
+
+# Data Recording & Visualization
+mcap
+blosc
+foxglove-websocket
+
+# Development & Code Quality
+black
+flake8
+
+# Notes:
+# - All versions are unpinned to get latest stable releases
+# - This list assumes Python 3.10+ (for ROS2 Humble)
+# - 'dataclasses' is standard in Python 3.7+
+# - If 'deoxys' is a Python package dependency for any node here, add it
+# - 'oculus_reader' handling: If it's a pip package, add it. If it's local code,
+#   ensure it's included in the appropriate ROS package (e.g., lbx_input_oculus)
+# - Excluded nvidia/torch packages as requested 

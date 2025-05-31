@@ -1,0 +1,57 @@
+# LBX Robotics Workspace Configuration
+# Central configuration for the entire lbx_robotics ROS2 workspace
+
+workspace:
+  name: "lbx_robotics"
+  description: "Self-contained ROS2 workspace for LBX Franka robot teleoperation and data collection"
+  ros_version: "humble"
+
+# Core system configuration
+core:
+  robot_type: "franka_fr3"
+  control_mode: "moveit" # moveit, direct, hybrid
+
+  # Default namespaces
+  robot_namespace: "/fr3"
+  camera_namespace: "/cameras"
+  vr_namespace: "/vr"
+
+# Package enabling/disabling
+packages:
+  lbx_franka_control: true
+  lbx_vision_realsense: true
+  lbx_input_oculus: true
+  lbx_data_recorder: true
+  lbx_franka_description: true
+  lbx_franka_moveit_config: true
+  lbx_interfaces: true
+  lbx_utils: true
+
+# Logging and debugging
+logging:
+  default_level: "INFO" # DEBUG, INFO, WARN, ERROR
+  console_output: true
+  file_output: false
+
+# Data recording defaults
+recording:
+  default_format: "mcap"
+  auto_start: false
+  topics_to_record:
+    - "/vr_input"
+    - "/joint_states"
+    - "/realsense_hand/color/image_raw"
+    - "/realsense_hand/depth/image_raw"
+    - "/robot_command"
+
+# Safety and limits
+safety:
+  enable_collision_checking: true
+  max_velocity_scaling: 0.5
+  max_acceleration_scaling: 0.3
+
+# Development settings
+development:
+  enable_rviz: true
+  enable_foxglove: false
+  simulation_mode: false

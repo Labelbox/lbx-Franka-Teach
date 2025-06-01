@@ -146,9 +146,23 @@ echo_step "Installing system dependencies for libfranka and other packages..."
 echo_info "Installing Poco C++ libraries..."
 if sudo apt install -y libpoco-dev; then
     echo_success "Poco libraries installed successfully."
+    
+    # Also try to install in conda environment as backup
+    if [ ! -z "$CONDA_PREFIX" ]; then
+        echo_info "Also installing Poco in conda environment for better compatibility..."
+        conda install -y -c conda-forge poco || echo_warn "Could not install Poco in conda, using system libraries"
+    fi
 else
-    echo_error "Failed to install Poco libraries. These are required for libfranka."
-    exit 1
+    echo_error "Failed to install Poco libraries via apt. Trying conda..."
+    
+    # Try installing in conda environment
+    if conda run -n "$ENV_NAME" --no-capture-output --live-stream conda install -y -c conda-forge poco; then
+        echo_success "Poco installed in conda environment"
+    else
+        echo_error "Failed to install Poco. This is required for libfranka."
+        echo_info "You may need to build Poco from source or check your package repositories."
+        exit 1
+    fi
 fi
 
 # Install Eigen3 (required by libfranka)
@@ -311,4 +325,8 @@ echo -e "${GREEN}${BOLD}Test your setup:${NC}"
 echo -e "  • Test franka_ros2: ${CYAN}ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=dont-care use_fake_hardware:=true${NC}"
 echo -e "  • List all packages: ${CYAN}ros2 pkg list | grep -E '(franka|lbx)'${NC}"
 echo ""
-echo_info "All packages are now in a single unified workspace at: $SCRIPT_DIR" 
+echo_info "All packages are now in a single unified workspace at: $SCRIPT_DIR"
+echo ""
+echo_warn "Note: If you encounter CMake errors finding Poco libraries during build:"
+echo_warn "  The unified_launch.sh script will automatically set up paths"
+echo_warn "  OR manually export: CMAKE_PREFIX_PATH=\"/usr/lib/x86_64-linux-gnu/cmake:\$CMAKE_PREFIX_PATH\"" 

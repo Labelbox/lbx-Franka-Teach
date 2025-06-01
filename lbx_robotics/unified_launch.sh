@@ -273,6 +273,18 @@ perform_build() {
     print_info "Performing build..."
     cd "$WORKSPACE_DIR"
     
+    # Fix paths for conda environment to find system libraries
+    if [ ! -z "$CONDA_PREFIX" ]; then
+        print_info "Detected conda environment, setting up paths for system libraries..."
+        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH"
+        export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
+        
+        # Specifically help find Poco
+        export Poco_DIR="/usr/lib/x86_64-linux-gnu/cmake/Poco"
+        export POCO_ROOT="/usr"
+    fi
+    
     # Clean only if explicitly requested with --clean-build
     if [ "$CLEAN_BUILD" = "true" ]; then
         print_info "Cleaning old build files (build/, install/, log/)..."
@@ -285,7 +297,7 @@ perform_build() {
     
     # Build the workspace
     print_info "Building with: colcon build --symlink-install"
-    if colcon build --symlink-install 2>&1; then
+    if colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:$CMAKE_PREFIX_PATH" 2>&1; then
         print_success "Build completed successfully"
     else
         print_error "Build failed"

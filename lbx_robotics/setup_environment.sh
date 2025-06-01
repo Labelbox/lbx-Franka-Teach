@@ -46,20 +46,27 @@ sudo apt update
 
 # Ensure a recent CMake (>=3.22) is installed and used
 echo_info "Checking and updating CMake version if necessary..."
-# Try to remove any existing cmake to ensure a clean slate for a newer version
-sudo apt-get remove --purge -y cmake cmake-data 2>/dev/null || echo_info "No old CMake to purge or purge failed (continuing)."
+# Remove any existing cmake to ensure a clean slate
+sudo apt-get remove --purge -y cmake cmake-data > /dev/null 2>&1 || echo_info "No old CMake to purge or purge failed (continuing)."
 # Add Kitware PPA for newer CMake versions
-sudo apt install -y software-properties-common lsb-release wget
+sudo apt install -y software-properties-common lsb-release wget apt-transport-https ca-certificates gpg
 wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+if ! grep -q "kitware.list" /etc/apt/sources.list.d/*kitware.list 2>/dev/null ; then
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+fi
 sudo apt update
+# Install a specific recent version or let apt choose the latest from Kitware
 sudo apt install --reinstall --no-install-recommends -y cmake
 
-if command -v cmake && cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
-    echo_success "CMake version $(cmake --version | head -n1) is installed and sufficient."
+# Verify CMake version
+CMAKE_EXE=$(which cmake)
+if [ -z "$CMAKE_EXE" ]; then CMAKE_EXE="/usr/bin/cmake"; fi # Fallback if not in PATH immediately
+
+if $CMAKE_EXE --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
+    echo_success "CMake version $($CMAKE_EXE --version | head -n1) is installed and sufficient."
 else
-    echo_error "Failed to install CMake >= 3.22. Current version: $(cmake --version | head -n1 || echo 'Not Found'). Pinocchio build may fail. Please install CMake 3.22+ manually."
-    # exit 1 # Optionally exit if CMake is critical and couldn't be updated
+    echo_error "Failed to install CMake >= 3.22. Current version: $($CMAKE_EXE --version | head -n1 || echo 'Not Found'). Pinocchio build may fail. Please install CMake 3.22+ manually."
+    # exit 1 # Optionally exit
 fi
 
 REQUIRED_PKGS=(
@@ -95,14 +102,14 @@ if ! dpkg -l | grep -q libpinocchio-dev || ! pkg-config --exists pinocchio 2>/de
         cd "$TEMP_DIR_PINOCCHIO"
         sudo apt install -y liburdfdom-dev libconsole-bridge-dev libassimp-dev liboctomap-dev # Pinocchio deps
         
-        echo_info "Using CMake: $(which cmake) $(cmake --version | head -n1)"
+        echo_info "Using CMake for Pinocchio: $($CMAKE_EXE --version | head -n1)"
 
         git clone --recursive https://github.com/stack-of-tasks/pinocchio.git
         cd pinocchio
         git checkout v2.6.20
         mkdir build && cd build
-        # Explicitly use the cmake in PATH
-        $(which cmake) .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_COLLISION_SUPPORT=ON -DCMAKE_CXX_STANDARD=14
+        # Explicitly use the cmake in PATH (which should be the Kitware one)
+        $CMAKE_EXE .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_COLLISION_SUPPORT=ON -DCMAKE_CXX_STANDARD=14
         make -j$(nproc)
         sudo make install
         sudo ldconfig

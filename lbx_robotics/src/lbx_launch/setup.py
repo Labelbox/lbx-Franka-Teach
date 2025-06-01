@@ -23,7 +23,6 @@ setup(
     maintainer_email='manu@todo.todo',
     description='Launch files for the LBX Robotics system',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
         ],

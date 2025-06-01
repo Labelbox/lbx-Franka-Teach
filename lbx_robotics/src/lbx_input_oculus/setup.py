@@ -20,7 +20,7 @@ setup(
         'setuptools',
         'numpy',
         'pure-python-adb',
-        'tf-transformations',
+        'transformations',
         'diagnostic_updater',
     ],
     zip_safe=True,
@@ -28,7 +28,6 @@ setup(
     maintainer_email='user@example.com',
     description='ROS2 package to read and publish Oculus Quest controller data.',
     license='TODO: License declaration',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'oculus_node = lbx_input_oculus.oculus_node:main',

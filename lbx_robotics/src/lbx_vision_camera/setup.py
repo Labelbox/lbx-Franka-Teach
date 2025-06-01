@@ -26,6 +26,7 @@ setup(
         'opencv-python',
         'PyYAML',
         'numpy',
+        'transformations',
         'pyrealsense2', # Keep realsense for now, can be made optional later
         # Add ZED SDK python dep here if it becomes a direct pip installable item
         'diagnostic_updater',
@@ -35,7 +36,6 @@ setup(
     maintainer_email='user@example.com',
     description='ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED).',
     license='TODO: License declaration',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'camera_node = lbx_vision_camera.camera_node:main', # Renamed executable and node file

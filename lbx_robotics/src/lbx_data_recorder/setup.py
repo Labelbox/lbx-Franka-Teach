@@ -23,7 +23,6 @@ setup(
     maintainer_email='robotics@labelbox.com',
     description='High-performance data recording for VR teleoperation',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'recorder_node = lbx_data_recorder.recorder_node:main',

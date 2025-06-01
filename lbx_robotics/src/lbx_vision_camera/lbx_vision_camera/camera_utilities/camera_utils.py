@@ -112,18 +112,12 @@ def print_camera_info(cameras: Dict[str, List[Dict[str, str]]]):
         logger.info(f"\n{camera_type.upper()} Cameras ({len(camera_list)} found):")
         logger.info("-" * 30)
         for i, camera in enumerate(camera_list):
-            log_str = f"  Camera {i + 1}:
-"
-            log_str += f"    Name: {camera.get('name', 'N/A')}
-"
-            log_str += f"    Serial: {camera.get('serial_number', 'N/A')}
-"
-            if 'firmware' in camera: log_str += f"    Firmware: {camera['firmware']}
-"
-            if 'usb_type' in camera: log_str += f"    USB Type: {camera['usb_type']}
-"
-            if 'id' in camera: log_str += f"    ZED ID: {camera['id']}
-"
+            log_str = f"  Camera {i + 1}:\n"
+            log_str += f"    Name: {camera.get('name', 'N/A')}\n"
+            log_str += f"    Serial: {camera.get('serial_number', 'N/A')}\n"
+            if 'firmware' in camera: log_str += f"    Firmware: {camera['firmware']}\n"
+            if 'usb_type' in camera: log_str += f"    USB Type: {camera['usb_type']}\n"
+            if 'id' in camera: log_str += f"    ZED ID: {camera['id']}\n"
             logger.info(log_str.strip())
 
 def generate_camera_config(cameras: Dict[str, List[Dict[str, str]]], 
@@ -232,7 +226,7 @@ if __name__ == "__main__":
     print_camera_info(discovered_cams)
     if discovered_cams:
         logger.info("\n" + "=" * 60)
-        response = input(f"Generate default camera configuration file(s) in {Path("configs/sensors").resolve()}/? (y/n): ")
+        response = input(f'Generate default camera configuration file(s) in {Path("configs/sensors").resolve()}/? (y/n): ')
         if response.lower() == 'y':
             generated_file = generate_camera_config(discovered_cams, config_dir=str(Path("configs/sensors")))
             if generated_file:

@@ -23,7 +23,6 @@ setup(
     maintainer_email='robotics@labelbox.com',
     description='VR-based Franka control system using MoveIt',
     license='MIT',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'system_manager = lbx_franka_control.system_manager:main',

@@ -141,88 +141,24 @@ else
 fi
 
 # --- Install system dependencies for libfranka and other packages ---
-echo_step "Installing system dependencies for libfranka and other packages..."
+echo_step "Installing remaining system-level dependencies (if any)..."
+# Most C++ deps like Poco, PCRE, Eigen, Boost are now handled by conda.
+# This section will now focus on things not typically in conda-forge or specific OS packages.
 
-# Install Poco libraries (required by libfranka)
-echo_info "Installing Poco C++ libraries..."
-# First install PCRE which is a dependency of Poco
-if sudo apt install -y libpcre3 libpcre3-dev; then
-    echo_success "PCRE libraries installed successfully."
-    
-    # Create symlink if needed for CMake to find it
-    if [ ! -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ] && [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so.3" ]; then
-        echo_info "Creating PCRE symlink for CMake compatibility..."
-        sudo ln -sf /usr/lib/x86_64-linux-gnu/libpcre.so.3 /usr/lib/x86_64-linux-gnu/libpcre.so
-    fi
-else
-    echo_warn "Failed to install PCRE libraries via apt."
-    # Try to install in conda environment
-    if conda run -n "$ENV_NAME" --no-capture-output --live-stream conda install -y -c conda-forge pcre; then
-        echo_success "PCRE installed in conda environment"
-    else
-        echo_warn "Could not install PCRE in conda environment"
-    fi
-fi
-
-if sudo apt install -y libpoco-dev; then
-    echo_success "Poco libraries installed successfully."
-    
-    # Also try to install in conda environment as backup
-    if [ ! -z "$CONDA_PREFIX" ]; then
-        echo_info "Also installing Poco in conda environment for better compatibility..."
-        conda install -y -c conda-forge poco || echo_warn "Could not install Poco in conda, using system libraries"
-    fi
-else
-    echo_error "Failed to install Poco libraries via apt. Trying conda..."
-    
-    # Try installing in conda environment
-    if conda run -n "$ENV_NAME" --no-capture-output --live-stream conda install -y -c conda-forge poco; then
-        echo_success "Poco installed in conda environment"
-    else
-        echo_error "Failed to install Poco. This is required for libfranka."
-        echo_info "You may need to build Poco from source or check your package repositories."
-        exit 1
-    fi
-fi
-
-# Install Eigen3 (required by libfranka)
-echo_info "Installing Eigen3..."
-if sudo apt install -y libeigen3-dev; then
-    echo_success "Eigen3 installed successfully."
-else
-    echo_warn "Failed to install Eigen3."
-fi
-
-# Install other build dependencies
-echo_info "Installing additional build dependencies..."
+# Install other build dependencies (some might still be needed system-wide for ROS tools)
+echo_info "Installing essential build tools (cmake, git, pkg-config)..."
 if sudo apt install -y \
     build-essential \
     cmake \
     git \
-    pkg-config \
-    libboost-all-dev \
-    libssl-dev \
-    libcurl4-openssl-dev; then
-    echo_success "Build dependencies installed successfully."
+    pkg-config; then
+    echo_success "Essential build tools installed successfully."
 else
-    echo_warn "Some build dependencies may not have installed correctly."
+    echo_warn "Some essential build tools may not have installed correctly."
 fi
 
-# Install Pinocchio (required by libfranka)
-echo_info "Installing Pinocchio library..."
-# Pinocchio is now installed via conda environment.yaml
-# This section can be removed or kept as a fallback if conda install fails
-
-# First try ROS2 pinocchio package
-if sudo apt install -y ros-humble-pinocchio; then
-    echo_success "Pinocchio installed successfully from ROS2 packages."
-else
-    echo_warn "Failed to install ROS2 Pinocchio package."
-    echo_info "Pinocchio should be installed from conda. If build still fails, check conda environment."
-fi
-
-# Install RealSense SDK dependencies
-echo_info "Installing RealSense camera dependencies..."
+# Install RealSense SDK dependencies (these often have specific driver/kernel interactions)
+echo_info "Installing RealSense camera dependencies (system-level)..."
 if sudo apt install -y \
     libusb-1.0-0-dev \
     libglfw3-dev \
@@ -233,8 +169,8 @@ else
     echo_warn "Some RealSense dependencies may not have installed correctly."
 fi
 
-# Install ROS2 control packages
-echo_info "Installing ROS2 control packages..."
+# Install ROS2 control packages (these are ROS-specific)
+echo_info "Installing ROS2 control packages (system-level)..."
 if sudo apt install -y \
     ros-humble-ros2-control \
     ros-humble-ros2-controllers \
@@ -247,22 +183,8 @@ else
     echo_warn "Some ROS2 control packages may not have installed correctly."
 fi
 
-# Install pre-built Franka packages if available
-echo_info "Installing pre-built Franka packages from ROS2 repos..."
-if sudo apt install -y \
-    ros-humble-franka-hardware \
-    ros-humble-franka-msgs \
-    ros-humble-franka-gripper \
-    ros-humble-franka-description \
-    ros-humble-franka-fr3-moveit-config; then
-    echo_success "Pre-built Franka packages installed successfully."
-    echo_info "This may allow skipping building libfranka from source."
-else
-    echo_warn "Some pre-built Franka packages not available, will build from source."
-fi
-
-# Install Gazebo for simulation (optional but useful)
-echo_info "Installing Gazebo simulation packages..."
+# Install Gazebo for simulation (ROS-specific)
+echo_info "Installing Gazebo simulation packages (system-level)..."
 if sudo apt install -y \
     ros-humble-gazebo-ros \
     ros-humble-gazebo-ros-pkgs \
@@ -271,6 +193,14 @@ if sudo apt install -y \
     echo_success "Gazebo packages installed successfully."
 else
     echo_warn "Gazebo packages installation failed. Simulation features may not work."
+fi
+
+# Pinocchio is handled by conda, apt install for ros-humble-pinocchio is a fallback.
+echo_info "Checking for ROS2 Pinocchio package (fallback)..."
+if sudo apt install -y ros-humble-pinocchio; then
+    echo_success "ROS2 Pinocchio package (ros-humble-pinocchio) is present or installed."
+else
+    echo_warn "ROS2 Pinocchio package (ros-humble-pinocchio) not found. Main installation via conda."
 fi
 
 # Initialize rosdep if not already done

@@ -16,8 +16,15 @@ dependencies:
   # --- C++ Libraries for libfranka ---
   # Note: System packages like Poco, Eigen3, and Boost are installed via apt
   # in the setup_environment.sh script to ensure compatibility with ROS2
-  - eigen # Linear algebra library (conda version for Python bindings)
+  # UPDATED: Preferring conda packages for these C++ libraries for better env isolation
+  - eigen # Linear algebra library (C++ headers)
   - pinocchio # For libfranka dynamics computations
+  - poco # Poco C++ libraries (includes Net, Foundation, etc.)
+  - pcre # PCRE regex library (dependency for Poco)
+  - boost # Boost C++ libraries
+  - boost-cpp # Meta-package for Boost C++ libraries
+  - libcurl # cURL library
+  - openssl # OpenSSL library
 
   # --- Core Processing & Numerics ---
   - numpy

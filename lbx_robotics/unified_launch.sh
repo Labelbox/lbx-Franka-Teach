@@ -275,30 +275,26 @@ perform_build() {
     
     # Fix paths for conda environment to find system libraries
     if [ ! -z "$CONDA_PREFIX" ]; then
-        print_info "Detected conda environment, setting up paths for system libraries..."
-        export CMAKE_PREFIX_PATH="/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH"
-        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH"
-        export LD_LIBRARY_PATH="/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+        print_info "Detected conda environment. Build will primarily use libraries from conda."
+        # Basic system paths for ROS and essential tools if needed
+        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CONDA_PREFIX/lib/cmake:$CONDA_PREFIX/share:$CMAKE_PREFIX_PATH"
+        export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
         
-        # Add robotpkg paths if it exists (for Pinocchio)
-        if [ -d "/opt/openrobots" ]; then
-            print_info "Found robotpkg installation, adding to paths..."
-            export CMAKE_PREFIX_PATH="/opt/openrobots/lib/cmake:/opt/openrobots/share:$CMAKE_PREFIX_PATH"
-            export PKG_CONFIG_PATH="/opt/openrobots/lib/pkgconfig:$PKG_CONFIG_PATH"
-            export LD_LIBRARY_PATH="/opt/openrobots/lib:$LD_LIBRARY_PATH"
-            export PATH="/opt/openrobots/bin:$PATH"
+        # Add ROS2 paths for packages like pinocchio if ROS is sourced
+        if [ ! -z "$ROS_DISTRO" ] && [ -d "/opt/ros/$ROS_DISTRO" ]; then
+            print_info "Adding ROS ($ROS_DISTRO) paths to build environment."
+            export CMAKE_PREFIX_PATH="/opt/ros/$ROS_DISTRO/share:/opt/ros/$ROS_DISTRO/lib/cmake:$CMAKE_PREFIX_PATH"
+            export PKG_CONFIG_PATH="/opt/ros/$ROS_DISTRO/lib/pkgconfig:$PKG_CONFIG_PATH"
+            export LD_LIBRARY_PATH="/opt/ros/$ROS_DISTRO/lib:$LD_LIBRARY_PATH"
         fi
         
-        # Add ROS2 paths for packages like pinocchio
-        if [ -d "/opt/ros/humble" ]; then
-            export CMAKE_PREFIX_PATH="/opt/ros/humble/share:/opt/ros/humble/lib/cmake:$CMAKE_PREFIX_PATH"
-        fi
-        
-        # If cmake issues persist, temporarily use system cmake
-        if command -v /usr/bin/cmake &> /dev/null; then
-            print_warning "Using system cmake to avoid conda library conflicts"
-            export PATH="/usr/bin:$PATH"
-        fi
+        # If cmake issues persist with conda's cmake, temporarily use system cmake
+        # This is usually only needed if conda's cmake version has issues with certain find_package modules.
+        # if command -v /usr/bin/cmake &> /dev/null && ! /usr/bin/cmake --version | grep -q "$($CONDA_PREFIX/bin/cmake --version | head -n1 | awk '{print $3}')"; then
+        #     print_warning "Conda CMake and system CMake versions differ. Temporarily prefering system CMake for broader compatibility."
+        #     export PATH="/usr/bin:$PATH"
+        # fi
     fi
     
     # Clean only if explicitly requested with --clean-build
@@ -316,7 +312,9 @@ perform_build() {
     
     # Find PCRE library location
     PCRE_LIB=""
-    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ]; then
+    if [ -f "$CONDA_PREFIX/lib/libpcre.so" ]; then
+        PCRE_LIB="$CONDA_PREFIX/lib/libpcre.so"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ]; then
         PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre.so"
     elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre3.so" ]; then
         PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre3.so"
@@ -325,33 +323,9 @@ perform_build() {
     fi
     
     if [ ! -z "$PCRE_LIB" ]; then
-        print_info "Found PCRE library at: $PCRE_LIB"
+        print_info "Using PCRE library at: $PCRE_LIB"
     else
-        print_warning "PCRE library not found in standard locations"
-    fi
-    
-    # Find Pinocchio installation
-    PINOCCHIO_DIR=""
-    if [ -f "/usr/local/lib/cmake/pinocchio/pinocchioConfig.cmake" ]; then
-        PINOCCHIO_DIR="/usr/local/lib/cmake/pinocchio"
-        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
-    elif [ -f "/usr/local/share/pinocchio/cmake/pinocchioConfig.cmake" ]; then
-        PINOCCHIO_DIR="/usr/local/share/pinocchio/cmake"
-        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
-    elif [ -f "/opt/openrobots/lib/cmake/pinocchio/pinocchioConfig.cmake" ]; then
-        PINOCCHIO_DIR="/opt/openrobots/lib/cmake/pinocchio"
-        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
-    elif [ -f "/opt/ros/humble/share/pinocchio/cmake/pinocchioConfig.cmake" ]; then
-        PINOCCHIO_DIR="/opt/ros/humble/share/pinocchio/cmake"
-        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
-    else
-        print_warning "Pinocchio not found in standard locations"
-        print_info "Searching for Pinocchio..."
-        PINOCCHIO_SEARCH=$(find /usr /opt -name "pinocchioConfig.cmake" -o -name "pinocchio-config.cmake" 2>/dev/null | head -1)
-        if [ ! -z "$PINOCCHIO_SEARCH" ]; then
-            PINOCCHIO_DIR=$(dirname "$PINOCCHIO_SEARCH")
-            print_info "Found Pinocchio at: $PINOCCHIO_DIR"
-        fi
+        print_warning "PCRE library not found. Ensure pcre is in your conda environment."
     fi
     
     # Build with Pinocchio directory if found
@@ -360,18 +334,14 @@ perform_build() {
     CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH"
     CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH"
     CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=\"$CONDA_PREFIX;/usr/local;/usr;/opt/ros/humble;/opt/openrobots\""
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=\"$CONDA_PREFIX;/usr/local;/usr;/opt/ros/$ROS_DISTRO;/opt/openrobots\""
     
     if [ ! -z "$PCRE_LIB" ]; then
         CMAKE_ARGS="$CMAKE_ARGS -DPCRE_LIBRARY=\"$PCRE_LIB\""
-        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_INCLUDE_DIR=\"/usr/include\""
+        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_INCLUDE_DIR=\"$CONDA_PREFIX/include:/usr/include\""
     fi
     
-    if [ ! -z "$PINOCCHIO_DIR" ]; then
-        CMAKE_ARGS="$CMAKE_ARGS -Dpinocchio_DIR=\"$PINOCCHIO_DIR\""
-    fi
-    
-    print_info "CMake arguments: $CMAKE_ARGS"
+    print_info "Final CMake arguments: $CMAKE_ARGS"
     
     if eval "colcon build --symlink-install --cmake-args $CMAKE_ARGS" 2>&1; then
         print_success "Build completed successfully"

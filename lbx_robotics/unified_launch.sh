@@ -35,7 +35,8 @@ DEV_MODE="false"  # Development mode with symlink-install
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-WORKSPACE_DIR="$SCRIPT_DIR"  # Script is now inside lbx_robotics
+WORKSPACE_DIR="$SCRIPT_DIR"  # lbx_robotics directory (ROS2 workspace)
+ROOT_WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"  # Root workspace containing frankateach
 
 # Helper functions
 print_info() {
@@ -325,7 +326,6 @@ perform_build() {
     fi
     
     print_info "Performing build..."
-    cd "$WORKSPACE_DIR"
     
     # Check if colcon is available
     if ! command -v colcon &> /dev/null; then
@@ -342,6 +342,10 @@ perform_build() {
     # Clean only if explicitly requested with --clean-build
     if [ "$CLEAN_BUILD" = "true" ]; then
         print_info "Cleaning old build files (build/, install/, log/)..."
+        # Clean both workspaces
+        cd "$ROOT_WORKSPACE_DIR"
+        rm -rf frankateach/build frankateach/install frankateach/log 2>/dev/null || true
+        cd "$WORKSPACE_DIR"
         rm -rf build/ install/ log/ 2>/dev/null || true
     fi
     
@@ -368,8 +372,37 @@ perform_build() {
     print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
     source "/opt/ros/$ROS_DISTRO/setup.bash"
     
-    # Build the workspace using system-level libraries
-    print_info "Building workspace with colcon build..."
+    # First, build frankateach package in root workspace
+    if [ -f "$ROOT_WORKSPACE_DIR/setup.py" ]; then
+        print_info "Building frankateach package..."
+        cd "$ROOT_WORKSPACE_DIR"
+        
+        BUILD_CMD_FRANKATEACH="colcon build"
+        BUILD_CMD_FRANKATEACH="$BUILD_CMD_FRANKATEACH --parallel-workers $BUILD_PARALLEL_WORKERS"
+        
+        if [ "$DEV_MODE" = "true" ]; then
+            BUILD_CMD_FRANKATEACH="$BUILD_CMD_FRANKATEACH --symlink-install"
+        fi
+        
+        BUILD_CMD_FRANKATEACH="$BUILD_CMD_FRANKATEACH --event-handlers console_direct+"
+        
+        print_info "Frankateach build command: $BUILD_CMD_FRANKATEACH"
+        
+        $BUILD_CMD_FRANKATEACH 2>&1 | tee frankateach_build.log
+        BUILD_RESULT_FRANKATEACH=${PIPESTATUS[0]}
+        
+        if [ $BUILD_RESULT_FRANKATEACH -eq 0 ]; then
+            print_success "Frankateach package built successfully"
+            rm -f frankateach_build.log
+        else
+            print_error "Frankateach build failed. Check the output above."
+            return 1
+        fi
+    fi
+    
+    # Now build ROS2 packages in lbx_robotics workspace
+    print_info "Building ROS2 packages workspace..."
+    cd "$WORKSPACE_DIR"
     
     # Basic CMake arguments, relying on system/ROS paths
     CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
@@ -413,7 +446,7 @@ perform_build() {
     BUILD_CMD="$BUILD_CMD --cmake-args $CMAKE_ARGS"
     
     # Show the final build command
-    print_info "Build command: $BUILD_CMD"
+    print_info "ROS2 build command: $BUILD_CMD"
     
     # Track build time
     BUILD_START=$(date +%s)
@@ -429,26 +462,7 @@ perform_build() {
     BUILD_SECONDS=$((BUILD_TIME % 60))
     
     if [ $BUILD_RESULT -eq 0 ]; then
-        print_success "Build completed successfully in ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
-        
-        # Fix Python executable installation paths if needed
-        print_info "Checking Python package installations..."
-        for pkg_dir in install/*/; do
-            if [ -d "$pkg_dir/bin" ] && [ ! -d "$pkg_dir/lib/$(basename $pkg_dir)" ]; then
-                pkg_name=$(basename "$pkg_dir")
-                print_info "Fixing executable paths for $pkg_name..."
-                mkdir -p "$pkg_dir/lib/$pkg_name"
-                for exe in "$pkg_dir/bin"/*; do
-                    if [ -f "$exe" ]; then
-                        exe_name=$(basename "$exe")
-                        if [ ! -f "$pkg_dir/lib/$pkg_name/$exe_name" ]; then
-                            ln -sf "../../bin/$exe_name" "$pkg_dir/lib/$pkg_name/$exe_name"
-                            print_info "  Created symlink for $exe_name"
-                        fi
-                    fi
-                done
-            fi
-        done
+        print_success "ROS2 build completed successfully in ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
         
         # Show ccache stats if enabled
         if [ "$USE_CCACHE" = "true" ] && command -v ccache &> /dev/null; then
@@ -463,7 +477,7 @@ perform_build() {
         fi
         rm -f build.log
     else
-        print_error "Build failed. Check the output above for errors."
+        print_error "ROS2 build failed. Check the output above for errors."
         print_info "Common issues:"
         print_info "  - Missing dependencies: Run 'rosdep install --from-paths src --ignore-src -r -y'"
         print_info "  - Outdated colcon: Run 'pip3 install --upgrade colcon-common-extensions'"
@@ -483,13 +497,19 @@ source_workspace() {
         source "/opt/ros/$ROS_DISTRO/setup.bash"
     fi
     
-    # Source workspace
+    # Source frankateach workspace if it exists
+    if [ -f "$ROOT_WORKSPACE_DIR/install/setup.bash" ]; then
+        source "$ROOT_WORKSPACE_DIR/install/setup.bash"
+        print_info "Frankateach workspace sourced"
+    fi
+    
+    # Source ROS2 workspace (lbx_robotics)
     if [ -f "$WORKSPACE_DIR/install/setup.bash" ]; then
         source "$WORKSPACE_DIR/install/setup.bash"
-        print_success "Workspace sourced"
+        print_success "ROS2 workspace sourced"
         return 0
     else
-        print_error "Failed to source workspace. Build might be missing."
+        print_error "Failed to source ROS2 workspace. Build might be missing."
         echo "Run with --build flag to build the workspace"
         return 1
     fi

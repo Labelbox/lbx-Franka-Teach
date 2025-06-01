@@ -139,6 +139,11 @@ class LabelboxRoboticsSystem(Node):
         self.cameras_healthy = True  # Default true if not enabled
         self.robot_healthy = False
         
+        # Camera system tracking
+        self.camera_fps_tracking = {}
+        self.camera_info_data = {}
+        self.camera_subscriptions = []
+        
         # Simple diagnostic system - ROS2 best practice
         self.diagnostic_updater = Updater(self)
         self.diagnostic_updater.setHardwareID("lbx_robotics_system")
@@ -172,6 +177,10 @@ class LabelboxRoboticsSystem(Node):
             self.diagnostics_callback,
             qos_profile
         )
+        
+        # Initialize camera monitoring if cameras are enabled
+        if self.launch_params.get('enable_cameras', False):
+            self.setup_camera_monitoring()
     
     def signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
@@ -590,6 +599,12 @@ class LabelboxRoboticsSystem(Node):
     def cleanup(self):
         """Clean up resources"""
         print(f"\n\n{Colors.CYAN}Shutting down systems...{Colors.ENDC}")
+        
+        # Clean up camera subscriptions
+        for subscription in self.camera_subscriptions:
+            self.destroy_subscription(subscription)
+        self.camera_subscriptions.clear()
+        
         # Cleanup will be handled by ROS2 shutdown
     
     def _get_bool_param(self, param_name: str, default: bool = False) -> bool:
@@ -837,13 +852,14 @@ class LabelboxRoboticsSystem(Node):
                 'Update Rate', 'Sample Rate', 'Actual', 'Target', 'Expected'
             ]
             
-            # Collect nodes with frequency data
+            # Collect nodes with frequency data (excluding camera nodes now handled above)
             frequency_nodes = []
             other_nodes = []
             
             for node_name in sorted(self.node_diagnostics.keys()):
                 diagnostics = self.node_diagnostics[node_name]
                 frequency_data = {}
+                
                 for key, value in diagnostics.items():
                     if any(keyword in key for keyword in frequency_keywords):
                         frequency_data[key] = value
@@ -853,137 +869,202 @@ class LabelboxRoboticsSystem(Node):
                 else:
                     other_nodes.append((node_name, diagnostics))
             
-            # Display nodes with frequency information
-            for i, (node_name, diagnostics, frequency_data) in enumerate(frequency_nodes):
-                # Node header
-                level = diagnostics.get('Level', 'OK')
-                if level == 'OK':
-                    level_color = Colors.GREEN
-                    level_icon = "🟢"
-                elif level == 'WARNING':
-                    level_color = Colors.WARNING
-                    level_icon = "🟡"
-                elif level == 'ERROR':
-                    level_color = Colors.FAIL
-                    level_icon = "🔴"
-                else:
-                    level_color = Colors.CYAN
-                    level_icon = "🔵"
+            # Display camera system report first if cameras are enabled
+            cameras_enabled = self.launch_params.get('enable_cameras', False)
+            if cameras_enabled:
+                print(f"\n{Colors.BOLD}{Colors.BLUE}📹 CAMERA SYSTEM REPORT{Colors.ENDC}")
+                print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
                 
-                # Create a nice node name display
-                display_name = node_name.replace('oculus_reader: ', '').replace(':', ' -> ')
-                if len(display_name) > 60:
-                    display_name = display_name[:57] + "..."
-                
-                print(f"\n{level_icon} {Colors.BOLD}{display_name}{Colors.ENDC} ({level_color}{level}{Colors.ENDC})")
-                print(f"{Colors.CYAN}{'-' * 70}{Colors.ENDC}")
-                
-                # Show summary if available
-                if 'Summary' in diagnostics:
-                    summary = diagnostics['Summary']
-                    if len(summary) > 75:
-                        summary = summary[:72] + "..."
-                    print(f"  📝 {summary}")
-                
-                # Show frequency information in organized sections
-                target_rates = []
-                actual_rates = []
-                other_freq = []
-                
-                for key, value in frequency_data.items():
-                    if 'Target' in key or 'Expected' in key:
-                        target_rates.append((key, value))
-                    elif 'Actual' in key or 'Current' in key:
-                        actual_rates.append((key, value))
-                    else:
-                        other_freq.append((key, value))
-                
-                # Display target rates
-                if target_rates:
-                    print(f"  🎯 {Colors.BOLD}TARGET RATES:{Colors.ENDC}")
-                    for key, value in target_rates:
-                        clean_key = key.replace('Target ', '').replace('Expected ', '')
-                        if len(clean_key) > 40:
-                            clean_key = clean_key[:37] + "..."
-                        print(f"    • {clean_key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                
-                # Display actual rates
-                if actual_rates:
-                    print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
-                    for key, value in actual_rates:
-                        clean_key = key.replace('Actual ', '').replace('Current ', '')
-                        if len(clean_key) > 40:
-                            clean_key = clean_key[:37] + "..."
+                if self.camera_fps_tracking:
+                    # Show active cameras from real-time tracking
+                    print(f"  🔧 {Colors.BOLD}CAMERA CONFIGURATION:{Colors.ENDC}")
+                    print(f"    • Active Cameras: {Colors.CYAN}{len(self.camera_fps_tracking)}{Colors.ENDC}")
+                    print(f"    • Monitoring: Real-time FPS tracking enabled")
+                    
+                    # Individual camera details from direct monitoring
+                    print(f"  📷 {Colors.BOLD}CAMERA PERFORMANCE:{Colors.ENDC}")
+                    for camera_name, streams in self.camera_fps_tracking.items():
+                        print(f"\n    📹 {Colors.BOLD}{camera_name.upper()}{Colors.ENDC}")
                         
-                        # Color code based on performance
-                        try:
-                            numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
-                            if numeric_value > 50:
-                                color = Colors.GREEN
+                        # Show camera info if available
+                        if camera_name in self.camera_info_data:
+                            color_info = self.camera_info_data[camera_name].get('color', {})
+                            if color_info:
+                                resolution = f"{color_info['width']}x{color_info['height']}"
+                                print(f"      └─ Resolution: {Colors.CYAN}{resolution}{Colors.ENDC}")
+                                print(f"      └─ Frame ID: {Colors.CYAN}{color_info.get('frame_id', 'N/A')}{Colors.ENDC}")
+                        
+                        # Stream performance from real-time tracking
+                        print(f"      📊 {Colors.BOLD}STREAM PERFORMANCE:{Colors.ENDC}")
+                        
+                        for stream_type, tracking_data in streams.items():
+                            current_fps = tracking_data['current_fps']
+                            msg_count = tracking_data['msg_count']
+                            
+                            # Determine performance color
+                            if current_fps >= 25:
+                                perf_color = Colors.GREEN
                                 perf_icon = "🟢"
-                            elif numeric_value > 20:
-                                color = Colors.CYAN
+                            elif current_fps >= 15:
+                                perf_color = Colors.CYAN
                                 perf_icon = "🔵"
-                            elif numeric_value > 0:
-                                color = Colors.WARNING
+                            elif current_fps > 0:
+                                perf_color = Colors.WARNING
                                 perf_icon = "🟡"
                             else:
-                                color = Colors.FAIL
+                                perf_color = Colors.FAIL
                                 perf_icon = "🔴"
-                        except:
-                            color = Colors.CYAN
-                            perf_icon = "🔵"
-                        
-                        print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
-                
-                # Display other frequency metrics
-                if other_freq:
-                    print(f"  📈 {Colors.BOLD}OTHER METRICS:{Colors.ENDC}")
-                    for key, value in other_freq:
-                        if len(key) > 40:
-                            key = key[:37] + "..."
-                        print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                
-                # Show other important metrics for this node
-                other_important_keys = [
-                    'Connection Status', 'VR Connected', 'Device IP', 'Recording Status',
-                    'Active Cameras', 'Queue Size', 'Data Queue Size', 'IK Success Rate',
-                    'Operation Mode', 'System Ready'
-                ]
-                
-                important_metrics = []
-                for key in other_important_keys:
-                    if key in diagnostics and key not in frequency_data:
-                        important_metrics.append((key, diagnostics[key]))
-                
-                if important_metrics:
-                    print(f"  ℹ️  {Colors.BOLD}STATUS INFO:{Colors.ENDC}")
-                    for key, value in important_metrics:
-                        if len(key) > 35:
-                            key = key[:32] + "..."
-                        
-                        if 'Success' in key and '%' in str(value):
-                            try:
-                                success_rate = float(str(value).replace('%', ''))
-                                if success_rate >= 95:
-                                    color = Colors.GREEN
-                                    icon = "✅"
-                                elif success_rate >= 80:
-                                    color = Colors.CYAN
-                                    icon = "🔵"
-                                else:
-                                    color = Colors.WARNING
-                                    icon = "⚠️"
-                                print(f"    {icon} {key}: {color}{value}{Colors.ENDC}")
-                            except:
-                                print(f"    ℹ️ {key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                        elif 'Connected' in key or 'Ready' in key:
-                            if str(value).lower() in ['yes', 'true', 'connected', 'ready']:
-                                print(f"    ✅ {key}: {Colors.GREEN}{value}{Colors.ENDC}")
+                            
+                            stream_display = "RGB" if stream_type == 'color' else "Depth"
+                            if current_fps > 0:
+                                print(f"        {perf_icon} {stream_display}: {perf_color}{current_fps:.1f} Hz{Colors.ENDC} ({msg_count} frames)")
                             else:
-                                print(f"    ❌ {key}: {Colors.WARNING}{value}{Colors.ENDC}")
+                                print(f"        {perf_icon} {stream_display}: {perf_color}No data{Colors.ENDC}")
+                
+                else:
+                    # No camera tracking data - cameras may not be publishing yet
+                    print(f"\n⚠️  {Colors.WARNING}Camera monitoring active but no camera data received{Colors.ENDC}")
+                    print(f"   📍 Camera nodes may be starting up or no cameras connected")
+                    print(f"   💡 Check camera hardware connections and RealSense drivers")
+                    print(f"   🔍 Expected topics:")
+                    print(f"      • /cameras/wrist_camera/image_raw")
+                    print(f"      • /cameras/overhead_camera/image_raw")
+                    print(f"      • /cameras/*/depth/image_raw")
+                
+                print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
+            
+            # Display other nodes with frequency information
+            if frequency_nodes:
+                for i, (node_name, diagnostics, frequency_data) in enumerate(frequency_nodes):
+                    # Node header
+                    level = diagnostics.get('Level', 'OK')
+                    if level == 'OK':
+                        level_color = Colors.GREEN
+                        level_icon = "🟢"
+                    elif level == 'WARNING':
+                        level_color = Colors.WARNING
+                        level_icon = "🟡"
+                    elif level == 'ERROR':
+                        level_color = Colors.FAIL
+                        level_icon = "🔴"
+                    else:
+                        level_color = Colors.CYAN
+                        level_icon = "🔵"
+                    
+                    # Create a nice node name display
+                    display_name = node_name.replace('oculus_reader: ', '').replace(':', ' -> ')
+                    if len(display_name) > 60:
+                        display_name = display_name[:57] + "..."
+                    
+                    print(f"\n{level_icon} {Colors.BOLD}{display_name}{Colors.ENDC} ({level_color}{level}{Colors.ENDC})")
+                    print(f"{Colors.CYAN}{'-' * 70}{Colors.ENDC}")
+                    
+                    # Show summary if available
+                    if 'Summary' in diagnostics:
+                        summary = diagnostics['Summary']
+                        if len(summary) > 75:
+                            summary = summary[:72] + "..."
+                        print(f"  📝 {summary}")
+                    
+                    # Show frequency information in organized sections
+                    target_rates = []
+                    actual_rates = []
+                    other_freq = []
+                    
+                    for key, value in frequency_data.items():
+                        if 'Target' in key or 'Expected' in key:
+                            target_rates.append((key, value))
+                        elif 'Actual' in key or 'Current' in key:
+                            actual_rates.append((key, value))
                         else:
+                            other_freq.append((key, value))
+                    
+                    # Display target rates
+                    if target_rates:
+                        print(f"  🎯 {Colors.BOLD}TARGET RATES:{Colors.ENDC}")
+                        for key, value in target_rates:
+                            clean_key = key.replace('Target ', '').replace('Expected ', '')
+                            if len(clean_key) > 40:
+                                clean_key = clean_key[:37] + "..."
+                            print(f"    • {clean_key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                    
+                    # Display actual rates
+                    if actual_rates:
+                        print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
+                        for key, value in actual_rates:
+                            clean_key = key.replace('Actual ', '').replace('Current ', '')
+                            if len(clean_key) > 40:
+                                clean_key = clean_key[:37] + "..."
+                                
+                                # Color code based on performance
+                                try:
+                                    numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
+                                    if numeric_value > 50:
+                                        color = Colors.GREEN
+                                        perf_icon = "🟢"
+                                    elif numeric_value > 20:
+                                        color = Colors.CYAN
+                                        perf_icon = "🔵"
+                                    elif numeric_value > 0:
+                                        color = Colors.WARNING
+                                        perf_icon = "🟡"
+                                    else:
+                                        color = Colors.FAIL
+                                        perf_icon = "🔴"
+                                except:
+                                    color = Colors.CYAN
+                                    perf_icon = "🔵"
+                                
+                                print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
+                    
+                    # Display other frequency metrics
+                    if other_freq:
+                        print(f"  📈 {Colors.BOLD}OTHER METRICS:{Colors.ENDC}")
+                        for key, value in other_freq:
+                            if len(key) > 40:
+                                key = key[:37] + "..."
                             print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                    
+                    # Show other important metrics for this node
+                    other_important_keys = [
+                        'Connection Status', 'VR Connected', 'Device IP', 'Recording Status',
+                        'Active Cameras', 'Queue Size', 'Data Queue Size', 'IK Success Rate',
+                        'Operation Mode', 'System Ready'
+                    ]
+                    
+                    important_metrics = []
+                    for key in other_important_keys:
+                        if key in diagnostics and key not in frequency_data:
+                            important_metrics.append((key, diagnostics[key]))
+                    
+                    if important_metrics:
+                        print(f"  ℹ️  {Colors.BOLD}STATUS INFO:{Colors.ENDC}")
+                        for key, value in important_metrics:
+                            if len(key) > 35:
+                                key = key[:32] + "..."
+                                
+                            if 'Success' in key and '%' in str(value):
+                                try:
+                                    success_rate = float(str(value).replace('%', ''))
+                                    if success_rate >= 95:
+                                        color = Colors.GREEN
+                                        icon = "✅"
+                                    elif success_rate >= 80:
+                                        color = Colors.CYAN
+                                        icon = "🔵"
+                                    else:
+                                        color = Colors.WARNING
+                                        icon = "⚠️"
+                                    print(f"    {icon} {key}: {color}{value}{Colors.ENDC}")
+                                except:
+                                    print(f"    ℹ️ {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                            elif 'Connected' in key or 'Ready' in key:
+                                if str(value).lower() in ['yes', 'true', 'connected', 'ready']:
+                                    print(f"    ✅ {key}: {Colors.GREEN}{value}{Colors.ENDC}")
+                                else:
+                                    print(f"    ❌ {key}: {Colors.WARNING}{value}{Colors.ENDC}")
+                            else:
+                                print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
             
             # Show nodes without frequency data in a compact format
             if other_nodes:
@@ -1030,6 +1111,119 @@ class LabelboxRoboticsSystem(Node):
         
         # Force flush output
         sys.stdout.flush()
+
+    def setup_camera_monitoring(self):
+        """Set up direct camera topic monitoring for real-time performance tracking"""
+        # Known camera topics based on our camera system setup
+        camera_topics = [
+            '/cameras/wrist_camera/image_raw',
+            '/cameras/overhead_camera/image_raw',
+            '/cameras/wrist_camera/depth/image_raw',
+            '/cameras/overhead_camera/depth/image_raw',
+        ]
+        
+        camera_info_topics = [
+            '/cameras/wrist_camera/camera_info',
+            '/cameras/overhead_camera/camera_info',
+            '/cameras/wrist_camera/depth/camera_info',
+            '/cameras/overhead_camera/depth/camera_info',
+        ]
+        
+        # QoS for image topics (best effort like camera publishers typically use)
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        
+        # QoS for camera info (reliable for configuration data)
+        info_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        
+        # Subscribe to image topics for FPS tracking
+        for topic in camera_topics:
+            camera_name = self.extract_camera_name(topic)
+            stream_type = 'depth' if 'depth' in topic else 'color'
+            
+            # Initialize tracking data
+            if camera_name not in self.camera_fps_tracking:
+                self.camera_fps_tracking[camera_name] = {}
+            self.camera_fps_tracking[camera_name][stream_type] = {
+                'last_msg_time': None,
+                'msg_count': 0,
+                'fps_history': [],
+                'current_fps': 0.0
+            }
+            
+            # Create subscription
+            subscription = self.create_subscription(
+                Image,
+                topic,
+                lambda msg, cam=camera_name, stream=stream_type: self.camera_image_callback(msg, cam, stream),
+                image_qos
+            )
+            self.camera_subscriptions.append(subscription)
+            self.get_logger().info(f"Monitoring camera topic: {topic}")
+        
+        # Subscribe to camera info topics for resolution and config data
+        for topic in camera_info_topics:
+            camera_name = self.extract_camera_name(topic)
+            stream_type = 'depth' if 'depth' in topic else 'color'
+            
+            # Initialize camera info storage
+            if camera_name not in self.camera_info_data:
+                self.camera_info_data[camera_name] = {}
+            
+            subscription = self.create_subscription(
+                CameraInfo,
+                topic,
+                lambda msg, cam=camera_name, stream=stream_type: self.camera_info_callback(msg, cam, stream),
+                info_qos
+            )
+            self.camera_subscriptions.append(subscription)
+            self.get_logger().info(f"Monitoring camera info: {topic}")
+    
+    def extract_camera_name(self, topic):
+        """Extract camera name from topic path"""
+        # Example: '/cameras/wrist_camera/image_raw' -> 'wrist_camera'
+        parts = topic.split('/')
+        if len(parts) >= 3 and parts[1] == 'cameras':
+            return parts[2]
+        return 'unknown_camera'
+    
+    def camera_image_callback(self, msg, camera_name, stream_type):
+        """Track camera image frequency for real-time FPS calculation"""
+        current_time = time.time()
+        tracking_data = self.camera_fps_tracking[camera_name][stream_type]
+        
+        if tracking_data['last_msg_time'] is not None:
+            # Calculate time since last message
+            time_diff = current_time - tracking_data['last_msg_time']
+            if time_diff > 0:
+                instant_fps = 1.0 / time_diff
+                
+                # Keep a rolling average of last 10 samples
+                tracking_data['fps_history'].append(instant_fps)
+                if len(tracking_data['fps_history']) > 10:
+                    tracking_data['fps_history'].pop(0)
+                
+                # Calculate average FPS
+                tracking_data['current_fps'] = sum(tracking_data['fps_history']) / len(tracking_data['fps_history'])
+        
+        tracking_data['last_msg_time'] = current_time
+        tracking_data['msg_count'] += 1
+    
+    def camera_info_callback(self, msg, camera_name, stream_type):
+        """Store camera configuration information"""
+        self.camera_info_data[camera_name][stream_type] = {
+            'width': msg.width,
+            'height': msg.height,
+            'distortion_model': msg.distortion_model,
+            'frame_id': msg.header.frame_id
+        }
 
 
 async def async_main():

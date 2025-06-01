@@ -26,6 +26,23 @@ from .camera_utilities import (
     CV2_AVAILABLE # Still needed by ZEDCamera for format conversion
 )
 
+def get_configs_sensors_dir():
+    """Helper function to locate the configs/sensors directory"""
+    # Try to get from environment variable first
+    workspace_root = os.environ.get('COLCON_WS', None)
+    if workspace_root:
+        return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
+    
+    # Fallback: try to detect based on current package location
+    try:
+        lbx_vision_camera_share = get_package_share_directory('lbx_vision_camera')
+        # Navigate from install/lbx_vision_camera/share/lbx_vision_camera to workspace root
+        workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(lbx_vision_camera_share))))
+        return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
+    except:
+        # Last resort: hardcoded fallback
+        return '/tmp/camera_configs'
+
 class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
@@ -44,8 +61,7 @@ class CameraNode(Node):
         self.declare_parameter('enable_pointcloud', True)
         self.declare_parameter('tf_publish_rate_hz', 10.0)
         self.declare_parameter('diagnostics_publish_rate_hz', 0.2)
-        self.declare_parameter('auto_config_generation_dir', 
-                               os.path.join(get_package_share_directory('lbx_robotics'), 'configs', 'sensors'))
+        self.declare_parameter('auto_config_generation_dir', get_configs_sensors_dir())
 
         self.camera_config_path_param = self.get_parameter('camera_config_file').get_parameter_value().string_value
         self.enable_publishing = self.get_parameter('enable_publishing').get_parameter_value().bool_value

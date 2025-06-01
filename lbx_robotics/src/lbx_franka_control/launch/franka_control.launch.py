@@ -19,9 +19,8 @@ def generate_launch_description():
     declare_config_file = DeclareLaunchArgument(
         'config_file',
         default_value=PathJoinSubstitution([
-            FindPackageShare('lbx_robotics'),
-            'configs',
-            'control',
+            FindPackageShare('lbx_franka_control'),
+            'config',
             'franka_vr_control_config.yaml'
         ]),
         description='Path to the control configuration file'

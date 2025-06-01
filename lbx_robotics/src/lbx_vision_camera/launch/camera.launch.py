@@ -10,6 +10,24 @@ def generate_launch_description():
     # User can still provide a specific path to override.
     default_camera_config_file_value = '' 
 
+    # Fix: Use environment variable or fallback to a sensible default path
+    # instead of the non-existent 'lbx_robotics' package
+    def get_configs_sensors_dir():
+        # Try to get from environment variable first
+        workspace_root = os.environ.get('COLCON_WS', None)
+        if workspace_root:
+            return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
+        
+        # Fallback: try to detect based on current package location
+        try:
+            lbx_vision_camera_share = get_package_share_directory('lbx_vision_camera')
+            # Navigate from install/lbx_vision_camera/share/lbx_vision_camera to workspace root
+            workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(lbx_vision_camera_share))))
+            return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
+        except:
+            # Last resort: hardcoded fallback
+            return '/tmp/camera_configs'
+
     declared_arguments = []
 
     declared_arguments.append(
@@ -22,7 +40,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             'auto_config_generation_dir',
-            default_value=os.path.join(get_package_share_directory('lbx_robotics'), 'configs', 'sensors'),
+            default_value=get_configs_sensors_dir(),
             description='Directory where auto-generated camera configs will be placed if needed.'
         )
     )

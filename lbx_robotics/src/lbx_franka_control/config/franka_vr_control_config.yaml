@@ -1,0 +1,153 @@
+# Franka VR Control Configuration
+# All parameters preserved exactly from oculus_vr_server_moveit.py
+#
+# This configuration implements a 1:1 match of the VR teleoperation pipeline.
+# All transformations, gains, and control logic are identical to the original.
+#
+# This system uses MoveIt's IK solver for Cartesian-to-joint conversion.
+# The "max_delta" parameters below are NOT IK parameters - they scale
+# normalized velocity commands to position changes before IK solving.
+#
+# Key Performance Parameters for 45Hz Operation:
+# - min_command_interval: 0.022 (45Hz robot commands)
+# - trajectory_duration_single_point: 0.1 (100ms per trajectory)
+# - max_joint_velocity: 0.5 rad/s (increased for responsiveness)
+# - velocity_scale_factor: 0.3 (tuned for 45Hz operation)
+
+robot:
+  # Robot configuration
+  robot_ip: "192.168.1.60"
+  planning_group: "fr3_arm"
+  end_effector_link: "fr3_hand_tcp"
+  base_frame: "fr3_link0"
+  planning_frame: "fr3_link0"
+
+  # Joint names for FR3
+  joint_names:
+    - "fr3_joint1"
+    - "fr3_joint2"
+    - "fr3_joint3"
+    - "fr3_joint4"
+    - "fr3_joint5"
+    - "fr3_joint6"
+    - "fr3_joint7"
+
+  # Home position (ready pose)
+  home_positions: [0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785]
+
+  # Workspace bounds
+  workspace_min: [-0.6, -0.6, 0.0]
+  workspace_max: [0.6, 0.6, 1.0]
+
+vr_control:
+  # VR velocity control parameters (preserved from DROID VRPolicy)
+  max_lin_vel: 1.0 # Maximum normalized linear velocity [-1, 1]
+  max_rot_vel: 1.0 # Maximum normalized rotational velocity [-1, 1]
+  max_gripper_vel: 1.0 # Maximum normalized gripper velocity [-1, 1]
+  spatial_coeff: 1.0 # Spatial scaling coefficient
+
+  # VR action gains - scale raw VR motion to velocity commands
+  pos_action_gain: 5.0 # Amplifies position differences to velocity
+  rot_action_gain: 2.0 # Amplifies rotation differences to velocity
+  gripper_action_gain: 3.0 # Amplifies gripper differences to velocity
+
+  control_hz: 60 # Ultra-low latency VR processing
+
+  # Velocity-to-position delta conversion for MoveIt commands
+  # These scale normalized velocities [-1, 1] to actual position changes
+  max_lin_delta: 0.075 # Max linear motion per timestep (m)
+  max_rot_delta: 0.15 # Max angular motion per timestep (rad)
+  max_gripper_delta: 0.25 # Max gripper motion per timestep
+
+  # Coordinate transformation (default: adjusted for compatibility)
+  coord_transform: [-3, -1, 2, 4] # Position reorder vector
+  rotation_mode: "labelbox"
+
+  # Position filtering
+  translation_deadzone: 0.0005
+  use_position_filter: true
+  position_filter_alpha: 0.8
+
+  # Ultra-smooth pose filtering for 60Hz operation
+  pose_smoothing_enabled: true
+  pose_smoothing_alpha: 0.35 # 0=max smoothing, 1=no smoothing
+  velocity_smoothing_alpha: 0.25
+  adaptive_smoothing: true # Adjust smoothing based on motion speed
+  max_gripper_smoothing_delta: 0.02 # Max gripper change per smoothing step
+
+  # Command rate limiting
+  min_command_interval: 0.022 # 45Hz robot commands (increased from 15Hz)
+
+  # Controller selection
+  use_right_controller: true # false for left controller
+
+performance_mode:
+  # Performance mode parameters (when enabled)
+  control_hz_multiplier: 2 # 120Hz
+  pos_action_gain_multiplier: 2.0 # 10.0
+  rot_action_gain_multiplier: 1.5 # 3.0
+  max_lin_delta_multiplier: 0.67 # 0.05
+  max_rot_delta_multiplier: 0.67 # 0.1
+
+moveit:
+  # MoveIt service timeouts
+  ik_timeout_sec: 0.1
+  fk_timeout_sec: 0.5
+  planning_scene_timeout_sec: 0.5
+  service_wait_timeout_sec: 10.0
+
+  # Trajectory execution
+  trajectory_duration_reset: 5.0 # Duration for reset trajectory
+  trajectory_duration_single_point: 0.1 # 100ms execution (reduced for 45Hz)
+
+  # Path tolerances for single-point trajectories
+  path_tolerance_position: 0.05
+  path_tolerance_velocity: 0.6
+  path_tolerance_acceleration: 0.5
+
+  # Goal tolerances for reset trajectories
+  goal_tolerance_position: 0.015
+  goal_tolerance_velocity: 0.1
+  goal_tolerance_acceleration: 0.1
+
+  # Velocity limiting
+  max_joint_velocity: 0.5 # rad/s (increased for 45Hz)
+  velocity_scale_factor: 0.3 # Scale factor for velocity profiles (increased)
+
+  # MoveIt IK solver parameters
+  ik_attempts: 10 # Number of IK attempts for difficult poses
+  ik_position_tolerance: 0.001 # IK position tolerance (m)
+  ik_orientation_tolerance: 0.01 # IK orientation tolerance (rad)
+
+gripper:
+  # Gripper parameters
+  close_width: 0.0 # Fully closed
+  open_width: 0.08 # Fully open (80mm)
+  speed: 0.5 # Maximum speed for responsiveness
+  grasp_force: 60.0 # Grasping force (N)
+  epsilon_inner: 0.005 # Tolerance for grasping
+  epsilon_outer: 0.005
+
+  # Trigger threshold
+  trigger_threshold: 0.02 # Ultra-responsive threshold
+
+calibration:
+  # Forward direction calibration
+  movement_threshold: 0.003 # 3mm threshold
+
+recording:
+  # Recording parameters
+  enabled: true # Enable/disable recording functionality
+  recording_hz: 60 # Same as control frequency
+  mcap_queue_size: 1000
+
+debug:
+  # Debug flags
+  debug_moveit: false # MoveIt debugging
+  debug_ik_failures: true # Log IK failures
+  debug_comm_stats: true # Log communication statistics
+
+constants:
+  # Action constants
+  GRIPPER_OPEN: 0.0
+  GRIPPER_CLOSE: 1.0

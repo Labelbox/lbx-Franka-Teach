@@ -1,0 +1,7 @@
+# Request
+string filename_prefix    # Optional prefix for the recording filename
+---
+# Response
+bool success              # True if recording started successfully
+string message            # Status message or error description
+string output_path        # Path where the recording will be saved 

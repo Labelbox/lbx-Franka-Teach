@@ -1,0 +1,8 @@
+# Request
+bool success              # True if recording was successful, false to discard
+string notes              # Optional notes about the recording
+---
+# Response
+bool success              # True if recording stopped successfully
+string message            # Status message or error description
+string final_path         # Final path of the saved recording (empty if discarded) 

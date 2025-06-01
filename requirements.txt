@@ -1,6 +1,6 @@
 # Core dependencies
-numpy>=1.19.0,<2.0
-scipy
+numpy>=1.20.0
+scipy>=1.7.0
 matplotlib
 pyzmq
 hydra-core
@@ -9,13 +9,13 @@ h5py
 blosc
 mcap
 mcap-ros2-support
+mcap-protobuf
 foxglove-schemas-protobuf
 protobuf==3.20.3
 
 # Camera dependencies
 pyrealsense2==2.55.1.6486  # Latest stable Intel RealSense SDK
-opencv-python>=4.5.0  # OpenCV for image processing and generic cameras
-pyyaml  # For camera configuration files
+pyyaml>=5.4.1
 
 # ZED SDK Python wrapper (pyzed) must be installed separately:
 # 1. Install ZED SDK 5.0 from https://www.stereolabs.com/developers/release
@@ -25,11 +25,12 @@ pyyaml  # For camera configuration files
 # VR dependencies
 requests
 websocket-client
-pure-python-adb
-tf-transformations
+pure-python-adb>=0.3.0.dev0
+tf-transformations>=0.0.1
 
 # Optional dependencies for development
 pytest  # For running tests
 pytest-asyncio  # For async tests
 black  # Code formatting
 flake8  # Linting
+psutil>=5.9.0

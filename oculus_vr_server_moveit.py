@@ -10,7 +10,7 @@ VR-to-Robot Control Pipeline:
 4. Velocity Limiting: Clip to [-1, 1] range
 5. Delta Conversion: Scale by max_delta (0.075m linear, 0.15rad angular)
 6. Position Target: Add deltas to current position/orientation
-7. MoveIt Command: Send position + quaternion targets via IK solver (15Hz)
+7. MoveIt Command: Send position + quaternion targets via IK solver (45Hz)
 
 Migration Changes from Deoxys:
 - MoveIt IK service replaces Deoxys internal IK
@@ -312,7 +312,8 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self.control_hz = CONTROL_FREQ
         self.control_interval = 1.0 / self.control_hz
         
-        # DROID IK solver parameters for velocity-to-delta conversion
+        # Velocity-to-position delta conversion parameters (preserved from DROID)
+        # These scale normalized velocity commands [-1, 1] to actual position changes
         self.max_lin_delta = 0.075
         self.max_rot_delta = 0.15
         self.max_gripper_delta = 0.25
@@ -460,7 +461,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._pose_history = deque(maxlen=3)  # Smaller history for 60Hz (3 vs 5)
         
         # Adaptive command rate for smooth motion
-        self.min_command_interval = 0.067  # 15Hz robot commands (optimized up from 10Hz)
+        self.min_command_interval = 0.022  # 45Hz robot commands (optimized up from 10Hz)
         self.adaptive_smoothing = True  # Adjust smoothing based on motion speed
         
         # Async components
@@ -496,12 +497,12 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         self._trajectory_failure_count = 0
         
         # Print status
-        print("\n🎮 Oculus VR Server - MoveIt Edition (Optimized 15Hz)")
+        print("\n🎮 Oculus VR Server - MoveIt Edition (Optimized 45Hz)")
         print(f"   Using {'RIGHT' if right_controller else 'LEFT'} controller")
         print(f"   Mode: {'DEBUG' if debug else 'LIVE ROBOT CONTROL'}")
         print(f"   Robot: {'SIMULATED FR3' if simulation else 'REAL HARDWARE'}")
         print(f"   VR Processing: {self.control_hz}Hz (Ultra-low latency)")
-        print(f"   Robot Commands: 15Hz (Optimized responsiveness)")
+        print(f"   Robot Commands: 45Hz (Optimized responsiveness)")
         print(f"   Position gain: {self.pos_action_gain}")
         print(f"   Rotation gain: {self.rot_action_gain}")
         print(f"   MoveIt integration: IK solver + collision avoidance + velocity-limited trajectories")
@@ -1430,7 +1431,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
     
     def _robot_comm_worker(self):
         """Handles robot communication via MoveIt services/actions"""
-        self.get_logger().info("🔌 Robot communication thread started (MoveIt - 15Hz Optimized)")
+        self.get_logger().info("🔌 Robot communication thread started (MoveIt - 45Hz Optimized)")
         
         comm_count = 0
         total_comm_time = 0
@@ -1444,7 +1445,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                 if command is None:  # Poison pill
                     break
                 
-                # Use the optimized rate limiting for 15Hz
+                # Use the optimized rate limiting for 45Hz
                 if not self.should_send_robot_command():
                     continue
                 
@@ -1488,7 +1489,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
                     avg_comm_time = total_comm_time / comm_count
                     actual_rate = comm_count / 30.0  # Update calculation for 30s window
                     self.get_logger().info(f"📡 Avg MoveIt comm: {avg_comm_time*1000:.1f}ms ({comm_count} commands in 30s)")
-                    self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 15Hz)")
+                    self.get_logger().info(f"📊 Actual robot rate: {actual_rate:.1f} commands/sec (target: 45Hz)")
                     if self.debug_comm_stats:
                         self.print_moveit_stats()
                     stats_last_printed = time.time()
@@ -2205,7 +2206,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
         """Determine if we should send a new robot command based on rate limiting and motion"""
         current_time = time.time()
         
-        # Always respect minimum command interval (15Hz = 67ms)
+        # Always respect minimum command interval (45Hz = 22ms)
         if current_time - self._last_command_time < self.min_command_interval:
             return False
         
@@ -2217,7 +2218,7 @@ class OculusVRServer(Node):  # INHERIT FROM ROS 2 NODE
             # Calculate motion since last command
             pos_delta = np.linalg.norm(recent_pose['pos'] - older_pose['pos'])
             
-            # Optimized motion detection for 15Hz - good balance of responsiveness
+            # Optimized motion detection for 45Hz - good balance of responsiveness
             # Allow commands for meaningful movement
             if pos_delta < 0.0008 and current_time - self._last_command_time < 0.15:  # 150ms max delay
                 return False

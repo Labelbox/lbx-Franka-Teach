@@ -73,3 +73,6 @@ pytest  # For running tests
 pytest-asyncio  # For async tests
 black  # Code formatting
 flake8  # Linting
+
+# Added from the code block
+psutil

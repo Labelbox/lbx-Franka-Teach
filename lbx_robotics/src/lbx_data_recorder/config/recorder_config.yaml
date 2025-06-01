@@ -1,0 +1,55 @@
+mcap_recorder_node:
+  ros__parameters:
+    base_directory: "/home/user/ros2_recordings" # Example, change to your preferred default
+    default_robot_name: "franka_fr3"
+    auto_start_recording: false
+    auto_start_filename_prefix: "auto_trajectory"
+    recording_frequency_hz: 20.0 # How often to bundle data from buffer to MCAP write queue
+    image_jpeg_quality: 85 # For sensor_msgs/Image -> foxglove.CompressedImage
+    mcap_queue_size: 2000 # Number of bundles to queue before potential drop
+    diagnostics_publish_rate_hz: 0.2 # Every 5 seconds
+    mcap_write_chunk_size_kb: 2048 # MCAP chunk size in KB (e.g., 2MB)
+
+    # IMPORTANT: Define the topics to record and their ROS2 message types.
+    # Format for topic_types_map: "<topic_name>:<package.msg.TypeName>"
+    # Ensure these message types are available in your ROS 2 environment.
+    topics_to_record: [
+        "/diagnostics",
+        "/robot_description",
+        "/tf",
+        "/tf_static",
+        "/joint_states",
+        # Oculus Topics (ensure these match what lbx_input_oculus publishes)
+        "/vr/oculus_input_node/left_controller_pose",
+        "/vr/oculus_input_node/right_controller_pose",
+        "/vr/oculus_input_node/left_controller_joy",
+        "/vr/oculus_input_node/right_controller_joy",
+        # Camera Topics (ensure these match what lbx_vision_camera publishes for ONE camera)
+        # Add more if you have multiple cameras, e.g., /cam_zed_front/color/image_raw
+        "/vision_camera_node/cam_realsense_hand/color/image_raw", # Example for one camera
+        "/vision_camera_node/cam_realsense_hand/color/camera_info",
+        "/vision_camera_node/cam_realsense_hand/depth/image_raw",
+        "/vision_camera_node/cam_realsense_hand/depth/camera_info",
+        "/vision_camera_node/cam_realsense_hand/depth/color/points",
+        # Custom topics (if you have them)
+        # "/my_robot_state",
+        # "/my_action_command"
+      ]
+    topic_types_map: [
+        "/diagnostics:diagnostic_msgs.msg.DiagnosticArray",
+        "/robot_description:std_msgs.msg.String",
+        "/tf:tf2_msgs.msg.TFMessage",
+        "/tf_static:tf2_msgs.msg.TFMessage",
+        "/joint_states:sensor_msgs.msg.JointState",
+        "/vr/oculus_input_node/left_controller_pose:geometry_msgs.msg.PoseStamped",
+        "/vr/oculus_input_node/right_controller_pose:geometry_msgs.msg.PoseStamped",
+        "/vr/oculus_input_node/left_controller_joy:sensor_msgs.msg.Joy",
+        "/vr/oculus_input_node/right_controller_joy:sensor_msgs.msg.Joy",
+        "/vision_camera_node/cam_realsense_hand/color/image_raw:sensor_msgs.msg.Image",
+        "/vision_camera_node/cam_realsense_hand/color/camera_info:sensor_msgs.msg.CameraInfo",
+        "/vision_camera_node/cam_realsense_hand/depth/image_raw:sensor_msgs.msg.Image",
+        "/vision_camera_node/cam_realsense_hand/depth/camera_info:sensor_msgs.msg.CameraInfo",
+        "/vision_camera_node/cam_realsense_hand/depth/color/points:sensor_msgs.msg.PointCloud2",
+        # "/my_robot_state:my_interfaces_pkg.msg.MyRobotState", # Example for custom
+        # "/my_action_command:my_interfaces_pkg.msg.MyAction"  # Example for custom
+      ]

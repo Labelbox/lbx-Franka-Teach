@@ -34,8 +34,8 @@ if [ ! -z "$CONDA_DEFAULT_ENV" ] || [ ! -z "$CONDA_PREFIX" ]; then
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo_error "Setup aborted by user due to active Conda environment."
-    exit 1
-fi
+        exit 1
+    fi
 else
     echo_success "No Conda environment active. Proceeding with system setup."
 fi
@@ -64,7 +64,7 @@ if [ -z "$CMAKE_EXE" ]; then CMAKE_EXE="/usr/bin/cmake"; fi # Fallback if not in
 
 if $CMAKE_EXE --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
     echo_success "CMake version $($CMAKE_EXE --version | head -n1) is installed and sufficient."
-    else
+else
     echo_error "Failed to install CMake >= 3.22. Current version: $($CMAKE_EXE --version | head -n1 || echo 'Not Found'). Pinocchio build may fail. Please install CMake 3.22+ manually."
     # exit 1 # Optionally exit
 fi
@@ -201,11 +201,11 @@ cd "$SCRIPT_DIR"
 if [ ! -d "$SCRIPT_DIR/src" ]; then mkdir -p "$SCRIPT_DIR/src"; fi
 
 if ! $ALL_FRANKA_APT_INSTALLED || [ ! -d "$SCRIPT_DIR/src/franka_ros2" ]; then
-if [ ! -d "$SCRIPT_DIR/src/franka_ros2" ]; then
-    echo_info "Cloning franka_ros2 repository into lbx_robotics/src/..."
-    cd "$SCRIPT_DIR/src"
+    if [ ! -d "$SCRIPT_DIR/src/franka_ros2" ]; then
+        echo_info "Cloning franka_ros2 repository into lbx_robotics/src/..."
+        cd "$SCRIPT_DIR/src"
         git clone https://github.com/frankaemika/franka_ros2.git
-    cd "$SCRIPT_DIR"
+        cd "$SCRIPT_DIR"
     fi
     echo_info "Importing franka_ros2 dependencies into workspace..."
     vcs import src < src/franka_ros2/franka.repos --recursive --skip-existing

@@ -164,21 +164,50 @@ fi
 
 # 6. Install Python Dependencies using pip
 echo_step "Installing Python dependencies from $PIP_REQ_FILE..."
-if [ -f "$SCRIPT_DIR/$PIP_REQ_FILE" ]; then
-    sudo apt install -y python3-pip # Ensure pip is available for system Python
-    echo_info "Ensuring Python pip, setuptools, and wheel are up to date..."
-    python3 -m pip install --upgrade pip setuptools wheel
+
+# Ensure pip is available
+sudo apt install -y python3-pip python3-venv # Also install venv for virtual environments if needed
+
+# Upgrade pip, setuptools, and wheel first
+echo_info "Ensuring Python pip, setuptools, and wheel are up to date..."
+python3 -m pip install --user --upgrade pip setuptools wheel
+
+# First, explicitly install colcon to ensure it's available
+echo_info "Installing colcon build tools..."
+python3 -m pip install --user --upgrade colcon-common-extensions colcon-core>=0.15.0 colcon-ros>=0.4.0
+
+# Check if ~/.local/bin is in PATH and add it if not
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+    echo_warn "Adding ~/.local/bin to PATH for this session..."
+    export PATH="$HOME/.local/bin:$PATH"
     
-    echo_info "Installing packages from $PIP_REQ_FILE..."
-    # Use --user flag if system site-packages is not writable, or run with sudo if appropriate
-    # For system-wide ROS setup, installing to system Python is often intended.
-    # However, if non-root, pip might default to --user.
-    if python3 -m pip install -r "$SCRIPT_DIR/$PIP_REQ_FILE"; then
+    # Add to .bashrc if not already there
+    if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc; then
+        echo_info "Adding ~/.local/bin to PATH in ~/.bashrc..."
+        echo '' >> ~/.bashrc
+        echo '# Added by lbx_robotics setup script' >> ~/.bashrc
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+        echo_success "PATH updated in ~/.bashrc. It will be available in new terminals."
+    fi
+fi
+
+# Verify colcon is now available
+if command -v colcon &> /dev/null; then
+    echo_success "colcon is installed and available: $(which colcon)"
+    echo_info "colcon version: $(colcon version-check 2>&1 | grep 'colcon-core' | head -1)"
+else
+    echo_error "colcon installation failed or not in PATH!"
+    echo_info "Please manually check:"
+    echo_info "  ls -la ~/.local/bin/colcon*"
+    echo_info "  pip3 list | grep colcon"
+    exit 1
+fi
+
+# Now install remaining Python dependencies
+if [ -f "$SCRIPT_DIR/$PIP_REQ_FILE" ]; then
+    echo_info "Installing remaining packages from $PIP_REQ_FILE..."
+    if python3 -m pip install --user -r "$SCRIPT_DIR/$PIP_REQ_FILE"; then
         echo_success "Python dependencies installed successfully."
-        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-            echo_warn "~/.local/bin is not on your PATH. You might want to add it by running:"
-            echo_warn "  echo 'export PATH=\"$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
-        fi
     else
         echo_error "Failed to install Python dependencies from $PIP_REQ_FILE. Check errors above."
         exit 1
@@ -217,6 +246,54 @@ cd "$SCRIPT_DIR"
 rosdep install --from-paths src --ignore-src --rosdistro humble -y -r
 echo_success "Workspace dependencies resolved."
 
+# 10. Final verification
+echo_step "Verifying installation..."
+VERIFICATION_FAILED=false
+
+# Check ROS 2
+if command -v ros2 &> /dev/null; then
+    echo_success "✓ ROS 2 is installed"
+else
+    echo_error "✗ ROS 2 not found"
+    VERIFICATION_FAILED=true
+fi
+
+# Check colcon
+if command -v colcon &> /dev/null; then
+    echo_success "✓ colcon is installed: $(which colcon)"
+else
+    echo_error "✗ colcon not found"
+    echo_info "  Try: export PATH=\"$HOME/.local/bin:\$PATH\""
+    VERIFICATION_FAILED=true
+fi
+
+# Check CMake version
+if command -v cmake &> /dev/null; then
+    CMAKE_VERSION=$(cmake --version | head -n1 | awk '{print $3}')
+    echo_success "✓ CMake $CMAKE_VERSION is installed"
+else
+    echo_error "✗ CMake not found"
+    VERIFICATION_FAILED=true
+fi
+
+# Check if key Python packages are installed
+echo_info "Checking Python packages..."
+for pkg in "colcon-core" "colcon-ros" "empy" "numpy"; do
+    if python3 -m pip show $pkg &> /dev/null; then
+        echo_success "  ✓ $pkg is installed"
+    else
+        echo_warn "  ✗ $pkg not found"
+    fi
+done
+
+if [ "$VERIFICATION_FAILED" = true ]; then
+    echo_error "Some components failed verification. Please check the errors above."
+    echo_info "You may need to:"
+    echo_info "  1. Open a new terminal to reload PATH"
+    echo_info "  2. Run: source ~/.bashrc"
+    echo_info "  3. Re-run this setup script"
+fi
+
 # --- Final Instructions ---
 echo ""
 echo_success "--------------------------------------------------------------"
@@ -224,8 +301,11 @@ echo_success " System-level environment setup for lbx_robotics complete!  "
 echo_success "--------------------------------------------------------------"
 echo ""
 echo_info "To build and run the system:"
-echo -e "  1. ${CYAN}Open a new terminal or re-source your .bashrc (if ROS setup was added).${NC}"
+echo -e "  1. ${CYAN}Open a new terminal or run: source ~/.bashrc${NC}"
 echo -e "  2. ${CYAN}Source ROS 2 Humble: source /opt/ros/humble/setup.bash${NC}"
 echo -e "  3. ${CYAN}Navigate to workspace: cd $SCRIPT_DIR${NC}"
-echo -e "  4. ${CYAN}Build: ./unified_launch.sh --clean-build${NC} (this will use system libraries)"
-echo -e "  5. ${CYAN}Source built workspace: source install/setup.bash${NC}" 
+echo -e "  4. ${CYAN}Build: ./unified_launch.sh --clean-build${NC}"
+echo -e "  5. ${CYAN}Source built workspace: source install/setup.bash${NC}"
+echo ""
+echo_info "If colcon is still not found, ensure PATH is set:"
+echo -e "  ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}" 

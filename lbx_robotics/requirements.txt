@@ -18,7 +18,7 @@ scikit-learn         # Machine learning tools (optional)
 colcon-common-extensions>=0.3.0  # Meta-package that includes most colcon packages
 colcon-core>=0.15.0              # Latest colcon-core fixes the --editable option issue
 colcon-ros>=0.4.0                # ROS-specific colcon extensions
-setuptools>=58.2.0               # Required for proper Python package builds
+setuptools<65.5.0                # Required for compatibility with some packages (e.g. pure-python-adb)
 wheel>=0.37.0                    # Required for building wheels
 
 # --- ROS 2 Related Python Packages ---
@@ -48,14 +48,16 @@ foxglove-websocket   # For Foxglove Studio integration
 
 # --- VR / Robot Control Specific (Python Components) ---
 # VR Requirements - Install these for Meta Quest/Oculus VR functionality
-pure-python-adb  # For Meta Quest (Oculus) VR controller communication - REQUIRED for VR
+pure-python-adb==0.3.0.dev0  # For Meta Quest (Oculus) VR controller communication - REQUIRED for VR
 # 
+# Note: pure-python-adb requires setuptools<65.5.0 for successful installation
 # Recommended Installation:
-# pip install pure-python-adb
+# 1. pip install setuptools<65.5.0
+# 2. pip install pure-python-adb==0.3.0.dev0
 # 
 # Alternative Options:
 # Option 1 (Basic): pip install pure-python-adb
-# Option 2 (Versioned): pure-python-adb>=0.3.0.dev0
+# Option 2 (Versioned): pure-python-adb==0.3.0.dev0
 # Option 3 (All deps): pip install -r requirements.txt
 
 # oculus_reader      # If this is a pip-installable Python package for your VR setup.

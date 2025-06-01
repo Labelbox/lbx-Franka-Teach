@@ -85,14 +85,12 @@ REQUIRED_PKGS=(
 FAILED_PKGS=()
 for pkg in "${REQUIRED_PKGS[@]}"; do
     echo_info "Installing $pkg (if not already covered by build-essential/cmake)..."
-    if ! dpkg -l "$pkg" > /dev/null 2>&1 || ! sudo apt install -y "$pkg"; then
-        # Check if already installed (especially for build-essential components)
-        if ! dpkg -l "$pkg" > /dev/null 2>&1; then 
-            echo_warn "Failed to install $pkg via apt."
-            FAILED_PKGS+=("$pkg")
-        else
-            echo_info "$pkg is already installed."
-        fi
+    sudo apt install -y "$pkg"
+    if ! dpkg -l "$pkg" > /dev/null 2>&1; then 
+        echo_warn "Failed to install $pkg via apt."
+        FAILED_PKGS+=("$pkg")
+    else
+        echo_info "$pkg is installed."
     fi
 done
 if [ ${#FAILED_PKGS[@]} -ne 0 ]; then

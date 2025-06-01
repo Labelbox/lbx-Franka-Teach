@@ -54,13 +54,14 @@ def launch_setup(context, *args, **kwargs):
                 'moveit.launch.py'
             ])
         ),
-        launch_arguments={
+        launch_arguments=({
             'robot_ip': robot_ip,
             'use_fake_hardware': use_fake_hardware,
             'load_gripper': load_gripper,
             'use_rviz': enable_rviz,
             'rviz_config': rviz_config,
-        }.items()
+            'robot_description': robot_description_content,
+        }).items()
     )
     
     return [moveit_launch]

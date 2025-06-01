@@ -18,8 +18,9 @@ from typing import Dict, Optional, Any, List, Tuple
 import cv2 # For image encoding
 import sys
 
-from mcap.writer import Writer as BaseMcapWriter
-from mcap_ros2.writer import Writer as McapRos2NativeWriter
+import mcap # Added import
+from mcap.writer import Writer as BaseMcapWriter # Keep base writer for specific metadata/attachment if needed
+from mcap_ros2.writer import Writer as McapRos2NativeWriter # For writing ROS2 messages with CDR
 
 from diagnostic_updater import Updater, DiagnosticTask, DiagnosticStatus
 from diagnostic_msgs.msg import KeyValue

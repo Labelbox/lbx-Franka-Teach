@@ -104,24 +104,8 @@ perform_build() {
     echo "Sourcing ROS2 environment for build..."
     source "/opt/ros/$ROS_DISTRO/setup.bash" # Use the detected ROS_DISTRO
     
-    # Skip packages that have complex dependencies or are already installed
-    SKIP_PACKAGES="libfranka"
-    
-    # Check if other franka packages are already installed and skip them
-    if dpkg -l | grep -q "ros-humble-franka-hardware"; then
-        echo -e "${YELLOW}Skipping franka_hardware (already installed from apt)${NC}"
-        SKIP_PACKAGES="$SKIP_PACKAGES franka_hardware"
-    fi
-    
-    if dpkg -l | grep -q "ros-humble-franka-gripper"; then
-        echo -e "${YELLOW}Skipping franka_gripper (already installed from apt)${NC}"
-        SKIP_PACKAGES="$SKIP_PACKAGES franka_gripper"
-    fi
-    
-    echo -e "${YELLOW}Packages to skip: $SKIP_PACKAGES${NC}"
-    
-    echo -e "${BLUE}Building with: colcon build --symlink-install --packages-skip $SKIP_PACKAGES${NC}"
-    if colcon build --symlink-install --packages-skip $SKIP_PACKAGES 2>&1; then # Build all packages except the skipped ones
+    echo -e "${BLUE}Building with: colcon build --symlink-install${NC}"
+    if colcon build --symlink-install 2>&1; then # Build all packages in the workspace
         echo -e "${GREEN}✓ Build completed successfully.${NC}"
     else
         echo -e "${RED}ERROR: Build failed.${NC}" >&2

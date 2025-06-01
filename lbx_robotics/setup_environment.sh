@@ -218,7 +218,7 @@ else
     
     # Try adding robotpkg repository
     echo_info "Adding robotpkg repository for Pinocchio..."
-    if ! grep -q "robotpkg" /etc/apt/sources.list.d/*; then
+    if ! grep -q "robotpkg" /etc/apt/sources.list.d/* 2>/dev/null; then
         sudo sh -c "echo 'deb [arch=amd64] http://robotpkg.openrobots.org/packages/debian/pub $(lsb_release -cs) robotpkg' > /etc/apt/sources.list.d/robotpkg.list"
         curl http://robotpkg.openrobots.org/packages/debian/robotpkg.key | sudo apt-key add -
         sudo apt update
@@ -228,8 +228,69 @@ else
     if sudo apt install -y robotpkg-pinocchio; then
         echo_success "Pinocchio installed successfully from robotpkg."
     else
-        echo_warn "Could not install Pinocchio automatically."
-        echo_info "Pinocchio will need to be built from source or installed manually."
+        echo_warn "Could not install Pinocchio from repositories."
+        echo_info "Installing Pinocchio from source..."
+        
+        # Install dependencies for Pinocchio
+        echo_info "Installing Pinocchio build dependencies..."
+        if sudo apt install -y \
+            libeigen3-dev \
+            libboost-all-dev \
+            liburdfdom-dev \
+            libconsole-bridge-dev \
+            libassimp-dev \
+            liboctomap-dev; then
+            echo_success "Pinocchio dependencies installed."
+        else
+            echo_warn "Some Pinocchio dependencies may be missing."
+        fi
+        
+        # Create temp directory for building
+        PINOCCHIO_TEMP_DIR=$(mktemp -d)
+        echo_info "Building Pinocchio in $PINOCCHIO_TEMP_DIR"
+        
+        # Clone and build Pinocchio
+        (
+            cd "$PINOCCHIO_TEMP_DIR"
+            
+            echo_info "Cloning Pinocchio repository..."
+            if git clone --recursive https://github.com/stack-of-tasks/pinocchio.git; then
+                cd pinocchio
+                git checkout v2.6.20  # Use stable version
+                
+                echo_info "Building Pinocchio (this may take a while)..."
+                mkdir build && cd build
+                
+                if cmake .. \
+                    -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_INSTALL_PREFIX=/usr/local \
+                    -DBUILD_PYTHON_INTERFACE=OFF \
+                    -DBUILD_UNIT_TESTS=OFF \
+                    -DBUILD_WITH_COLLISION_SUPPORT=ON \
+                    -DCMAKE_CXX_STANDARD=14; then
+                    
+                    if make -j$(nproc); then
+                        echo_info "Installing Pinocchio..."
+                        if sudo make install; then
+                            sudo ldconfig
+                            echo_success "Pinocchio installed successfully from source!"
+                            echo_info "Pinocchio installed to /usr/local"
+                        else
+                            echo_error "Failed to install Pinocchio"
+                        fi
+                    else
+                        echo_error "Failed to build Pinocchio"
+                    fi
+                else
+                    echo_error "Failed to configure Pinocchio build"
+                fi
+            else
+                echo_error "Failed to clone Pinocchio repository"
+            fi
+        )
+        
+        # Clean up temp directory
+        rm -rf "$PINOCCHIO_TEMP_DIR"
     fi
 fi
 
@@ -259,6 +320,20 @@ else
     echo_warn "Some ROS2 control packages may not have installed correctly."
 fi
 
+# Install pre-built Franka packages if available
+echo_info "Installing pre-built Franka packages from ROS2 repos..."
+if sudo apt install -y \
+    ros-humble-franka-hardware \
+    ros-humble-franka-msgs \
+    ros-humble-franka-gripper \
+    ros-humble-franka-description \
+    ros-humble-franka-fr3-moveit-config; then
+    echo_success "Pre-built Franka packages installed successfully."
+    echo_info "This may allow skipping building libfranka from source."
+else
+    echo_warn "Some pre-built Franka packages not available, will build from source."
+fi
+
 # Install Gazebo for simulation (optional but useful)
 echo_info "Installing Gazebo simulation packages..."
 if sudo apt install -y \
@@ -282,6 +357,26 @@ rosdep update
 
 # --- Integrate franka_ros2 into lbx_robotics workspace ---
 echo_step "Integrating franka_ros2 packages into lbx_robotics workspace..."
+
+# Check if libfranka is already installed system-wide
+echo_info "Checking for system-wide libfranka installation..."
+if pkg-config --exists libfranka 2>/dev/null; then
+    echo_success "libfranka found system-wide at: $(pkg-config --variable=prefix libfranka)"
+    echo_info "Will use system libfranka instead of building from source"
+    SKIP_LIBFRANKA_BUILD=true
+else
+    echo_warn "System libfranka not found, will need to handle during build"
+    SKIP_LIBFRANKA_BUILD=false
+    
+    # Install libfranka if available from apt
+    echo_info "Attempting to install libfranka from apt..."
+    if sudo apt install -y libfranka-dev; then
+        echo_success "libfranka installed from apt"
+        SKIP_LIBFRANKA_BUILD=true
+    else
+        echo_warn "libfranka not available from apt"
+    fi
+fi
 
 # Ensure we're in the lbx_robotics directory
 cd "$SCRIPT_DIR"
@@ -375,4 +470,8 @@ echo ""
 echo_warn "Note: If you encounter CMake errors finding Poco libraries during build:"
 echo_warn "  The unified_launch.sh script will automatically set up paths"
 echo_warn "  OR manually export: CMAKE_PREFIX_PATH=\"/usr/lib/x86_64-linux-gnu/cmake:\$CMAKE_PREFIX_PATH\""
-echo_warn "  OR use system cmake: conda deactivate && conda activate lbx_robotics_env --no-stack" 
+echo_warn "  OR use system cmake: conda deactivate && conda activate lbx_robotics_env --no-stack"
+echo ""
+echo_warn "Note: The build will skip libfranka if it has complex dependencies."
+echo_warn "  This is normal - libfranka is only needed if building from source."
+echo_warn "  Most functionality works with the pre-installed ROS2 packages." 

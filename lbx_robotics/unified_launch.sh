@@ -276,9 +276,9 @@ perform_build() {
     # Fix paths for conda environment to find system libraries
     if [ ! -z "$CONDA_PREFIX" ]; then
         print_info "Detected conda environment, setting up paths for system libraries..."
-        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH"
-        export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
+        export CMAKE_PREFIX_PATH="/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH"
+        export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
         
         # Add robotpkg paths if it exists (for Pinocchio)
         if [ -d "/opt/openrobots" ]; then
@@ -332,11 +332,11 @@ perform_build() {
     
     if colcon build --symlink-install --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH" \
+        -DCMAKE_PREFIX_PATH="/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH" \
         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local;/opt/ros/humble;/opt/openrobots" \
+        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr/local;/usr;/opt/ros/humble;/opt/openrobots" \
         -DPCRE_LIBRARY="$PCRE_LIB" \
         -DPCRE_INCLUDE_DIR="/usr/include" 2>&1; then
         print_success "Build completed successfully"

@@ -293,6 +293,17 @@ perform_build() {
     
     # Source ROS2 environment for build
     print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
+    # Check if ROS_DISTRO is set, if not, attempt to determine or default
+    if [ -z "$ROS_DISTRO" ]; then
+        print_warning "ROS_DISTRO not set. Attempting to detect Humble..."
+        if [ -f "/opt/ros/humble/setup.bash" ]; then
+            ROS_DISTRO=humble
+            print_info "Detected ROS Humble."
+        else
+            print_error "Could not detect ROS Humble. Please source your ROS 2 environment first."
+            return 1
+        fi
+    fi    
     source "/opt/ros/$ROS_DISTRO/setup.bash"
     
     # Build the workspace using system-level libraries

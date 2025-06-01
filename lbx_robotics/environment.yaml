@@ -17,6 +17,7 @@ dependencies:
   # Note: System packages like Poco, Eigen3, and Boost are installed via apt
   # in the setup_environment.sh script to ensure compatibility with ROS2
   - eigen # Linear algebra library (conda version for Python bindings)
+  - pinocchio # For libfranka dynamics computations
 
   # --- Core Processing & Numerics ---
   - numpy

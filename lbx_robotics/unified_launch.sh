@@ -330,15 +330,50 @@ perform_build() {
         print_warning "PCRE library not found in standard locations"
     fi
     
-    if colcon build --symlink-install --cmake-args \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_PREFIX_PATH="/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH" \
-        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
-        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
-        -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr/local;/usr;/opt/ros/humble;/opt/openrobots" \
-        -DPCRE_LIBRARY="$PCRE_LIB" \
-        -DPCRE_INCLUDE_DIR="/usr/include" 2>&1; then
+    # Find Pinocchio installation
+    PINOCCHIO_DIR=""
+    if [ -f "/usr/local/lib/cmake/pinocchio/pinocchioConfig.cmake" ]; then
+        PINOCCHIO_DIR="/usr/local/lib/cmake/pinocchio"
+        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
+    elif [ -f "/usr/local/share/pinocchio/cmake/pinocchioConfig.cmake" ]; then
+        PINOCCHIO_DIR="/usr/local/share/pinocchio/cmake"
+        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
+    elif [ -f "/opt/openrobots/lib/cmake/pinocchio/pinocchioConfig.cmake" ]; then
+        PINOCCHIO_DIR="/opt/openrobots/lib/cmake/pinocchio"
+        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
+    elif [ -f "/opt/ros/humble/share/pinocchio/cmake/pinocchioConfig.cmake" ]; then
+        PINOCCHIO_DIR="/opt/ros/humble/share/pinocchio/cmake"
+        print_info "Found Pinocchio at: $PINOCCHIO_DIR"
+    else
+        print_warning "Pinocchio not found in standard locations"
+        print_info "Searching for Pinocchio..."
+        PINOCCHIO_SEARCH=$(find /usr /opt -name "pinocchioConfig.cmake" -o -name "pinocchio-config.cmake" 2>/dev/null | head -1)
+        if [ ! -z "$PINOCCHIO_SEARCH" ]; then
+            PINOCCHIO_DIR=$(dirname "$PINOCCHIO_SEARCH")
+            print_info "Found Pinocchio at: $PINOCCHIO_DIR"
+        fi
+    fi
+    
+    # Build with Pinocchio directory if found
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_PREFIX_PATH=\"/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH\""
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH"
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH"
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=\"$CONDA_PREFIX;/usr/local;/usr;/opt/ros/humble;/opt/openrobots\""
+    
+    if [ ! -z "$PCRE_LIB" ]; then
+        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_LIBRARY=\"$PCRE_LIB\""
+        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_INCLUDE_DIR=\"/usr/include\""
+    fi
+    
+    if [ ! -z "$PINOCCHIO_DIR" ]; then
+        CMAKE_ARGS="$CMAKE_ARGS -Dpinocchio_DIR=\"$PINOCCHIO_DIR\""
+    fi
+    
+    print_info "CMake arguments: $CMAKE_ARGS"
+    
+    if eval "colcon build --symlink-install --cmake-args $CMAKE_ARGS" 2>&1; then
         print_success "Build completed successfully"
     else
         print_error "Build failed"

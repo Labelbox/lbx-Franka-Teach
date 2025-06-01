@@ -210,88 +210,15 @@ fi
 
 # Install Pinocchio (required by libfranka)
 echo_info "Installing Pinocchio library..."
+# Pinocchio is now installed via conda environment.yaml
+# This section can be removed or kept as a fallback if conda install fails
+
 # First try ROS2 pinocchio package
 if sudo apt install -y ros-humble-pinocchio; then
     echo_success "Pinocchio installed successfully from ROS2 packages."
 else
-    echo_warn "Failed to install ROS2 Pinocchio package, trying alternatives..."
-    
-    # Try adding robotpkg repository
-    echo_info "Adding robotpkg repository for Pinocchio..."
-    if ! grep -q "robotpkg" /etc/apt/sources.list.d/* 2>/dev/null; then
-        sudo sh -c "echo 'deb [arch=amd64] http://robotpkg.openrobots.org/packages/debian/pub $(lsb_release -cs) robotpkg' > /etc/apt/sources.list.d/robotpkg.list"
-        curl http://robotpkg.openrobots.org/packages/debian/robotpkg.key | sudo apt-key add -
-        sudo apt update
-    fi
-    
-    # Try installing from robotpkg
-    if sudo apt install -y robotpkg-pinocchio; then
-        echo_success "Pinocchio installed successfully from robotpkg."
-    else
-        echo_warn "Could not install Pinocchio from repositories."
-        echo_info "Installing Pinocchio from source..."
-        
-        # Install dependencies for Pinocchio
-        echo_info "Installing Pinocchio build dependencies..."
-        if sudo apt install -y \
-            libeigen3-dev \
-            libboost-all-dev \
-            liburdfdom-dev \
-            libconsole-bridge-dev \
-            libassimp-dev \
-            liboctomap-dev; then
-            echo_success "Pinocchio dependencies installed."
-        else
-            echo_warn "Some Pinocchio dependencies may be missing."
-        fi
-        
-        # Create temp directory for building
-        PINOCCHIO_TEMP_DIR=$(mktemp -d)
-        echo_info "Building Pinocchio in $PINOCCHIO_TEMP_DIR"
-        
-        # Clone and build Pinocchio
-        (
-            cd "$PINOCCHIO_TEMP_DIR"
-            
-            echo_info "Cloning Pinocchio repository..."
-            if git clone --recursive https://github.com/stack-of-tasks/pinocchio.git; then
-                cd pinocchio
-                git checkout v2.6.20  # Use stable version
-                
-                echo_info "Building Pinocchio (this may take a while)..."
-                mkdir build && cd build
-                
-                if cmake .. \
-                    -DCMAKE_BUILD_TYPE=Release \
-                    -DCMAKE_INSTALL_PREFIX=/usr/local \
-                    -DBUILD_PYTHON_INTERFACE=OFF \
-                    -DBUILD_UNIT_TESTS=OFF \
-                    -DBUILD_WITH_COLLISION_SUPPORT=ON \
-                    -DCMAKE_CXX_STANDARD=14; then
-                    
-                    if make -j$(nproc); then
-                        echo_info "Installing Pinocchio..."
-                        if sudo make install; then
-                            sudo ldconfig
-                            echo_success "Pinocchio installed successfully from source!"
-                            echo_info "Pinocchio installed to /usr/local"
-                        else
-                            echo_error "Failed to install Pinocchio"
-                        fi
-                    else
-                        echo_error "Failed to build Pinocchio"
-                    fi
-                else
-                    echo_error "Failed to configure Pinocchio build"
-                fi
-            else
-                echo_error "Failed to clone Pinocchio repository"
-            fi
-        )
-        
-        # Clean up temp directory
-        rm -rf "$PINOCCHIO_TEMP_DIR"
-    fi
+    echo_warn "Failed to install ROS2 Pinocchio package."
+    echo_info "Pinocchio should be installed from conda. If build still fails, check conda environment."
 fi
 
 # Install RealSense SDK dependencies

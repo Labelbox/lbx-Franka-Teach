@@ -32,7 +32,8 @@ from .system_manager import SystemManager
 from .franka_controller import FrankaController
 
 # ROS2 messages
-from std_msgs.msg import String, Bool, Empty, Header
+from std_msgs.msg import String, Bool, Header
+from std_srvs.srv import Empty
 from sensor_msgs.msg import Joy, JointState, Image, CameraInfo
 from geometry_msgs.msg import PoseStamped
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
@@ -426,7 +427,6 @@ class LabelboxRoboticsSystem(Node):
                     continue
                 else:
                     # Generic service check
-                    from std_srvs.srv import Empty
                     client = self.create_client(Empty, service_name)
                 
                 # Wait for service with timeout
@@ -522,19 +522,28 @@ class LabelboxRoboticsSystem(Node):
         print(f"\n{Colors.BLUE}{Colors.BOLD}🏠 Resetting Robot to Home Position{Colors.ENDC}")
         print("─" * 50)
         
-        # Call reset service
+        # Try to call reset service if available
         reset_client = self.create_client(Empty, '/reset_robot')
         if reset_client.wait_for_service(timeout_sec=2.0):
             print("   🔄 Sending reset command...")
-            future = reset_client.call_async(Empty.Request())
-            
-            # Wait for completion
-            while not future.done():
-                time.sleep(0.1)
-            
-            print(f"   ✅ Robot reset to home position")
+            try:
+                future = reset_client.call_async(Empty.Request())
+                
+                # Wait for completion with timeout
+                start_time = time.time()
+                while not future.done() and (time.time() - start_time) < 5.0:
+                    time.sleep(0.1)
+                
+                if future.done():
+                    print(f"   ✅ Robot reset to home position")
+                else:
+                    print(f"   ⚠️  Reset command timeout, but continuing...")
+            except Exception as e:
+                print(f"   ⚠️  Reset command failed: {e}, but continuing...")
         else:
-            print(f"   ❌ Reset service not available")
+            print(f"   ℹ️  Reset service not available - robot may already be in home position")
+            print(f"   📍 Current system uses MoveIt for robot control")
+            print(f"   💡 Robot will be positioned during VR teleoperation startup")
     
     def enter_calibration_mode(self):
         """Guide user through calibration"""

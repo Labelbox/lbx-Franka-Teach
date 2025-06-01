@@ -144,14 +144,7 @@ echo_step "Installing system dependencies for libfranka and other packages..."
 
 # Install Poco libraries (required by libfranka)
 echo_info "Installing Poco C++ libraries..."
-if sudo apt install -y \
-    libpoco-dev \
-    libpocofoundation70 \
-    libpoconet70 \
-    libpocoutil70 \
-    libpocoxml70 \
-    libpocojson70 \
-    libpocoredis70; then
+if sudo apt install -y libpoco-dev; then
     echo_success "Poco libraries installed successfully."
 else
     echo_error "Failed to install Poco libraries. These are required for libfranka."

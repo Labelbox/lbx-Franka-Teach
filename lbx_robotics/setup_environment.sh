@@ -108,8 +108,14 @@ if ! dpkg -l | grep -q libpinocchio-dev || ! pkg-config --exists pinocchio 2>/de
         cd pinocchio
         git checkout v2.6.20
         mkdir build && cd build
-        # Explicitly use the cmake in PATH (which should be the Kitware one)
-        $CMAKE_EXE .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_COLLISION_SUPPORT=ON -DCMAKE_CXX_STANDARD=14
+        # Explicitly use the cmake in PATH and set a policy version
+        $CMAKE_EXE .. -DCMAKE_BUILD_TYPE=Release \
+                      -DCMAKE_INSTALL_PREFIX=/usr/local \
+                      -DBUILD_PYTHON_INTERFACE=OFF \
+                      -DBUILD_UNIT_TESTS=OFF \
+                      -DBUILD_WITH_COLLISION_SUPPORT=ON \
+                      -DCMAKE_CXX_STANDARD=14 \
+                      -DCMAKE_POLICY_VERSION=3.5 # Attempt to set policies for CMake 3.5 compatibility
         make -j$(nproc)
         sudo make install
         sudo ldconfig

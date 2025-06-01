@@ -18,7 +18,7 @@ Usage:
 import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, Command, FindExecutable
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.conditions import IfCondition
 from launch_ros.actions import Node, PushRosNamespace
 from launch_ros.substitutions import FindPackageShare
@@ -94,29 +94,6 @@ def generate_launch_description():
         description='Logging level (DEBUG, INFO, WARN, ERROR)'
     )
     
-    # Prepare Robot Description for RobotStatePublisher and MoveIt
-    robot_description_content = Command([
-        PathJoinSubstitution([FindExecutable(name='xacro')]),
-        ' ',
-        PathJoinSubstitution([
-            FindPackageShare('lbx_franka_description'),
-            'urdf',
-            'fr3.urdf.xacro'
-        ]),
-        ' arm_id:=fr3', # Assuming default arm_id, can be LaunchConfiguration if needed
-        ' robot_ip:=', LaunchConfiguration('robot_ip'),
-        ' use_fake_hardware:=', LaunchConfiguration('use_fake_hardware'),
-    ])
-    robot_description_param = {'robot_description': robot_description_content}
-
-    # Robot State Publisher - publishes /robot_description
-    robot_state_publisher_node = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        output='screen',
-        parameters=[robot_description_param]
-    )
-    
     # Config file for system_manager_node
     # Assuming franka_vr_control_config.yaml is in lbx_franka_control/config/
     # If not, adjust the FindPackageShare path or move the file to lbx_launch/config/
@@ -149,7 +126,6 @@ def generate_launch_description():
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
             'enable_rviz': LaunchConfiguration('enable_rviz'),  # Let MoveIt handle RViz
             'load_gripper': 'true',  # Always load gripper for VR control
-            # robot_description will be taken from the topic published by robot_state_publisher_node
         }.items()
     )
     
@@ -274,7 +250,6 @@ def generate_launch_description():
         declare_log_level,
         
         # Launch components
-        robot_state_publisher_node,
         moveit_launch,
         vr_namespace_group,
         main_system_node,

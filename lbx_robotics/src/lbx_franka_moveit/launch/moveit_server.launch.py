@@ -21,29 +21,39 @@ def launch_setup(context, *args, **kwargs):
     enable_rviz = LaunchConfiguration('enable_rviz')
     load_gripper = LaunchConfiguration('load_gripper')
     rviz_config = LaunchConfiguration('rviz_config')
-    # arm_id = LaunchConfiguration('arm_id') # arm_id no longer needed here for robot_description
+    arm_id = LaunchConfiguration('arm_id')
     
-    # robot_description_content is now generated and published by RobotStatePublisher in system_bringup.launch.py
-    # robot_description_content = Command(
-    #     [
-    #         PathJoinSubstitution([FindExecutable(name='xacro')]),
-    #         ' ',
-    #         PathJoinSubstitution([
-    #             FindPackageShare('lbx_franka_description'),
-    #             'urdf',
-    #             'fr3.urdf.xacro'
-    #         ]),
-    #         ' arm_id:=',
-    #         arm_id,
-    #         ' robot_ip:=',
-    #         robot_ip,
-    #         ' use_fake_hardware:=',
-    #         use_fake_hardware,
-    #     ]
-    # )
+    # First, load our custom URDF with ros2_control
+    robot_description_content = Command(
+        [
+            PathJoinSubstitution([FindExecutable(name='xacro')]),
+            ' ',
+            PathJoinSubstitution([
+                FindPackageShare('lbx_franka_description'),
+                'urdf',
+                'fr3.urdf.xacro'
+            ]),
+            ' arm_id:=',
+            arm_id,
+            ' robot_ip:=',
+            robot_ip,
+            ' use_fake_hardware:=',
+            use_fake_hardware,
+        ]
+    )
+    
+    robot_description_param = {'robot_description': robot_description_content}
+
+    # Robot State Publisher
+    robot_state_publisher_node = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        output='screen',
+        parameters=[robot_description_param]
+    )
     
     # Include the standard Franka MoveIt launch file
-    # It should pick up /robot_description from the topic
+    # We remove the direct robot_description parameter to encourage using the topic
     moveit_launch_include = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
@@ -62,7 +72,7 @@ def launch_setup(context, *args, **kwargs):
         }).items()
     )
     
-    return [moveit_launch_include]
+    return [robot_state_publisher_node, moveit_launch_include]
 
 def generate_launch_description():
     # Declare arguments
@@ -100,9 +110,6 @@ def generate_launch_description():
         )
     )
     
-    # arm_id is no longer directly used here for robot_description, 
-    # but might be needed if other parts of this launch file or included files use it.
-    # For now, let's keep it declared.
     declared_arguments.append(
         DeclareLaunchArgument(
             'arm_id',

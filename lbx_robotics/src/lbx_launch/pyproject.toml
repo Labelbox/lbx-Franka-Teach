@@ -21,4 +21,11 @@ dependencies = [
 
 # Entry points (console scripts) if any - lbx_launch currently has none listed in setup.py
 # [project.entry-points."console_scripts"]
-# my_script = "lbx_launch.module:main_func" 
+# my_script = "lbx_launch.module:main_func"
+
+[tool.setuptools.packages.find]
+exclude = ["test*"]
+
+[tool.setuptools.data-files]
+"share/ament_index/resource_index/packages" = ["resource/lbx_launch"]
+"share/lbx_launch" = ["package.xml"] 

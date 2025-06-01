@@ -21,4 +21,11 @@ dependencies = [
 ]
 
 [project.entry-points."console_scripts"]
-oculus_node = "lbx_input_oculus.oculus_node:main" 
+oculus_node = "lbx_input_oculus.oculus_node:main"
+
+[tool.setuptools.packages.find]
+exclude = ["test*"]
+
+[tool.setuptools.data-files]
+"share/ament_index/resource_index/packages" = ["resource/lbx_input_oculus"]
+"share/lbx_input_oculus" = ["package.xml"] 

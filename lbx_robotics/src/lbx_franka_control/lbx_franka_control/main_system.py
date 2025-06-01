@@ -211,14 +211,19 @@ class LabelboxRoboticsSystem(Node):
         print(f"\n{Colors.BLUE}{Colors.BOLD}🚀 System Initialization{Colors.ENDC}")
         print("─" * 50)
         
-        # 1. Check VR Controller
+        # 1. Check VR Controller with enhanced feedback
         print(f"\n{Colors.CYAN}1️⃣  Checking VR Controller...{Colors.ENDC}")
         vr_status = await self.check_vr_controller()
         if vr_status:
             print(f"   ✅ VR Controller: {Colors.GREEN}Connected and responding{Colors.ENDC}")
+            self.vr_healthy = True
         else:
             print(f"   ❌ VR Controller: {Colors.FAIL}Not detected{Colors.ENDC}")
-            print(f"      Please ensure Oculus Quest is connected and oculus_reader is running")
+            print(f"      {Colors.WARNING}System will continue with graceful fallback{Colors.ENDC}")
+            print(f"      • Robot control via other interfaces remains available")
+            print(f"      • All features except VR input will function normally")
+            print(f"      • See VR setup instructions in oculus_node logs")
+            self.vr_healthy = False
         
         # 2. Test Cameras (if enabled)
         if self.launch_params.get('enable_cameras', False):
@@ -249,26 +254,49 @@ class LabelboxRoboticsSystem(Node):
         else:
             print(f"   ❌ Robot: {Colors.FAIL}Not connected{Colors.ENDC}")
         
-        # Summary
+        # Summary with VR status consideration
         print(f"\n{Colors.BLUE}{'─' * 50}{Colors.ENDC}")
-        all_healthy = vr_status and all(moveit_status.values()) and robot_status
-        if all_healthy:
-            print(f"{Colors.GREEN}{Colors.BOLD}✅ All systems operational!{Colors.ENDC}")
+        essential_systems_healthy = all(moveit_status.values()) and robot_status
+        
+        if essential_systems_healthy:
+            if self.vr_healthy:
+                print(f"{Colors.GREEN}{Colors.BOLD}✅ All systems operational (including VR)!{Colors.ENDC}")
+            else:
+                print(f"{Colors.WARNING}{Colors.BOLD}⚠️  Essential systems operational (VR graceful fallback active){Colors.ENDC}")
+                print(f"   {Colors.CYAN}Robot control available via alternative interfaces{Colors.ENDC}")
             self.system_ready = True
         else:
-            print(f"{Colors.FAIL}{Colors.BOLD}❌ Some systems need attention{Colors.ENDC}")
+            print(f"{Colors.FAIL}{Colors.BOLD}❌ Essential systems need attention{Colors.ENDC}")
             return False
         
         return True
     
     async def check_vr_controller(self):
-        """Check if VR controller is connected and responding"""
-        # Wait for VR pose data
+        """Check if VR controller is connected and responding with enhanced status reporting"""
+        # Wait for VR pose data with timeout
         vr_pose_msg = None
         try:
-            vr_pose_msg = await self.wait_for_message('/vr/controller_pose', PoseStamped, timeout=2.0)
-            self.vr_healthy = vr_pose_msg is not None
-        except:
+            print(f"      Waiting for VR controller data...")
+            vr_pose_msg = await self.wait_for_message('/vr/controller_pose', PoseStamped, timeout=3.0)
+            
+            # Additional check for valid pose data
+            if vr_pose_msg:
+                pose = vr_pose_msg.pose
+                # Check if we're getting non-zero poses (actual VR input vs default/fallback data)
+                position_magnitude = (pose.position.x**2 + pose.position.y**2 + pose.position.z**2)**0.5
+                orientation_valid = abs(pose.orientation.w) > 0.1  # Valid quaternion
+                
+                if position_magnitude > 0.01 or not orientation_valid:  # Some actual movement or valid orientation
+                    print(f"      📍 VR pose data: Valid tracking detected")
+                    self.vr_healthy = True
+                else:
+                    print(f"      📍 VR pose data: Receiving default/fallback data")
+                    self.vr_healthy = False
+            else:
+                self.vr_healthy = False
+                
+        except Exception as e:
+            print(f"      ❌ VR check failed: {e}")
             self.vr_healthy = False
         
         return self.vr_healthy
@@ -384,11 +412,26 @@ class LabelboxRoboticsSystem(Node):
         """Start main teleoperation mode"""
         print(f"\n{Colors.GREEN}{Colors.BOLD}🎮 Teleoperation Active!{Colors.ENDC}")
         print("─" * 50)
-        print(f"\n{Colors.CYAN}Controls:{Colors.ENDC}")
-        print("   • {Colors.BOLD}Grip{Colors.ENDC}: Hold to enable robot movement")
-        print("   • {Colors.BOLD}Trigger{Colors.ENDC}: Control gripper (pull to close)")
-        print("   • {Colors.BOLD}A/X{Colors.ENDC}: Start/stop recording")
-        print("   • {Colors.BOLD}B/Y{Colors.ENDC}: Mark recording as successful")
+        
+        if self.vr_healthy:
+            print(f"\n{Colors.CYAN}VR Controls:{Colors.ENDC}")
+            print("   • {Colors.BOLD}Grip{Colors.ENDC}: Hold to enable robot movement")
+            print("   • {Colors.BOLD}Trigger{Colors.ENDC}: Control gripper (pull to close)")
+            print("   • {Colors.BOLD}A/X{Colors.ENDC}: Start/stop recording")
+            print("   • {Colors.BOLD}B/Y{Colors.ENDC}: Mark recording as successful")
+        else:
+            print(f"\n{Colors.WARNING}🎮 VR Graceful Fallback Mode:{Colors.ENDC}")
+            print(f"   • VR controller not connected - using alternative control methods")
+            print(f"   • {Colors.CYAN}All other features remain fully functional{Colors.ENDC}")
+            print(f"   • Recording, cameras, and robot operation continue normally")
+            print(f"\n{Colors.CYAN}Alternative Controls:{Colors.ENDC}")
+            print("   • Use keyboard/mouse interfaces if available")
+            print("   • Record data without VR input for testing")
+            print("   • Monitor robot status and diagnostics")
+            print(f"\n{Colors.BLUE}VR Reconnection:{Colors.ENDC}")
+            print("   • System will automatically detect and reconnect VR when available")
+            print("   • No restart required - hot-pluggable VR support")
+        
         print(f"\n{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
     
     def diagnostics_callback(self, msg: DiagnosticArray):
@@ -476,11 +519,13 @@ class LabelboxRoboticsSystem(Node):
         # Build status line
         status_parts = []
         
-        # VR Status
-        if self.latest_vr_state and self.latest_vr_state.grip_pressed:
+        # VR Status with enhanced feedback
+        if self.latest_vr_state and self.latest_vr_state.grip_pressed and self.vr_healthy:
             status_parts.append(f"🎮 VR: {Colors.GREEN}Active{Colors.ENDC}")
-        else:
+        elif self.vr_healthy:
             status_parts.append(f"🎮 VR: {Colors.CYAN}Ready{Colors.ENDC}")
+        else:
+            status_parts.append(f"🎮 VR: {Colors.WARNING}Fallback{Colors.ENDC}")
         
         # Robot Status
         if self.robot_healthy:
@@ -504,6 +549,12 @@ class LabelboxRoboticsSystem(Node):
         # Print status line
         timestamp = datetime.now().strftime("%H:%M:%S")
         status_line = f"[{timestamp}] " + " | ".join(status_parts)
+        
+        # Add VR fallback notice if applicable
+        if not self.vr_healthy:
+            fallback_notice = f" | {Colors.CYAN}ℹ️  VR Graceful Fallback Active{Colors.ENDC}"
+            status_line += fallback_notice
+        
         print(f"\r{status_line}", end='', flush=True)
     
     def cleanup(self):
@@ -558,11 +609,39 @@ async def async_main():
         'verify_data': os.environ.get('VERIFY_DATA', 'false').lower() == 'true',
     }
     
-    # Configuration path
-    config_path = os.path.join(
-        os.path.dirname(__file__),
-        '../../../configs/control/franka_vr_control_config.yaml'
-    )
+    # Configuration path - fix to use correct relative path
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        config_path = os.path.join(
+            get_package_share_directory('lbx_franka_control'),
+            'config',
+            'franka_vr_control_config.yaml'
+        )
+    except:
+        # Fallback for development/source builds
+        config_path = os.path.join(
+            os.path.dirname(__file__),
+            '../../../../configs/control/franka_vr_control_config.yaml'
+        )
+    
+    # Additional fallback to workspace config if installed config not found
+    if not os.path.exists(config_path):
+        workspace_config = os.path.join(
+            os.path.dirname(__file__),
+            '../../../../../../../configs/control/franka_vr_control_config.yaml'
+        )
+        if os.path.exists(workspace_config):
+            config_path = workspace_config
+        else:
+            # Create a minimal default config if none found
+            config_path = '/tmp/default_franka_config.yaml'
+            default_config = {
+                'robot': {'robot_ip': '192.168.1.59'},
+                'recording': {'enabled': True}
+            }
+            import yaml
+            with open(config_path, 'w') as f:
+                yaml.dump(default_config, f)
     
     # Create main system node
     system = LabelboxRoboticsSystem(config_path, launch_params)

@@ -17,7 +17,161 @@ import sys # For stderr in main
 from diagnostic_updater import Updater, DiagnosticTask, DiagnosticStatus
 from diagnostic_msgs.msg import KeyValue
 
-from .oculus_reader.reader import OculusReader # Relative import
+# Enhanced VR connection handling
+VR_CONNECTION_STATUS = {
+    'DISCONNECTED': 0,
+    'CONNECTING': 1,
+    'CONNECTED': 2,
+    'ERROR': 3
+}
+
+class VRConnectionManager:
+    """Handles VR connection with graceful fallback and clear user feedback"""
+    
+    def __init__(self, logger, connection_mode='usb', ip_address=None, port=5555):
+        self.logger = logger
+        self.connection_mode = connection_mode
+        self.ip_address = ip_address
+        self.port = port
+        self.status = VR_CONNECTION_STATUS['DISCONNECTED']
+        self.oculus_reader = None
+        self.last_connection_attempt = 0
+        self.connection_retry_interval = 5.0  # seconds
+        self.max_retries = 3
+        self.retry_count = 0
+        
+    def print_connection_banner(self):
+        """Print VR connection status banner"""
+        print("\n" + "═" * 70)
+        print("🎮 VR CONNECTION STATUS")
+        print("═" * 70)
+        
+        if self.connection_mode == 'network':
+            print(f"📡 Mode: Network ({self.ip_address}:{self.port})")
+        else:
+            print("🔌 Mode: USB")
+            
+        print(f"🔍 Status: {self._get_status_text()}")
+        
+        if self.status == VR_CONNECTION_STATUS['DISCONNECTED']:
+            print("\n📋 VR Setup Instructions:")
+            if self.connection_mode == 'usb':
+                print("   1. Connect Meta Quest via USB cable")
+                print("   2. Enable Developer Mode on Quest")
+                print("   3. Allow USB debugging when prompted")
+                print("   4. Run 'adb devices' to verify connection")
+            else:
+                print("   1. Enable Developer Mode on Quest")
+                print("   2. Connect Quest to same network")
+                print("   3. Enable ADB over network in Developer settings")
+                print(f"   4. Verify Quest IP address is {self.ip_address}")
+            
+            print("\n⚠️  VR Control Disabled: System will continue without VR input")
+            print("   - Robot control via other interfaces remains available")
+            print("   - Recording and other features work normally")
+            
+        print("═" * 70 + "\n")
+    
+    def _get_status_text(self):
+        """Get human-readable status text with colors"""
+        status_map = {
+            VR_CONNECTION_STATUS['DISCONNECTED']: "❌ DISCONNECTED",
+            VR_CONNECTION_STATUS['CONNECTING']: "🔄 CONNECTING...",
+            VR_CONNECTION_STATUS['CONNECTED']: "✅ CONNECTED",
+            VR_CONNECTION_STATUS['ERROR']: "⚠️  ERROR"
+        }
+        return status_map.get(self.status, "❓ UNKNOWN")
+    
+    def attempt_connection(self):
+        """Attempt to connect to VR device with error handling"""
+        current_time = time.time()
+        
+        # Rate limit connection attempts
+        if current_time - self.last_connection_attempt < self.connection_retry_interval:
+            return False
+            
+        if self.retry_count >= self.max_retries:
+            self.logger.warn("Max VR connection retries reached. VR input disabled.")
+            self.status = VR_CONNECTION_STATUS['ERROR']
+            return False
+            
+        self.last_connection_attempt = current_time
+        self.retry_count += 1
+        self.status = VR_CONNECTION_STATUS['CONNECTING']
+        
+        try:
+            self.logger.info(f"Attempting VR connection ({self.retry_count}/{self.max_retries})...")
+            
+            # Import OculusReader here to catch import errors gracefully
+            from .oculus_reader.reader import OculusReader
+            
+            self.oculus_reader = OculusReader(
+                ip_address=self.ip_address,
+                port=self.port,
+                print_FPS=False,
+                run=True
+            )
+            
+            # Test the connection by trying to get data
+            time.sleep(1.0)  # Give it a moment to initialize
+            transforms, buttons = self.oculus_reader.get_transformations_and_buttons()
+            
+            self.status = VR_CONNECTION_STATUS['CONNECTED']
+            self.logger.info("✅ VR connection successful!")
+            self.retry_count = 0  # Reset retry count on success
+            return True
+            
+        except ImportError as e:
+            self.logger.error(f"VR import error: {e}")
+            self.logger.error("Check that 'pure-python-adb' is installed: pip install pure-python-adb")
+            self.status = VR_CONNECTION_STATUS['ERROR']
+            return False
+            
+        except ConnectionError as e:
+            self.logger.warn(f"VR connection failed: {e}")
+            self.status = VR_CONNECTION_STATUS['DISCONNECTED']
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Unexpected VR error: {e}")
+            self.status = VR_CONNECTION_STATUS['ERROR']
+            return False
+    
+    def get_vr_data(self):
+        """Get VR data with connection monitoring"""
+        if not self.oculus_reader or self.status != VR_CONNECTION_STATUS['CONNECTED']:
+            return None, None
+            
+        try:
+            transforms, buttons = self.oculus_reader.get_transformations_and_buttons()
+            
+            # Check if we're getting valid data
+            if not transforms and not buttons:
+                # No data might indicate connection loss
+                self.status = VR_CONNECTION_STATUS['DISCONNECTED']
+                self.logger.warn("VR data stream lost - connection may have dropped")
+                return None, None
+                
+            return transforms, buttons
+            
+        except Exception as e:
+            self.logger.error(f"Error getting VR data: {e}")
+            self.status = VR_CONNECTION_STATUS['ERROR']
+            return None, None
+    
+    def is_connected(self):
+        """Check if VR is currently connected"""
+        return self.status == VR_CONNECTION_STATUS['CONNECTED']
+    
+    def cleanup(self):
+        """Clean up VR connection"""
+        if self.oculus_reader:
+            try:
+                self.oculus_reader.stop()
+            except:
+                pass
+            self.oculus_reader = None
+        self.status = VR_CONNECTION_STATUS['DISCONNECTED']
 
 # Helper function to convert 4x4 matrix to PoseStamped
 def matrix_to_pose_stamped(matrix, stamp, frame_id):
@@ -75,6 +229,7 @@ class OculusInputNode(Node):
         self.declare_parameter('publish_tf', True)
         self.declare_parameter('print_fps', False)
         self.declare_parameter('queue_size', 10) # Max size for the internal queue
+        self.declare_parameter('enable_graceful_fallback', True)  # New parameter
 
         # Get parameters
         self.connection_mode = self.get_parameter('connection_mode').get_parameter_value().string_value
@@ -87,6 +242,7 @@ class OculusInputNode(Node):
         self.right_controller_frame_id = self.get_parameter('right_controller_frame_id').get_parameter_value().string_value
         self.publish_tf = self.get_parameter('publish_tf').get_parameter_value().bool_value
         self.print_oculus_fps = self.get_parameter('print_fps').get_parameter_value().bool_value
+        self.enable_graceful_fallback = self.get_parameter('enable_graceful_fallback').get_parameter_value().bool_value
         queue_size = self.get_parameter('queue_size').get_parameter_value().integer_value
 
         qos_profile = QoSProfile(
@@ -104,29 +260,25 @@ class OculusInputNode(Node):
         if self.publish_tf:
             self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
+        # Initialize VR connection manager
         reader_ip = self.oculus_ip if self.connection_mode == 'network' else None
-        log_msg = f'Connecting to Oculus via network: {reader_ip}:{self.oculus_port}' if reader_ip else 'Connecting to Oculus via USB.'
-        self.get_logger().info(log_msg)
-
-        self.oculus_reader = None # Initialize to allow cleanup even if constructor fails
-        self.oculus_connected = False
-        try:
-            self.oculus_reader = OculusReader(
-                ip_address=reader_ip,
-                port=self.oculus_port,
-                print_FPS=self.print_oculus_fps,
-                run=True, # OculusReader starts its own logcat reading thread
-            )
-            self.oculus_connected = True # Assume connected if no exception
-        except ConnectionError as e:
-            self.get_logger().warn(f"Failed to connect to Oculus on init: {e}. Will keep trying if polling is active.")
-            # self.oculus_connected remains False
-        except Exception as e:
-            self.get_logger().error(f"Unexpected error during OculusReader init: {e}. Node will not start.")
-            return
+        self.vr_manager = VRConnectionManager(
+            logger=self.get_logger(),
+            connection_mode=self.connection_mode,
+            ip_address=reader_ip,
+            port=self.oculus_port
+        )
         
-        self.get_logger().info('Oculus Reader initialized (or attempted).')
-
+        # Print connection status banner
+        self.vr_manager.print_connection_banner()
+        
+        # Attempt initial connection
+        self.vr_connected = self.vr_manager.attempt_connection()
+        
+        if not self.vr_connected and not self.enable_graceful_fallback:
+            self.get_logger().error("VR connection failed and graceful fallback disabled. Node will exit.")
+            raise RuntimeError("VR connection required but failed")
+        
         # Setup for dedicated polling thread
         self.data_queue = queue.Queue(maxsize=queue_size)
         self.polling_thread_stop_event = threading.Event()
@@ -143,58 +295,57 @@ class OculusInputNode(Node):
         self.polling_thread.start()
         
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_data_from_queue)
-        self.get_logger().info(f'Oculus input node started. ROS Publish Rate: {self.publish_rate} Hz, Polling Rate: {self.poll_rate_hz} Hz')
+        
+        connection_status = "CONNECTED" if self.vr_connected else "DISCONNECTED (Graceful Fallback)"
+        self.get_logger().info(f'Oculus input node started. VR Status: {connection_status}')
+        self.get_logger().info(f'ROS Publish Rate: {self.publish_rate} Hz, Polling Rate: {self.poll_rate_hz} Hz')
 
         # Initialize Diagnostic Updater
         self.diagnostic_updater = Updater(self)
         self.diagnostic_updater.setHardwareID(f"oculus_quest_{self.connection_mode}_{self.oculus_ip if self.connection_mode == 'network' else 'usb'}")
         self.diagnostic_updater.add(OculusConnectionTask("Oculus Connection", self))
         self.diagnostic_updater.add(OculusDataRateTask("Oculus Data Rates", self))
-        # Updater will call its own timer to publish at ~1Hz by default.
-        # If we want every 5s, we need to manage its update calls or see if it can be configured.
-        # For now, default 1Hz is fine. We can adjust if needed.
 
     def _poll_oculus_data_loop(self):
         self.get_logger().info("Oculus polling thread started.")
         poll_start_time = time.monotonic()
+        last_connection_check = time.time()
         
         while not self.polling_thread_stop_event.is_set() and rclpy.ok():
             try:
-                if not self.oculus_connected and self.oculus_reader: # Attempt to reconnect if not connected
-                    try:
-                        self.get_logger().info("Attempting to re-initialize OculusReader...")
-                        reader_ip = self.oculus_ip if self.connection_mode == 'network' else None
-                        # Re-initialize or re-run aspects of OculusReader
-                        # This part is tricky as OculusReader starts its own threads on init.
-                        # A full re-init might be needed or a dedicated 'connect' method in OculusReader.
-                        # For simplicity, we assume OculusReader.run() can be called again or it auto-retries.
-                        # If OculusReader doesn't auto-retry, this logic needs enhancement or OculusReader itself does.
-                        # For now, let's assume it will eventually connect if device becomes available.
-                        # We just try to get data. If it fails, oculus_connected remains false.
-                        # If get_transformations_and_buttons succeeds, we set oculus_connected to True.
-                        # self.oculus_reader.run() # Example: if OculusReader needs a manual restart
-                        pass
-
-                    except Exception as e_conn:
-                        self.get_logger().warn(f"Re-connection attempt failed: {e_conn}")
-                        time.sleep(5.0) # Wait before next connection attempt
-                        continue
-
-                if self.oculus_reader:
-                    transforms, buttons = self.oculus_reader.get_transformations_and_buttons()
-                    if transforms is not None or buttons is not None: # Check for actual data
-                        self.oculus_connected = True # Mark as connected if data is received
+                current_time = time.time()
+                
+                # Periodically attempt reconnection if disconnected
+                if not self.vr_manager.is_connected() and current_time - last_connection_check > 10.0:
+                    self.get_logger().info("Attempting VR reconnection...")
+                    self.vr_connected = self.vr_manager.attempt_connection()
+                    last_connection_check = current_time
+                    
+                    if self.vr_connected:
+                        self.get_logger().info("🎮 VR reconnected successfully!")
+                
+                # Try to get VR data if connected
+                if self.vr_manager.is_connected():
+                    transforms, buttons = self.vr_manager.get_vr_data()
+                    
+                    if transforms is not None or buttons is not None:
                         try:
                             self.data_queue.put_nowait((transforms, buttons))
                         except queue.Full:
-                            try: self.data_queue.get_nowait()
-                            except queue.Empty: pass
-                            try: self.data_queue.put_nowait((transforms, buttons))
+                            try: 
+                                self.data_queue.get_nowait()
+                            except queue.Empty: 
+                                pass
+                            try: 
+                                self.data_queue.put_nowait((transforms, buttons))
                             except queue.Full:
                                 self.get_logger().warn("Internal Oculus data queue still full. Data may be lost.")
                         self._poll_count += 1
-                    # else: # If we get None, None it might indicate a transient issue, don't immediately set to not connected unless errors occur
-                        # self.get_logger().debug("Polling returned no new data (None, None).")
+                    
+                    # Update connection status
+                    if not self.vr_manager.is_connected():
+                        self.vr_connected = False
+                        self.get_logger().warn("VR connection lost during polling")
 
                 current_time = time.monotonic()
                 if current_time - poll_start_time >= 1.0: # Calculate rate every second
@@ -203,14 +354,12 @@ class OculusInputNode(Node):
                     poll_start_time = current_time
 
                 time.sleep(self.polling_interval)
-            except ConnectionError as e_ce: # Catch specific connection errors during get_transformations
-                self.get_logger().warn(f"ConnectionError in Oculus polling thread: {e_ce}. Marking as not connected.")
-                self.oculus_connected = False
-                time.sleep(5.0) # Wait longer if connection error occurs
+                
             except Exception as e:
                 self.get_logger().warn(f"Exception in Oculus polling thread: {e}")
-                self.oculus_connected = False # Assume not connected on other errors too
+                self.vr_connected = False
                 time.sleep(1.0) 
+        
         self.get_logger().info("Oculus polling thread stopped.")
 
     def publish_data_from_queue(self):
@@ -218,11 +367,10 @@ class OculusInputNode(Node):
             transforms, buttons = self.data_queue.get_nowait()
             self.data_queue.task_done() # Signal that item was processed
         except queue.Empty:
-            # self.get_logger().debug("Oculus data queue empty, nothing to publish.")
+            # Publish empty/default data to indicate VR is disconnected
+            if not self.vr_connected:
+                self._publish_disconnected_status()
             return # No new data to publish
-        except Exception as e:
-            self.get_logger().warn(f"Could not get data from internal queue: {e}")
-            return
 
         current_time_msg = self.get_clock().now().to_msg()
 
@@ -258,7 +406,32 @@ class OculusInputNode(Node):
             self.actual_publish_rate = self._publish_count / (current_time - self._last_publish_time)
             self._publish_count = 0
             self._last_publish_time = current_time
-            # self.diagnostic_updater.force_update() # If we want to update diagnostics on our schedule
+
+    def _publish_disconnected_status(self):
+        """Publish default/empty data to indicate VR disconnection"""
+        current_time_msg = self.get_clock().now().to_msg()
+        
+        # Publish zero pose for controllers
+        zero_pose = PoseStamped()
+        zero_pose.header.stamp = current_time_msg
+        zero_pose.header.frame_id = self.base_frame_id
+        # Position and orientation remain at default (0,0,0) and (0,0,0,1)
+        zero_pose.pose.orientation.w = 1.0  # Valid quaternion
+        
+        self.left_pose_pub.publish(zero_pose)
+        self.right_pose_pub.publish(zero_pose)
+        
+        # Publish empty joy messages
+        empty_joy = Joy()
+        empty_joy.header.stamp = current_time_msg
+        empty_joy.header.frame_id = self.left_controller_frame_id
+        empty_joy.axes = [0.0, 0.0, 0.0, 0.0]
+        empty_joy.buttons = [0, 0, 0, 0, 0, 0]
+        
+        self.left_joy_pub.publish(empty_joy)
+        
+        empty_joy.header.frame_id = self.right_controller_frame_id
+        self.right_joy_pub.publish(empty_joy)
 
     def create_joy_message(self, buttons_data, prefix, stamp):
         joy_msg = Joy()
@@ -292,7 +465,6 @@ class OculusInputNode(Node):
         joy_msg.buttons = buttons
         return joy_msg
 
-
     def destroy_node(self):
         self.get_logger().info("Shutting down Oculus input node...")
         self.polling_thread_stop_event.set() # Signal polling thread to stop
@@ -303,8 +475,8 @@ class OculusInputNode(Node):
             if self.polling_thread.is_alive():
                 self.get_logger().warn("Oculus polling thread did not join in time.")
 
-        if hasattr(self, 'oculus_reader') and self.oculus_reader:
-            self.oculus_reader.stop() # This stops the OculusReader's internal logcat thread
+        # Clean up VR connection
+        self.vr_manager.cleanup()
         
         if hasattr(self, 'timer') and self.timer:
             self.timer.cancel()
@@ -321,23 +493,30 @@ class OculusInputNode(Node):
         super().destroy_node()
         self.get_logger().info("Oculus input node shutdown complete.")
 
-# Diagnostic Tasks
+# Diagnostic Tasks (updated for graceful handling)
 class OculusConnectionTask(DiagnosticTask):
     def __init__(self, name, node_instance):
         super().__init__(name)
         self.node = node_instance
 
     def run(self, stat: DiagnosticStatus):
-        if self.node.oculus_reader and self.node.oculus_connected:
+        if self.node.vr_manager.is_connected():
             stat.summary(DiagnosticStatus.OK, "Oculus device connected and responding.")
             stat.add("Device IP", str(self.node.oculus_ip) if self.node.connection_mode == 'network' else "USB")
             stat.add("Device Port", str(self.node.oculus_port) if self.node.connection_mode == 'network' else "N/A")
-        elif self.node.oculus_reader and not self.node.oculus_connected:
-            stat.summary(DiagnosticStatus.WARN, "Oculus device connection issue or no data yet.")
-            stat.add("Status", "Attempting to connect or waiting for data.")
-        else: # No oculus_reader instance, major init failure
-            stat.summary(DiagnosticStatus.ERROR, "OculusReader not initialized. Device connection issue.")
-            stat.add("Status", "Initialization failed.")
+            stat.add("Retry Count", "0")
+        elif self.node.vr_manager.status == VR_CONNECTION_STATUS['CONNECTING']:
+            stat.summary(DiagnosticStatus.WARN, "Attempting to connect to Oculus device...")
+            stat.add("Status", "Connecting")
+            stat.add("Retry Count", str(self.node.vr_manager.retry_count))
+        elif self.node.vr_manager.status == VR_CONNECTION_STATUS['ERROR']:
+            stat.summary(DiagnosticStatus.ERROR, "Oculus device connection error.")
+            stat.add("Status", "Error - check device and ADB setup")
+            stat.add("Retry Count", str(self.node.vr_manager.retry_count))
+        else:
+            stat.summary(DiagnosticStatus.WARN, "Oculus device disconnected (graceful fallback active).")
+            stat.add("Status", "Disconnected - will retry connection")
+            stat.add("Graceful Fallback", "Enabled" if self.node.enable_graceful_fallback else "Disabled")
         return stat
 
 class OculusDataRateTask(DiagnosticTask):
@@ -352,10 +531,13 @@ class OculusDataRateTask(DiagnosticTask):
         stat.add("Target Publish Rate (Hz)", f"{self.node.publish_rate:.2f}")
         stat.add("Actual Publish Rate (Hz)", f"{self.node.actual_publish_rate:.2f}")
         stat.add("Data Queue Size", str(self.node.data_queue.qsize()))
+        stat.add("VR Connected", "Yes" if self.node.vr_manager.is_connected() else "No")
         
-        if abs(self.node.actual_poll_rate - self.node.poll_rate_hz) > self.node.poll_rate_hz * 0.2: # More than 20% deviation
+        if not self.node.vr_manager.is_connected():
+            stat.mergeSummary(DiagnosticStatus.WARN, "VR device not connected - publishing default data.")
+        elif abs(self.node.actual_poll_rate - self.node.poll_rate_hz) > self.node.poll_rate_hz * 0.2: # More than 20% deviation
             stat.mergeSummary(DiagnosticStatus.WARN, "Polling rate significantly different from target.")
-        if abs(self.node.actual_publish_rate - self.node.publish_rate) > self.node.publish_rate * 0.2:
+        elif abs(self.node.actual_publish_rate - self.node.publish_rate) > self.node.publish_rate * 0.2:
             stat.mergeSummary(DiagnosticStatus.WARN, "Publish rate significantly different from target.")
         return stat
 
@@ -364,22 +546,14 @@ def main(args=None):
     node = None # Initialize node to None for robust error handling in finally block
     try:
         node = OculusInputNode()
-        # Check if OculusReader initialization failed (indicated by oculus_reader still being None or an early return)
-        if not hasattr(node, 'oculus_reader') or node.oculus_reader is None:
-             if node: # if node object was created but init failed partway
-                node.get_logger().error("OculusInputNode initialization failed. Shutting down.")
-             else: # if super().__init__ wasn't even called or node creation failed very early
-                print("Critical error: OculusInputNode object could not be created. Shutting down.", file=sys.stderr)
-             # No need to call node.destroy_node() if init failed so badly
-             if rclpy.ok():
-                rclpy.shutdown()
-             return 
-
+        
         if rclpy.ok():
-             rclpy.spin(node)
+            rclpy.spin(node)
     except KeyboardInterrupt:
-        if node: node.get_logger().info('Keyboard interrupt, shutting down.')
-        else: print('Keyboard interrupt before node initialization.')
+        if node: 
+            node.get_logger().info('Keyboard interrupt, shutting down.')
+        else: 
+            print('Keyboard interrupt before node initialization.')
     except Exception as e:
         if node:
             node.get_logger().error(f"Unhandled exception in main: {e}", exc_info=True)

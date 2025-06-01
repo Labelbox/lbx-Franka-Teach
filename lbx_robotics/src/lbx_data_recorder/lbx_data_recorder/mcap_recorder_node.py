@@ -123,7 +123,10 @@ class MCAPRecorderNode(Node):
         self.declare_parameter('auto_start_recording', False)
         self.declare_parameter('auto_start_filename_prefix', 'auto_trajectory')
         self.declare_parameter('topics_to_record', rclpy.Parameter.Type.STRING_ARRAY)
-        self.declare_parameter('topic_types_map', rclpy.Parameter.Type.STRING_ARRAY, []) # topic_name:MsgType format
+        self.declare_parameter('topic_types_map', [], rclpy.ParameterDescriptor(
+            type=rclpy.Parameter.Type.STRING_ARRAY,
+            description='Topic name to message type mapping in format topic_name:MsgType'
+        ))
         self.declare_parameter('recording_frequency_hz', 20.0) # How often to bundle data for MCAP
         self.declare_parameter('image_jpeg_quality', 85)
         self.declare_parameter('mcap_queue_size', 1000)

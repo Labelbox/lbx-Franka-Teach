@@ -1,1 +1,2 @@
-# This file makes lbx_input_oculus a Python package 
+# This file makes lbx_input_oculus a Python package
+from . import oculus_reader 

@@ -280,6 +280,20 @@ perform_build() {
         export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
         export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
         
+        # Add robotpkg paths if it exists (for Pinocchio)
+        if [ -d "/opt/openrobots" ]; then
+            print_info "Found robotpkg installation, adding to paths..."
+            export CMAKE_PREFIX_PATH="/opt/openrobots/lib/cmake:/opt/openrobots/share:$CMAKE_PREFIX_PATH"
+            export PKG_CONFIG_PATH="/opt/openrobots/lib/pkgconfig:$PKG_CONFIG_PATH"
+            export LD_LIBRARY_PATH="/opt/openrobots/lib:$LD_LIBRARY_PATH"
+            export PATH="/opt/openrobots/bin:$PATH"
+        fi
+        
+        # Add ROS2 paths for packages like pinocchio
+        if [ -d "/opt/ros/humble" ]; then
+            export CMAKE_PREFIX_PATH="/opt/ros/humble/share:/opt/ros/humble/lib/cmake:$CMAKE_PREFIX_PATH"
+        fi
+        
         # If cmake issues persist, temporarily use system cmake
         if command -v /usr/bin/cmake &> /dev/null; then
             print_warning "Using system cmake to avoid conda library conflicts"
@@ -322,7 +336,7 @@ perform_build() {
         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local" \
+        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local;/opt/ros/humble;/opt/openrobots" \
         -DPCRE_LIBRARY="$PCRE_LIB" \
         -DPCRE_INCLUDE_DIR="/usr/include" 2>&1; then
         print_success "Build completed successfully"

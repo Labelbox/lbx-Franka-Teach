@@ -208,6 +208,31 @@ else
     echo_warn "Some build dependencies may not have installed correctly."
 fi
 
+# Install Pinocchio (required by libfranka)
+echo_info "Installing Pinocchio library..."
+# First try ROS2 pinocchio package
+if sudo apt install -y ros-humble-pinocchio; then
+    echo_success "Pinocchio installed successfully from ROS2 packages."
+else
+    echo_warn "Failed to install ROS2 Pinocchio package, trying alternatives..."
+    
+    # Try adding robotpkg repository
+    echo_info "Adding robotpkg repository for Pinocchio..."
+    if ! grep -q "robotpkg" /etc/apt/sources.list.d/*; then
+        sudo sh -c "echo 'deb [arch=amd64] http://robotpkg.openrobots.org/packages/debian/pub $(lsb_release -cs) robotpkg' > /etc/apt/sources.list.d/robotpkg.list"
+        curl http://robotpkg.openrobots.org/packages/debian/robotpkg.key | sudo apt-key add -
+        sudo apt update
+    fi
+    
+    # Try installing from robotpkg
+    if sudo apt install -y robotpkg-pinocchio; then
+        echo_success "Pinocchio installed successfully from robotpkg."
+    else
+        echo_warn "Could not install Pinocchio automatically."
+        echo_info "Pinocchio will need to be built from source or installed manually."
+    fi
+fi
+
 # Install RealSense SDK dependencies
 echo_info "Installing RealSense camera dependencies..."
 if sudo apt install -y \

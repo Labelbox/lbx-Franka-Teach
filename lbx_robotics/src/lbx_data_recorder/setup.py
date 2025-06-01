@@ -4,9 +4,9 @@ from glob import glob
 
 package_name = 'lbx_data_recorder'
 
+# Metadata is now in pyproject.toml
 setup(
     name=package_name,
-    version='0.1.0',
     packages=find_packages(),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -17,17 +17,5 @@ setup(
         # Config files if any
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml', recursive=True)),
     ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='Labelbox Robotics',
-    maintainer_email='robotics@labelbox.com',
-    description='High-performance data recording for VR teleoperation',
-    license='MIT',
-    tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'recorder_node = lbx_data_recorder.recorder_node:main',
-            'mcap_recorder_node = lbx_data_recorder.mcap_recorder_node:main',
-        ],
-    },
+    zip_safe=True # install_requires, entry_points etc. are in pyproject.toml
 ) 

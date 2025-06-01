@@ -4,9 +4,9 @@ from glob import glob
 
 package_name = 'lbx_franka_control'
 
+# Metadata is now in pyproject.toml
 setup(
     name=package_name,
-    version='0.1.0',
     packages=find_packages(),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -17,18 +17,5 @@ setup(
         # Config files
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
-    install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='labelbox',
-    maintainer_email='robotics@labelbox.com',
-    description='VR-based Franka control system using MoveIt',
-    license='MIT',
-    tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'system_manager = lbx_franka_control.system_manager:main',
-            'main_system = lbx_franka_control.main_system:main',
-            'system_monitor = lbx_franka_control.system_monitor:main',
-        ],
-    },
 ) 

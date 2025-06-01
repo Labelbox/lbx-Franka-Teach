@@ -94,24 +94,6 @@ def generate_launch_description():
         description='Logging level (DEBUG, INFO, WARN, ERROR)'
     )
     
-    # Config file for system_manager_node
-    # Assuming franka_vr_control_config.yaml is in lbx_franka_control/config/
-    # If not, adjust the FindPackageShare path or move the file to lbx_launch/config/
-    franka_control_config = PathJoinSubstitution([
-        FindPackageShare('lbx_franka_control'), 
-        'config',
-        'franka_vr_control_config.yaml'
-    ])
-    
-    # RViz configuration file
-    # TODO: Create the RViz config file or use MoveIt's default
-    # Commenting out for now since the file doesn't exist
-    # rviz_config_path = PathJoinSubstitution([
-    #     FindPackageShare('lbx_launch'), 
-    #     'config',
-    #     'franka_vr_control.rviz'
-    # ])
-    
     # MoveIt launch
     moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -124,8 +106,10 @@ def generate_launch_description():
         launch_arguments={
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-            'enable_rviz': LaunchConfiguration('enable_rviz'),  # Let MoveIt handle RViz
-            'load_gripper': 'true',  # Always load gripper for VR control
+            'enable_rviz': LaunchConfiguration('enable_rviz'),
+            'load_gripper': 'true', 
+            # arm_id will be handled by the included launch files if needed, or defaults.
+            # robot_description is NOT passed here. It's handled by the underlying franka_fr3_moveit_config.
         }.items()
     )
     
@@ -215,16 +199,6 @@ def generate_launch_description():
             )
         ]
     )
-    
-    # System monitoring and visualization tools
-    # TODO: Create RViz config and uncomment this section
-    # rviz_node = Node(
-    #     package='rviz2',
-    #     executable='rviz2',
-    #     name='rviz',
-    #     arguments=['-d', rviz_config_path],
-    #     condition=IfCondition(LaunchConfiguration('enable_rviz'))
-    # )
     
     # Status echo nodes for debugging
     status_echo_node = Node(

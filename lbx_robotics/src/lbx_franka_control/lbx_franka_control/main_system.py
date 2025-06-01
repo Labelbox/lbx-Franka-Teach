@@ -279,7 +279,8 @@ class LabelboxRoboticsSystem(Node):
             print(f"{Colors.FAIL}{Colors.BOLD}❌ Robot connection required for system operation{Colors.ENDC}")
             print(f"   {Colors.CYAN}Check robot power, network, and ros2_control configuration{Colors.ENDC}")
             # For fake hardware mode, be more lenient 
-            if self.launch_params.get('use_fake_hardware', False):
+            fake_hardware = self._get_bool_param('use_fake_hardware', False)
+            if fake_hardware:
                 print(f"   {Colors.WARNING}Fake hardware mode: Continuing anyway for testing{Colors.ENDC}")
                 self.system_ready = True  # Allow testing without perfect robot connection
                 return True
@@ -407,8 +408,8 @@ class LabelboxRoboticsSystem(Node):
         """Check robot connection via joint states with enhanced feedback"""
         print(f"      Waiting for robot joint states...")
         
-        # Check if we're using fake hardware
-        use_fake_hardware = self.launch_params.get('use_fake_hardware', 'false').lower() == 'true'
+        # Check if we're using fake hardware - handle both string and boolean values
+        use_fake_hardware = self._get_bool_param('use_fake_hardware', False)
         
         if use_fake_hardware:
             print(f"      Using fake hardware - joint states should be simulated")
@@ -628,7 +629,8 @@ class LabelboxRoboticsSystem(Node):
             status_parts.append(f"🤖 Robot: {Colors.GREEN}OK{Colors.ENDC}")
         else:
             # Check if we're in fake hardware mode
-            if self.launch_params.get('use_fake_hardware', False):
+            fake_hardware = self._get_bool_param('use_fake_hardware', False)
+            if fake_hardware:
                 status_parts.append(f"🤖 Robot: {Colors.CYAN}Fake{Colors.ENDC}")
             else:
                 status_parts.append(f"🤖 Robot: {Colors.FAIL}Error{Colors.ENDC}")
@@ -677,6 +679,14 @@ class LabelboxRoboticsSystem(Node):
         """Clean up resources"""
         print(f"\n\n{Colors.CYAN}Shutting down systems...{Colors.ENDC}")
         # Cleanup will be handled by ROS2 shutdown
+    
+    def _get_bool_param(self, param_name: str, default: bool = False) -> bool:
+        """Helper to safely convert launch parameters to boolean values"""
+        param_value = self.launch_params.get(param_name, default)
+        if isinstance(param_value, bool):
+            return param_value
+        else:
+            return str(param_value).lower() in ('true', '1', 'yes', 'on')
     
     async def run(self):
         """Main run loop with graceful degradation support"""

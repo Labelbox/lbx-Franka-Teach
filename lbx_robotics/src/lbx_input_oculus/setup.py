@@ -13,8 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        # Include APK and other oculus_reader files
-        (os.path.join('share', package_name, 'APK'), glob(os.path.join('lbx_input_oculus', 'oculus_reader', 'APK', '*'))),
+        # Note: Using system-wide oculus-reader package instead of local files
     ],
     install_requires=[
         'setuptools',
@@ -22,6 +21,7 @@ setup(
         'pure-python-adb',
         'transformations', 
         'diagnostic_updater',
+        'oculus-reader',  # System-wide oculus reader package
     ],
     zip_safe=False,  # Changed to False to ensure package files are accessible
     maintainer='Labelbox Robotics',
@@ -33,8 +33,6 @@ setup(
             'oculus_node = lbx_input_oculus.oculus_node:main',
         ],
     },
-    package_data={
-        'lbx_input_oculus': ['oculus_reader/APK/*'],
-    },
+    # Note: Using system-wide oculus-reader package
     include_package_data=True,
 ) 

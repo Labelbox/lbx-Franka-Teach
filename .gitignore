@@ -4,3 +4,22 @@ logs/
 extracted_data*/
 outputs/
 oculus_reader/
+
+# Build and install directories
+../build/
+../install/
+build/
+install/
+log/
+../log/
+lbx_robotics/build/
+lbx_robotics/install/
+lbx_robotics/log/
+
+# Franka ROS2 source directories
+src/franka_description/
+src/franka_ros2/
+src/libfranka/
+lbx_robotics/src/franka_description/
+lbx_robotics/src/franka_ros2/
+lbx_robotics/src/libfranka/

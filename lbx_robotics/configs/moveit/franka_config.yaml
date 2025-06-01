@@ -3,7 +3,7 @@
 
 franka_fr3:
   # ----- Robot Connection -----
-  robot_ip: "192.168.1.59" # Default IP, can be overridden by run.sh or launch args
+  robot_ip: "192.168.1.60" # Default IP, can be overridden by run.sh or launch args
   use_fake_hardware: false # Set to true for simulation/testing without a real robot
 
   # ----- MoveIt Configuration -----

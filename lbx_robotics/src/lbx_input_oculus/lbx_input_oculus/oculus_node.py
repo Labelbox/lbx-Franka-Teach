@@ -103,7 +103,7 @@ class VRConnectionManager:
             self.logger.info(f"Attempting VR connection ({self.retry_count}/{self.max_retries})...")
             
             # Import OculusReader here to catch import errors gracefully
-            from .oculus_reader.reader import OculusReader
+            from oculus_reader.reader import OculusReader
             
             self.oculus_reader = OculusReader(
                 ip_address=self.ip_address,
@@ -184,12 +184,32 @@ def matrix_to_pose_stamped(matrix, stamp, frame_id):
     pose.pose.position.y = matrix[1, 3]
     pose.pose.position.z = matrix[2, 3]
 
-    # Orientation (quaternion)
-    q = quaternion_from_matrix(matrix)
-    pose.pose.orientation.x = q[0]
-    pose.pose.orientation.y = q[1]
-    pose.pose.orientation.z = q[2]
-    pose.pose.orientation.w = q[3]
+    # Orientation (quaternion) - add robust error handling
+    try:
+        # Validate matrix before quaternion extraction
+        rotation_part = matrix[:3, :3]
+        
+        # Check if rotation matrix is valid (determinant should be close to 1)
+        det = np.linalg.det(rotation_part)
+        if abs(det - 1.0) > 0.1:  # Allow some tolerance for floating point errors
+            # Use identity quaternion for invalid matrices
+            pose.pose.orientation.x = 0.0
+            pose.pose.orientation.y = 0.0
+            pose.pose.orientation.z = 0.0
+            pose.pose.orientation.w = 1.0
+        else:
+            q = quaternion_from_matrix(matrix)
+            pose.pose.orientation.x = q[0]
+            pose.pose.orientation.y = q[1]
+            pose.pose.orientation.z = q[2]
+            pose.pose.orientation.w = q[3]
+    except (ValueError, np.linalg.LinAlgError):
+        # Fallback to identity quaternion on any matrix decomposition error
+        pose.pose.orientation.x = 0.0
+        pose.pose.orientation.y = 0.0
+        pose.pose.orientation.z = 0.0
+        pose.pose.orientation.w = 1.0
+    
     return pose
 
 # Helper function to convert 4x4 matrix to TransformStamped
@@ -204,12 +224,32 @@ def matrix_to_transform_stamped(matrix, stamp, parent_frame_id, child_frame_id):
     t.transform.translation.y = matrix[1, 3]
     t.transform.translation.z = matrix[2, 3]
 
-    # Orientation
-    q = quaternion_from_matrix(matrix)
-    t.transform.rotation.x = q[0]
-    t.transform.rotation.y = q[1]
-    t.transform.rotation.z = q[2]
-    t.transform.rotation.w = q[3]
+    # Orientation - add robust error handling
+    try:
+        # Validate matrix before quaternion extraction
+        rotation_part = matrix[:3, :3]
+        
+        # Check if rotation matrix is valid (determinant should be close to 1)
+        det = np.linalg.det(rotation_part)
+        if abs(det - 1.0) > 0.1:  # Allow some tolerance for floating point errors
+            # Use identity quaternion for invalid matrices
+            t.transform.rotation.x = 0.0
+            t.transform.rotation.y = 0.0
+            t.transform.rotation.z = 0.0
+            t.transform.rotation.w = 1.0
+        else:
+            q = quaternion_from_matrix(matrix)
+            t.transform.rotation.x = q[0]
+            t.transform.rotation.y = q[1]
+            t.transform.rotation.z = q[2]
+            t.transform.rotation.w = q[3]
+    except (ValueError, np.linalg.LinAlgError):
+        # Fallback to identity quaternion on any matrix decomposition error
+        t.transform.rotation.x = 0.0
+        t.transform.rotation.y = 0.0
+        t.transform.rotation.z = 0.0
+        t.transform.rotation.w = 1.0
+    
     return t
 
 
@@ -450,8 +490,21 @@ class OculusInputNode(Node):
         grip_key = 'leftGrip' if prefix == 'L' else 'rightGrip'
         trig_key = 'leftTrig' if prefix == 'L' else 'rightTrig'
         
-        axes.append(float(buttons_data.get(grip_key, 0.0)))
-        axes.append(float(buttons_data.get(trig_key, 0.0)))
+        # Handle grip value - may be a tuple, list, or single value
+        grip_data = buttons_data.get(grip_key, 0.0)
+        if isinstance(grip_data, (tuple, list)) and len(grip_data) > 0:
+            grip_value = float(grip_data[0])
+        else:
+            grip_value = float(grip_data)
+        axes.append(grip_value)
+        
+        # Handle trigger value - may be a tuple, list, or single value
+        trig_data = buttons_data.get(trig_key, 0.0)
+        if isinstance(trig_data, (tuple, list)) and len(trig_data) > 0:
+            trig_value = float(trig_data[0])
+        else:
+            trig_value = float(trig_data)
+        axes.append(trig_value)
 
         joy_msg.axes = axes
         
@@ -556,9 +609,13 @@ def main(args=None):
             print('Keyboard interrupt before node initialization.')
     except Exception as e:
         if node:
-            node.get_logger().error(f"Unhandled exception in main: {e}", exc_info=True)
+            node.get_logger().error(f"Unhandled exception in main: {e}")
+            import traceback
+            traceback.print_exc()
         else:
             print(f"Unhandled exception before node initialization: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
     finally:
         if node and rclpy.ok(): # Check if node was successfully initialized enough to have destroy_node
             if hasattr(node, 'destroy_node'): # Ensure destroy_node method exists

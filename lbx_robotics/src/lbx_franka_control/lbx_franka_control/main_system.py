@@ -49,7 +49,9 @@ class Colors:
     CYAN = '\033[96m'
     GREEN = '\033[92m'
     WARNING = '\033[93m'
+    YELLOW = '\033[93m'
     FAIL = '\033[91m'
+    RED = '\033[91m'
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
@@ -154,7 +156,7 @@ class LabelboxRoboticsSystem(Node):
         # Diagnostic collection and summary
         self.node_diagnostics = {}  # Store diagnostics from all nodes
         self.last_diagnostic_summary_time = 0
-        self.diagnostic_summary_interval = 30.0  # Print summary every 30 seconds
+        self.diagnostic_summary_interval = 5.0  # Print summary every 5 seconds (changed from 30.0)
         
         # QoS profile for diagnostics subscription
         qos_profile = QoSProfile(
@@ -757,113 +759,274 @@ class LabelboxRoboticsSystem(Node):
         return level_map.get(level, f"UNKNOWN({level})")
     
     def print_diagnostic_summary(self):
-        """Print a comprehensive system health summary"""
-        print(f"\n{Colors.CYAN}{Colors.BOLD}📊 System Health Summary{Colors.ENDC}")
-        print("─" * 70)
+        """Print a beautiful system health summary with frequency information"""
         
-        # Print timestamp
+        # Clear previous output for a clean look
+        print("\n" * 1)
+        
+        # Main header with simple line splitters
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.GREEN}                     📊 SYSTEM HEALTH DIAGNOSTICS 📊{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        
+        # Timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
-        print(f"📅 Time: {current_time}")
+        print(f"🕐 Time: {Colors.BOLD}{current_time}{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 80}{Colors.ENDC}")
         
-        # Print overall system status
+        # Overall system status
         if self.vr_healthy and self.moveit_healthy and self.robot_healthy:
-            status_icon = "✅"
-            status_text = f"{Colors.GREEN}All systems fully operational{Colors.ENDC}"
+            status_icon = "🟢"
+            status_text = f"{Colors.GREEN}ALL SYSTEMS FULLY OPERATIONAL{Colors.ENDC}"
         elif self.moveit_healthy and self.robot_healthy:
-            status_icon = "⚠️"
-            status_text = f"{Colors.WARNING}Core systems operational (VR graceful fallback active){Colors.ENDC}"
+            status_icon = "🟡"
+            status_text = f"{Colors.WARNING}CORE SYSTEMS OPERATIONAL (VR FALLBACK){Colors.ENDC}"
         elif self.robot_healthy:
-            status_icon = "⚠️"
-            status_text = f"{Colors.WARNING}Robot connected (MoveIt services pending){Colors.ENDC}"
+            status_icon = "🟠"
+            status_text = f"{Colors.WARNING}ROBOT CONNECTED (MOVEIT PENDING){Colors.ENDC}"
         else:
-            status_icon = "❌"
-            status_text = f"{Colors.FAIL}Robot connection required for system operation{Colors.ENDC}"
+            status_icon = "🔴"
+            status_text = f"{Colors.FAIL}ROBOT CONNECTION REQUIRED{Colors.ENDC}"
         
-        print(f"🏥 Overall Status: {status_icon} {status_text}")
+        print(f"{status_icon} {Colors.BOLD}OVERALL STATUS:{Colors.ENDC} {status_text}")
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
         
-        # Print system components with more detail
-        print(f"\n{Colors.CYAN}System Components:{Colors.ENDC}")
+        # System components overview
+        print(f"{Colors.BOLD}{Colors.BLUE}🔧 SYSTEM COMPONENTS{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
         
         # VR Component
-        if self.vr_healthy:
-            print(f"   ├─ 🎮 VR Controller: {Colors.GREEN}Connected and operational{Colors.ENDC}")
-        else:
-            print(f"   ├─ 🎮 VR Controller: {Colors.WARNING}Graceful fallback active{Colors.ENDC}")
-            print(f"   │   💡 System continues without VR - will auto-reconnect when available")
+        vr_icon = "🎮✅" if self.vr_healthy else "🎮⚠️"
+        vr_status = f"{Colors.GREEN}Connected & Operational{Colors.ENDC}" if self.vr_healthy else f"{Colors.WARNING}Graceful Fallback{Colors.ENDC}"
+        print(f"  {vr_icon} VR Controller: {vr_status}")
         
         # Robot Component
+        robot_icon = "🤖✅" if self.robot_healthy else "🤖❌"
         if self.robot_healthy:
             hardware_type = "Fake Hardware" if self._get_bool_param('use_fake_hardware', False) else "Real Robot"
-            print(f"   ├─ 🤖 Robot: {Colors.GREEN}Connected ({hardware_type}){Colors.ENDC}")
+            robot_status = f"{Colors.GREEN}Connected ({hardware_type}){Colors.ENDC}"
         else:
-            print(f"   ├─ 🤖 Robot: {Colors.FAIL}Disconnected{Colors.ENDC}")
-            print(f"   │   💡 Check robot power, network, and ros2_control status")
+            robot_status = f"{Colors.FAIL}Disconnected{Colors.ENDC}"
+        print(f"  {robot_icon} Robot: {robot_status}")
         
         # MoveIt Component
-        if self.moveit_healthy:
-            print(f"   ├─ 🔧 MoveIt: {Colors.GREEN}Services ready{Colors.ENDC}")
-        else:
-            print(f"   ├─ 🔧 MoveIt: {Colors.WARNING}Services pending{Colors.ENDC}")
-            print(f"   │   💡 Services may still be initializing - system can run in monitoring mode")
+        moveit_icon = "🔧✅" if self.moveit_healthy else "🔧⚠️"
+        moveit_status = f"{Colors.GREEN}Services Ready{Colors.ENDC}" if self.moveit_healthy else f"{Colors.WARNING}Services Pending{Colors.ENDC}"
+        print(f"  {moveit_icon} MoveIt: {moveit_status}")
         
         # Camera Component
         cameras_enabled = self.launch_params.get('enable_cameras', False)
         if cameras_enabled:
-            if self.cameras_healthy:
-                print(f"   └─ 📹 Cameras: {Colors.GREEN}Operational{Colors.ENDC}")
-            else:
-                print(f"   └─ 📹 Cameras: {Colors.WARNING}Issues detected{Colors.ENDC}")
+            camera_icon = "📹✅" if self.cameras_healthy else "📹⚠️"
+            camera_status = f"{Colors.GREEN}Operational{Colors.ENDC}" if self.cameras_healthy else f"{Colors.WARNING}Issues{Colors.ENDC}"
         else:
-            print(f"   └─ 📹 Cameras: {Colors.CYAN}Disabled{Colors.ENDC}")
+            camera_icon = "📹⭕"
+            camera_status = f"{Colors.CYAN}Disabled{Colors.ENDC}"
+        print(f"  {camera_icon} Cameras: {camera_status}")
         
-        # Print detailed node diagnostics if available
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        
+        # Detailed frequency information from all nodes
         if self.node_diagnostics:
-            print(f"\n{Colors.CYAN}Component Details:{Colors.ENDC}")
-            node_categories = {
-                'VR': ['Oculus Connection', 'Oculus Data Rates'],
-                'Camera': ['Camera System Status'],
-                'Recording': ['MCAP Recorder Status'],
-                'Robot': ['Franka Controller Status'],
-                'System': ['LBX Robotics System Status']
-            }
+            print(f"{Colors.BOLD}{Colors.BLUE}🔄 NODE FREQUENCY REPORT{Colors.ENDC}")
+            print(f"{Colors.CYAN}{'=' * 50}{Colors.ENDC}")
             
-            for category, expected_nodes in node_categories.items():
-                found_nodes = [node for node in self.node_diagnostics.keys() 
-                             if any(expected in node for expected in expected_nodes)]
+            # Frequency-related keywords to look for
+            frequency_keywords = [
+                'Rate', 'Frequency', 'Hz', 'FPS', 'Poll Rate', 'Publish Rate', 'Control Rate',
+                'Update Rate', 'Sample Rate', 'Actual', 'Target', 'Expected'
+            ]
+            
+            # Collect nodes with frequency data
+            frequency_nodes = []
+            other_nodes = []
+            
+            for node_name in sorted(self.node_diagnostics.keys()):
+                diagnostics = self.node_diagnostics[node_name]
+                frequency_data = {}
+                for key, value in diagnostics.items():
+                    if any(keyword in key for keyword in frequency_keywords):
+                        frequency_data[key] = value
                 
-                if found_nodes:
-                    print(f"   📋 {category}:")
-                    for node_name in found_nodes:
-                        diagnostics = self.node_diagnostics[node_name]
-                        # Show key metrics for each component
-                        if 'Status' in diagnostics:
-                            print(f"     • {node_name}: {diagnostics['Status']}")
-                        elif 'Summary' in diagnostics:
-                            print(f"     • {node_name}: {diagnostics['Summary']}")
-                        
-                        # Show specific important metrics
-                        if 'Connection Status' in diagnostics:
-                            print(f"       └─ Connection: {diagnostics['Connection Status']}")
-                        if 'Active Cameras (Mgr)' in diagnostics:
-                            print(f"       └─ Active Cameras: {diagnostics['Active Cameras (Mgr)']}")
-                        if 'IK Success Rate (%)' in diagnostics:
-                            print(f"       └─ IK Success Rate: {diagnostics['IK Success Rate (%)']}%")
-                        if 'Recording Status' in diagnostics:
-                            print(f"       └─ Recording: {diagnostics['Recording Status']}")
+                if frequency_data:
+                    frequency_nodes.append((node_name, diagnostics, frequency_data))
                 else:
-                    print(f"   📋 {category}: {Colors.WARNING}No diagnostics received yet{Colors.ENDC}")
+                    other_nodes.append((node_name, diagnostics))
+            
+            # Display nodes with frequency information
+            for i, (node_name, diagnostics, frequency_data) in enumerate(frequency_nodes):
+                # Node header
+                level = diagnostics.get('Level', 'OK')
+                if level == 'OK':
+                    level_color = Colors.GREEN
+                    level_icon = "🟢"
+                elif level == 'WARNING':
+                    level_color = Colors.WARNING
+                    level_icon = "🟡"
+                elif level == 'ERROR':
+                    level_color = Colors.FAIL
+                    level_icon = "🔴"
+                else:
+                    level_color = Colors.CYAN
+                    level_icon = "🔵"
+                
+                # Create a nice node name display
+                display_name = node_name.replace('oculus_reader: ', '').replace(':', ' -> ')
+                if len(display_name) > 60:
+                    display_name = display_name[:57] + "..."
+                
+                print(f"\n{level_icon} {Colors.BOLD}{display_name}{Colors.ENDC} ({level_color}{level}{Colors.ENDC})")
+                print(f"{Colors.CYAN}{'-' * 70}{Colors.ENDC}")
+                
+                # Show summary if available
+                if 'Summary' in diagnostics:
+                    summary = diagnostics['Summary']
+                    if len(summary) > 75:
+                        summary = summary[:72] + "..."
+                    print(f"  📝 {summary}")
+                
+                # Show frequency information in organized sections
+                target_rates = []
+                actual_rates = []
+                other_freq = []
+                
+                for key, value in frequency_data.items():
+                    if 'Target' in key or 'Expected' in key:
+                        target_rates.append((key, value))
+                    elif 'Actual' in key or 'Current' in key:
+                        actual_rates.append((key, value))
+                    else:
+                        other_freq.append((key, value))
+                
+                # Display target rates
+                if target_rates:
+                    print(f"  🎯 {Colors.BOLD}TARGET RATES:{Colors.ENDC}")
+                    for key, value in target_rates:
+                        clean_key = key.replace('Target ', '').replace('Expected ', '')
+                        if len(clean_key) > 40:
+                            clean_key = clean_key[:37] + "..."
+                        print(f"    • {clean_key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                
+                # Display actual rates
+                if actual_rates:
+                    print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
+                    for key, value in actual_rates:
+                        clean_key = key.replace('Actual ', '').replace('Current ', '')
+                        if len(clean_key) > 40:
+                            clean_key = clean_key[:37] + "..."
+                        
+                        # Color code based on performance
+                        try:
+                            numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
+                            if numeric_value > 50:
+                                color = Colors.GREEN
+                                perf_icon = "🟢"
+                            elif numeric_value > 20:
+                                color = Colors.CYAN
+                                perf_icon = "🔵"
+                            elif numeric_value > 0:
+                                color = Colors.WARNING
+                                perf_icon = "🟡"
+                            else:
+                                color = Colors.FAIL
+                                perf_icon = "🔴"
+                        except:
+                            color = Colors.CYAN
+                            perf_icon = "🔵"
+                        
+                        print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
+                
+                # Display other frequency metrics
+                if other_freq:
+                    print(f"  📈 {Colors.BOLD}OTHER METRICS:{Colors.ENDC}")
+                    for key, value in other_freq:
+                        if len(key) > 40:
+                            key = key[:37] + "..."
+                        print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                
+                # Show other important metrics for this node
+                other_important_keys = [
+                    'Connection Status', 'VR Connected', 'Device IP', 'Recording Status',
+                    'Active Cameras', 'Queue Size', 'Data Queue Size', 'IK Success Rate',
+                    'Operation Mode', 'System Ready'
+                ]
+                
+                important_metrics = []
+                for key in other_important_keys:
+                    if key in diagnostics and key not in frequency_data:
+                        important_metrics.append((key, diagnostics[key]))
+                
+                if important_metrics:
+                    print(f"  ℹ️  {Colors.BOLD}STATUS INFO:{Colors.ENDC}")
+                    for key, value in important_metrics:
+                        if len(key) > 35:
+                            key = key[:32] + "..."
+                        
+                        if 'Success' in key and '%' in str(value):
+                            try:
+                                success_rate = float(str(value).replace('%', ''))
+                                if success_rate >= 95:
+                                    color = Colors.GREEN
+                                    icon = "✅"
+                                elif success_rate >= 80:
+                                    color = Colors.CYAN
+                                    icon = "🔵"
+                                else:
+                                    color = Colors.WARNING
+                                    icon = "⚠️"
+                                print(f"    {icon} {key}: {color}{value}{Colors.ENDC}")
+                            except:
+                                print(f"    ℹ️ {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+                        elif 'Connected' in key or 'Ready' in key:
+                            if str(value).lower() in ['yes', 'true', 'connected', 'ready']:
+                                print(f"    ✅ {key}: {Colors.GREEN}{value}{Colors.ENDC}")
+                            else:
+                                print(f"    ❌ {key}: {Colors.WARNING}{value}{Colors.ENDC}")
+                        else:
+                            print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+            
+            # Show nodes without frequency data in a compact format
+            if other_nodes:
+                print(f"\n{Colors.BOLD}{Colors.BLUE}📋 OTHER NODE STATUS{Colors.ENDC}")
+                print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
+                
+                for i, (node_name, diagnostics) in enumerate(other_nodes):
+                    level = diagnostics.get('Level', 'OK')
+                    if level == 'OK':
+                        level_color = Colors.GREEN
+                        level_icon = "🟢"
+                    elif level == 'WARNING':
+                        level_color = Colors.WARNING
+                        level_icon = "🟡"
+                    elif level == 'ERROR':
+                        level_color = Colors.FAIL
+                        level_icon = "🔴"
+                    else:
+                        level_color = Colors.CYAN
+                        level_icon = "🔵"
+                    
+                    display_name = node_name.replace(':', ' -> ')
+                    if len(display_name) > 40:
+                        display_name = display_name[:37] + "..."
+                    
+                    summary = diagnostics.get('Summary', 'No status')
+                    if len(summary) > 40:
+                        summary = summary[:37] + "..."
+                    
+                    print(f"  {level_icon} {Colors.BOLD}{display_name}{Colors.ENDC}: {summary}")
+                
         else:
-            print(f"\n{Colors.WARNING}⏳ Waiting for diagnostic reports from nodes...{Colors.ENDC}")
-            print(f"   💡 Nodes may still be initializing or diagnostics may be delayed")
+            print(f"{Colors.WARNING}⏳ WAITING FOR DIAGNOSTIC REPORTS...{Colors.ENDC}")
+            print(f"   💡 Nodes may still be initializing")
         
-        # Print actionable information
-        print(f"\n{Colors.CYAN}Quick Actions:{Colors.ENDC}")
-        print(f"   • View live diagnostics: ros2 topic echo /diagnostics")
-        print(f"   • Monitor in GUI: ros2 run rqt_robot_monitor rqt_robot_monitor")
-        print(f"   • Check node status: ros2 node list")
-        print(f"   • Emergency stop: {Colors.WARNING}Ctrl+C{Colors.ENDC}")
-        
-        print("─" * 70 + "\n")
+        # Footer with quick actions
+        print(f"\n{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.BLUE}🚀 QUICK ACTIONS{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 20}{Colors.ENDC}")
+        print(f"• Live diagnostics: {Colors.YELLOW}ros2 topic echo /diagnostics{Colors.ENDC}")
+        print(f"• Check nodes: {Colors.YELLOW}ros2 node list{Colors.ENDC}")
+        print(f"• Emergency stop: {Colors.RED}Ctrl+C{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
         
         # Force flush output
         sys.stdout.flush()

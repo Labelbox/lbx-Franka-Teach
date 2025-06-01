@@ -11,7 +11,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default parameters
-ROBOT_IP="192.168.1.59"
+ROBOT_IP="192.168.1.60"
 USE_FAKE_HARDWARE="false"
 ENABLE_RVIZ="true"
 ENABLE_CAMERAS="false"

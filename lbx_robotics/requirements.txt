@@ -28,7 +28,7 @@ pyyaml
 # launch_ros # part of ROS installation
 
 # Communication & Networking
-protobuf
+# protobuf is managed by conda (environment.yaml)
 websocket-client
 websockets
 requests
@@ -44,6 +44,8 @@ blosc
 # Development & Code Quality
 black
 flake8
+
+# empy is managed by conda (environment.yaml)
 
 # Notes:
 # - All versions are unpinned to get latest stable releases

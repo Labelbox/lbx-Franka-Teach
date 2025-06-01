@@ -2,6 +2,29 @@
 
 A comprehensive teleoperation and data collection system for Franka robots, featuring VR control via Meta Quest, MCAP data recording, and simulation support.
 
+## Quick Start with Unified Launcher
+
+The easiest way to run the system is using the unified launch script:
+
+```bash
+# First time setup - build the workspace
+cd lbx_robotics
+./unified_launch.sh --build
+
+# Run with existing build
+./unified_launch.sh
+
+# Run with specific options
+./unified_launch.sh --cameras --robot-ip 192.168.1.100
+./unified_launch.sh --fake-hardware --no-rviz
+./unified_launch.sh --network-vr 192.168.1.50
+
+# See all options
+./unified_launch.sh --help
+```
+
+See [lbx_robotics/docs/unified_launch_guide.md](lbx_robotics/docs/unified_launch_guide.md) for detailed documentation.
+
 ## Features
 
 - **VR Teleoperation**: Full 6DOF control using Meta Quest/Oculus controllers
@@ -31,6 +54,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 ## System Requirements
 
 ### Hardware
+
 - Franka Emika Robot (FR3 or Panda)
 - NUC computer with real-time kernel
 - Lambda workstation or similar
@@ -38,6 +62,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 - Intel RealSense or ZED cameras (optional)
 
 ### Software
+
 - Ubuntu 22.04 (NUC) / Ubuntu 20.04+ (Lambda)
 - CUDA-capable GPU (for Lambda machine)
 - Python 3.10+
@@ -48,6 +73,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 ### NUC Setup
 
 1. **Install Ubuntu 22.04 with real-time kernel**
+
    ```bash
    # Follow instructions at:
    # https://frankaemika.github.io/docs/installation_linux.html#setting-up-the-real-time-kernel
@@ -60,14 +86,15 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 ### Lambda Machine Setup
 
 1. **Clone and setup deoxys_control**
+
    ```bash
    git clone git@github.com:NYU-robot-learning/deoxys_control.git
    cd deoxys_control/deoxys
-   
+
    # Create conda environment
    mamba create -n "franka_teach" python=3.10
    conda activate franka_teach
-   
+
    # Install deoxys (select version 0.13.3 for libfranka when prompted)
    ./InstallPackage
    make -j build_deoxys=1
@@ -75,6 +102,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
    ```
 
 2. **Clone and setup Franka-Teach**
+
    ```bash
    git clone <your-franka-teach-repo>
    cd Franka-Teach
@@ -82,6 +110,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
    ```
 
 3. **Install ReSkin sensor library (optional)**
+
    ```bash
    git clone git@github.com:NYU-robot-learning/reskin_sensor.git
    cd reskin_sensor
@@ -99,6 +128,7 @@ A comprehensive teleoperation and data collection system for Franka robots, feat
 1. **Install FoxyProxy extension** in Chrome/Firefox
 
 2. **Configure SSH host** in `~/.ssh/config`:
+
    ```
    Host nuc
        HostName 10.19.248.70
@@ -127,6 +157,7 @@ ssh nuc
 ### 2. Enable Robot
 
 In Franka Desk interface:
+
 1. Click "Unlock joints" (open brakes)
 2. Enable FCI mode
 3. If gripper issues: Settings → End Effector → Power cycle → Re-initialize
@@ -177,6 +208,7 @@ python oculus_vr_server.py --no-recording    # Disable MCAP recording
 ### Control Scheme
 
 #### Right Controller (default)
+
 - **Hold Grip**: Enable robot movement
 - **Release Grip**: Pause movement (robot stays in place)
 - **Hold Trigger**: Close gripper
@@ -184,6 +216,7 @@ python oculus_vr_server.py --no-recording    # Disable MCAP recording
 - **Joystick Press**: Reset controller orientation
 
 #### Recording Controls (when enabled)
+
 - **A Button**: Start new recording / Reset current recording
 - **B Button**: Mark recording as successful and save
 
@@ -192,6 +225,7 @@ See [oculus_control_readme.md](oculus_control_readme.md) for detailed VR control
 ## Data Recording
 
 The system supports MCAP data recording in Labelbox Robotics format:
+
 - Press **A button** to start/reset recording
 - Press **B button** to mark recording as successful and save
 - Recordings are saved to `~/recordings/success/` or `~/recordings/failure/`
@@ -200,6 +234,7 @@ The system supports MCAP data recording in Labelbox Robotics format:
 ### Visualizing Robot in Foxglove Studio
 
 The MCAP recordings include the robot URDF model and joint states for visualization:
+
 - See [FOXGLOVE_ROBOT_VISUALIZATION.md](FOXGLOVE_ROBOT_VISUALIZATION.md) for setup instructions
 - Test with `python3 test_foxglove_robot.py` to create a sample file
 
@@ -219,16 +254,19 @@ Edit `
 ## Troubleshooting
 
 ### Low Recording Frequency
+
 - Ensure performance mode is enabled (default with `run_server.sh`)
 - Check CPU usage and reduce other processes
 - Verify in console output: should show ~39-40Hz
 
 ### Robot Communication Slow
+
 - The ~149ms latency is hardware limited
 - System automatically uses predictive control
 - Check network/USB connection quality
 
 ### VR Controller Not Detected
+
 - Ensure Oculus is connected via USB or network
 - Check with `adb devices` for USB connection
 - For network: use `--ip <quest-ip-address>`
@@ -246,6 +284,7 @@ VR Thread (50Hz) → Control Thread (40Hz) → Recording Thread (40Hz)
 ```
 
 **Key Benefits:**
+
 - 6x higher recording rate than traditional synchronous approaches
 - Non-blocking operation ensures smooth teleoperation
 - Predictive control maintains responsiveness
@@ -258,12 +297,14 @@ For detailed architecture documentation, see [ASYNC_ARCHITECTURE_README.md](ASYN
 The system includes several performance optimizations:
 
 #### Performance Mode (Default)
+
 - Control frequency: 40Hz (2x base rate)
 - Position gain: 10.0 (100% higher)
 - Rotation gain: 3.0 (50% higher)
 - Optimized for tight tracking
 
 #### Async Features
+
 - **Decoupled threads** for VR, control, recording, and robot I/O
 - **Predictive control** when robot feedback is delayed
 - **Non-blocking queues** for data flow

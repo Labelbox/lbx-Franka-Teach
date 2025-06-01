@@ -2,6 +2,23 @@
 
 This document describes the overall `lbx_robotics` ROS2 workspace, how to build it, and how to launch its main functionalities.
 
+## Quick Start
+
+The recommended way to build and run the system is using the **unified launch script**:
+
+```bash
+# First time setup - build the workspace
+./unified_launch.sh --build
+
+# Run with existing build
+./unified_launch.sh
+
+# See all available options
+./unified_launch.sh --help
+```
+
+See `unified_launch_guide.md` for comprehensive documentation on the unified launcher.
+
 ## Workspace Structure
 
 Refer to `directory_structure.md` for the detailed layout.
@@ -31,6 +48,8 @@ For robust dependency management and to ensure compatibility (especially with pa
     ```bash
     # Ensure you are in lbx-Franka-Teach/lbx_robotics/
     colcon build --symlink-install
+    # Or use the unified launcher:
+    ./unified_launch.sh --build
     ```
 
 **Alternative: Manual Pip Installation (Not Recommended for all packages)**
@@ -44,6 +63,21 @@ If not using Conda (be mindful of potential `pyrealsense2` and Python version is
 5.  Build the workspace: `colcon build --symlink-install`
 
 ## Launching
+
+### Using the Unified Launch Script (Recommended)
+
+The `unified_launch.sh` script handles all setup, building, and launching:
+
+```bash
+# Basic usage
+./unified_launch.sh
+
+# With specific options
+./unified_launch.sh --fake-hardware --cameras
+./unified_launch.sh --robot-ip 192.168.1.100 --no-rviz
+```
+
+### Manual Launch (Advanced)
 
 1.  **Activate Conda Environment (if used)**:
     ```bash
@@ -71,7 +105,7 @@ If not using Conda (be mindful of potential `pyrealsense2` and Python version is
 
 ### Core Teleoperation (Example - to be detailed further)
 
-Once the system is running via `./run.sh`, the main functionality will be available.
-Individual launch files (like `system_bringup.launch.py`) are primarily called by `run.sh`.
+Once the system is running via `./unified_launch.sh` or `./run.sh`, the main functionality will be available.
+Individual launch files (like `system_bringup.launch.py`) are primarily called by these scripts.
 
 (Details to be added as packages and nodes are fully implemented)

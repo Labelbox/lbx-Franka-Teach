@@ -45,6 +45,7 @@ USE_FAKE_HARDWARE_ARG=""
 ENABLE_RVIZ_ARG=""
 LOG_LEVEL_ARG="$DEFAULT_LOG_LEVEL"
 SKIP_BUILD_ARG="false"
+CLEAN_BUILD_ARG="false"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --no-rviz) ENABLE_RVIZ_ARG="false"; shift ;;   
         --log-level) LOG_LEVEL_ARG="$2"; shift 2 ;;    
         --skip-build) SKIP_BUILD_ARG="true"; shift ;; 
+        --clean-build) CLEAN_BUILD_ARG="true"; shift ;;
         --shutdown) echo -e "${BLUE}Graceful shutdown requested...${NC}"; pkill -f system_bringup.launch.py; exit 0 ;; # Simplified shutdown
         --help) show_help; exit 0 ;;                 
         *) echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
@@ -93,9 +95,11 @@ perform_build() {
     echo -e "${YELLOW}Performing build...${NC}"
     cd "$WORKSPACE_DIR" # Navigate to the workspace root (lbx_robotics)
 
-    # Always perform a clean build
-    echo "Cleaning old build files (build/, install/, log/)..."
-    rm -rf build/ install/ log/ 2>/dev/null || true
+    # Only clean if --clean-build was specified
+    if [ "$CLEAN_BUILD_ARG" = "true" ]; then
+        echo "Cleaning old build files (build/, install/, log/)..."
+        rm -rf build/ install/ log/ 2>/dev/null || true
+    fi
 
     echo "Sourcing ROS2 environment for build..."
     source "/opt/ros/$ROS_DISTRO/setup.bash" # Use the detected ROS_DISTRO

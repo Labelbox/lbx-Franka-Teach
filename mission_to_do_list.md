@@ -26,6 +26,19 @@
 - ✅ Integrated and configured two cameras for multi-angle capture
 - ✅ Added camera synchronization with robot data
 
+[x] Unified Launch System
+
+- ✅ Created unified_launch.sh combining all launch scripts
+- ✅ Made build optional with --build and --clean-build flags
+- ✅ Integrated comprehensive process killing from robust Franka scripts
+- ✅ Combined arguments from teleoperation, build, and control scripts
+- ✅ Added graceful shutdown and emergency stop capabilities
+- ✅ Created documentation in unified_launch_guide.md
+- ✅ Moved script to lbx_robotics directory for better organization
+- ✅ Fixed clean build to be opt-in only (preserves incremental builds)
+- ✅ Moved documentation to lbx_robotics/docs/unified_launch_guide.md
+- ✅ Updated all paths and references to new locations
+
 ## In Progress 🚧
 
 [ ] Migrate to MoveIt/ROS2 for Low-Latency Control

@@ -13,6 +13,14 @@ h5py                 # For HDF5 file format (data storage)
 pandas               # Data analysis and manipulation
 scikit-learn         # Machine learning tools (optional)
 
+# --- ROS 2 Build Tools ---
+# Colcon and related packages - ensure latest versions to fix --editable issue
+colcon-common-extensions>=0.3.0  # Meta-package that includes most colcon packages
+colcon-core>=0.15.0              # Latest colcon-core fixes the --editable option issue
+colcon-ros>=0.4.0                # ROS-specific colcon extensions
+setuptools>=58.2.0               # Required for proper Python package builds
+wheel>=0.37.0                    # Required for building wheels
+
 # --- ROS 2 Related Python Packages ---
 # Note: Many core ROS libraries (rclpy, etc.) are part of the ROS installation itself.
 # These are Python packages often used alongside or for ROS development.

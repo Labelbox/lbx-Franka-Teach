@@ -47,9 +47,16 @@ blosc                # High-performance compressor (often used with mcap/h5py)
 foxglove-websocket   # For Foxglove Studio integration
 
 # --- VR / Robot Control Specific (Python Components) ---
+# VR Requirements - Install these for Meta Quest/Oculus VR functionality
+pure-python-adb>=0.3.0      # For Meta Quest (Oculus) VR controller communication - REQUIRED for VR
+# 
+# Installation Options:
+# Option 1 (Basic): pip install pure-python-adb
+# Option 2 (Versioned): pure-python-adb>=0.3.0
+# Option 3 (All deps): pip install -r requirements.txt
+
 # oculus_reader      # If this is a pip-installable Python package for your VR setup.
                      # If it's custom code within a ROS package, it will be built by colcon.
-pure-python-adb>=0.3.0.dev0 # For Meta Quest (Oculus) VR controller communication
 # deoxys             # If this project has Python components that need to be pip installed.
 
 # --- Machine Learning & AI (Optional, if used by your algorithms) ---

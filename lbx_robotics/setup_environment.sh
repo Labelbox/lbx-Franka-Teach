@@ -63,16 +63,17 @@ fi
 echo_step "Setting up Conda environment..."
 if conda env list | grep -q "^$ENV_NAME\s"; then
     echo_info "Conda environment '$ENV_NAME' already exists."
-    # Optionally, add logic here to ask if the user wants to update or remove & recreate.
-    # For now, we'll proceed to ensure pip packages are installed/updated.
+    echo_info "Removing existing environment to ensure clean setup..."
+    conda env remove -n "$ENV_NAME" -y
+    echo_success "Existing environment removed."
+fi
+
+echo_info "Creating Conda environment '$ENV_NAME' from $SCRIPT_DIR/$ENV_FILE..."
+if conda env create -f "$SCRIPT_DIR/$ENV_FILE" -n "$ENV_NAME"; then
+    echo_success "Conda environment '$ENV_NAME' created successfully."
 else
-    echo_info "Conda environment '$ENV_NAME' not found. Creating it from $SCRIPT_DIR/$ENV_FILE..."
-    if conda env create -f "$SCRIPT_DIR/$ENV_FILE" -n "$ENV_NAME"; then
-        echo_success "Conda environment '$ENV_NAME' created successfully."
-    else
-        echo_error "Failed to create Conda environment '$ENV_NAME' from $SCRIPT_DIR/$ENV_FILE."
-        exit 1
-    fi
+    echo_error "Failed to create Conda environment '$ENV_NAME' from $SCRIPT_DIR/$ENV_FILE."
+    exit 1
 fi
 
 # --- Install Pip Dependencies --- 

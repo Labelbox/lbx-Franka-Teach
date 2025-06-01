@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 import os
 from glob import glob
 
@@ -6,7 +6,6 @@ package_name = 'lbx_launch'
 
 setup(
     name=package_name,
-    version='0.0.1',
     packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -17,15 +16,5 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.xml'))), # If you have XML launch files
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))), # If you have config files
     ],
-    install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='manu',
-    maintainer_email='manu@todo.todo',
-    description='Launch files for the LBX Robotics system',
-    license='Apache-2.0',
-    tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-        ],
-    },
+    zip_safe=True
 ) 

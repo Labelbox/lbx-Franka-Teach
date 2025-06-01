@@ -5,10 +5,13 @@ from glob import glob
 package_name = 'lbx_vision_camera'
 # The camera_utilities submodule will remain as is internally for now
 
+# All metadata is now in pyproject.toml
+# This setup.py can be very minimal or even removed if only pyproject.toml is used
+# However, for colcon/ROS 2 ament_python, a minimal setup.py is often still expected.
 setup(
-    name=package_name,
-    version='0.0.1',
+    name=package_name, # Still good to have name here for some tools
     packages=find_packages(exclude=['test']),
+    # Data files still need to be specified here for ament_python
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -16,29 +19,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
     ],
-    install_requires=[
-        'setuptools',
-        'rclpy',
-        'sensor_msgs',
-        'geometry_msgs',
-        'cv_bridge',
-        'tf2_ros_py',
-        'opencv-python',
-        'PyYAML',
-        'numpy',
-        'pyrealsense2', # Keep realsense for now, can be made optional later
-        # Add ZED SDK python dep here if it becomes a direct pip installable item
-        'diagnostic_updater',
-    ],
-    zip_safe=True,
-    maintainer='User',
-    maintainer_email='user@example.com',
-    description='ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED).',
-    license='TODO: License declaration',
-    tests_require=['pytest'],
-    entry_points={
-        'console_scripts': [
-            'camera_node = lbx_vision_camera.camera_node:main', # Renamed executable and node file
-        ],
-    },
+    zip_safe=True # Standard option
+    # No install_requires, entry_points, license, description, etc. - moved to pyproject.toml
+    # tests_require can be moved to [project.optional-dependencies] in pyproject.toml
 ) 

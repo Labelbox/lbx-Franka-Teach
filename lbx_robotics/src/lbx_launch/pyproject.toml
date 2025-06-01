@@ -1,8 +1,24 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
-backend-path = ["."]
 
 [project]
 name = "lbx_launch"
-version = "0.0.1" 
+version = "0.0.1"
+description = "Launch files for the LBX Robotics system"
+license = {text = "Apache-2.0"} # Or use {file = "LICENSE.txt"}
+authors = [
+    {name = "manu", email = "manu@todo.todo"}
+]
+keywords = ["ros2", "launch"]
+
+# For a pure launch file package, dependencies might be minimal or not needed here
+# if they are only for tools that consume the launch files.
+# If the launch files themselves have Python scripts that import things, list them.
+dependencies = [
+    "setuptools" # setup.py itself requires this
+]
+
+# Entry points (console scripts) if any - lbx_launch currently has none listed in setup.py
+# [project.entry-points."console_scripts"]
+# my_script = "lbx_launch.module:main_func" 

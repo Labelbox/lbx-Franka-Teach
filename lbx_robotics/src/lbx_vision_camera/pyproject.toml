@@ -1,20 +1,35 @@
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
-backend-path = ["."]
 
 [project]
 name = "lbx_vision_camera"
 version = "0.0.1"
-# Add other project metadata here if desired, like authors, description, etc.
-# readme = "README.md"
-# license = {text = "TODO: License declaration"}
-# classifiers = [
-#     "Programming Language :: Python :: 3",
-#     # Add other classifiers
-# ]
-# dependencies = [
-#    "rclpy",
-#    "sensor_msgs", 
-#    # ... list runtime dependencies here, matching install_requires in setup.py
-# ] 
+description = "ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED)."
+readme = "README.md" # Assuming you might add one later
+license = {text = "TODO: License declaration"} # Or use {file = "LICENSE.txt"}
+authors = [
+    {name = "User", email = "user@example.com"} # Corresponds to maintainer
+]
+keywords = ["ros2", "camera", "vision"]
+
+# Corresponds to install_requires in setup.py
+dependencies = [
+    "rclpy",
+    "sensor_msgs",
+    "geometry_msgs",
+    "cv_bridge",
+    "tf2_ros_py",
+    "opencv-python",
+    "PyYAML",
+    "numpy",
+    "pyrealsense2",
+    "diagnostic_updater"
+]
+
+[project.entry-points."console_scripts"]
+camera_node = "lbx_vision_camera.camera_node:main"
+
+# If you have tests and want to declare them as an extra
+# [project.optional-dependencies]
+# test = ["pytest"] 

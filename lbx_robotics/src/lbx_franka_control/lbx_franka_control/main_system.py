@@ -38,6 +38,9 @@ from geometry_msgs.msg import PoseStamped
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from lbx_interfaces.msg import SystemStatus, VRControllerState, RecordingStatus
 
+# ROS 2 Diagnostics
+from diagnostic_updater import Updater, DiagnosticTask, DiagnosticStatus
+
 # ANSI color codes for pretty printing
 class Colors:
     HEADER = '\033[95m'
@@ -49,6 +52,42 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+
+
+class SystemDiagnosticTask(DiagnosticTask):
+    """Simple, comprehensive system diagnostic task"""
+    
+    def __init__(self, node):
+        super().__init__("LBX Robotics System Status")
+        self.node = node
+    
+    def run(self, stat):
+        """Run diagnostic check and report status"""
+        # Overall system health
+        if self.node.vr_healthy and self.node.moveit_healthy and self.node.robot_healthy:
+            stat.summary(DiagnosticStatus.OK, "All systems operational")
+            mode = "Full Operation"
+        elif self.node.moveit_healthy and self.node.robot_healthy:
+            stat.summary(DiagnosticStatus.WARN, "VR graceful fallback active")
+            mode = "Robot Control (No VR)"
+        elif self.node.robot_healthy:
+            stat.summary(DiagnosticStatus.WARN, "Monitoring mode - MoveIt services pending")
+            mode = "Robot Monitoring"
+        else:
+            stat.summary(DiagnosticStatus.ERROR, "Robot connection required")
+            mode = "Basic Monitoring"
+        
+        # Add detailed status
+        stat.add("Operation Mode", mode)
+        stat.add("VR Status", "Connected" if self.node.vr_healthy else "Graceful Fallback")
+        stat.add("MoveIt Status", "Ready" if self.node.moveit_healthy else "Pending")
+        stat.add("Robot Status", "Connected" if self.node.robot_healthy else "Disconnected")
+        stat.add("Fake Hardware", str(self.node._get_bool_param('use_fake_hardware', False)))
+        
+        # System ready status
+        stat.add("System Ready", str(self.node.system_ready))
+        
+        return stat
 
 
 class LabelboxRoboticsSystem(Node):
@@ -71,54 +110,11 @@ class LabelboxRoboticsSystem(Node):
         self.moveit_healthy = False
         self.cameras_healthy = True  # Default true if not enabled
         self.robot_healthy = False
-        self.last_health_print = time.time()
         
-        # Create callback groups
-        self.diagnostics_group = ReentrantCallbackGroup()
-        self.status_group = ReentrantCallbackGroup()
-        
-        # Subscribe to diagnostics
-        self.create_subscription(
-            DiagnosticArray,
-            '/diagnostics',
-            self.diagnostics_callback,
-            10,
-            callback_group=self.diagnostics_group
-        )
-        
-        # Subscribe to system status
-        self.create_subscription(
-            SystemStatus,
-            '/system_status',
-            self.system_status_callback,
-            10,
-            callback_group=self.status_group
-        )
-        
-        # Subscribe to VR state
-        self.create_subscription(
-            VRControllerState,
-            '/vr_control_state',
-            self.vr_state_callback,
-            10,
-            callback_group=self.status_group
-        )
-        
-        # Subscribe to recording verification results
-        self.create_subscription(
-            String,
-            '/recording_verification_result',
-            self.verification_result_callback,
-            10,
-            callback_group=self.status_group
-        )
-        
-        # Health monitoring timer
-        self.health_timer = self.create_timer(
-            5.0,  # Every 5 seconds
-            self.print_health_status,
-            callback_group=self.diagnostics_group
-        )
+        # Simple diagnostic system - ROS2 best practice
+        self.diagnostic_updater = Updater(self)
+        self.diagnostic_updater.setHardwareID("lbx_robotics_system")
+        self.diagnostic_updater.add(SystemDiagnosticTask(self))
         
         # Signal handling
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -447,10 +443,14 @@ class LabelboxRoboticsSystem(Node):
             print(f"      ❌ Robot connection check failed: {e}")
             if use_fake_hardware:
                 print(f"      💡 Fake hardware mode: ensure ros2_control is running with fake hardware")
+                print(f"      🔄 Will continue in monitoring mode - joint states may become available later")
+                # In fake hardware mode, be more tolerant and allow monitoring mode
+                self.robot_healthy = False  # Mark as not healthy but don't fail completely
+                return False  # But still return False so system knows to use monitoring mode
             else:
                 print(f"      💡 Real robot mode: check robot power, network, and FCI enable")
-            self.robot_healthy = False
-            return False
+                self.robot_healthy = False
+                return False
     
     async def wait_for_message(self, topic, msg_type, timeout=2.0):
         """Wait for a single message on a topic"""
@@ -528,153 +528,6 @@ class LabelboxRoboticsSystem(Node):
         
         print(f"\n{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
     
-    def diagnostics_callback(self, msg: DiagnosticArray):
-        """Process diagnostic messages"""
-        for status in msg.status:
-            self.latest_diagnostics[status.name] = status
-    
-    def system_status_callback(self, msg: SystemStatus):
-        """Process system status messages"""
-        self.latest_system_status = msg
-    
-    def vr_state_callback(self, msg: VRControllerState):
-        """Process VR controller state"""
-        self.latest_vr_state = msg
-    
-    def verification_result_callback(self, msg: String):
-        """Process recording verification results"""
-        try:
-            results = json.loads(msg.data)
-            
-            # Display verification results
-            print(f"\n\n{Colors.BLUE}{Colors.BOLD}📊 Recording Verification Results{Colors.ENDC}")
-            print("─" * 50)
-            
-            # File info
-            print(f"📁 File: {os.path.basename(results['file_path'])}")
-            print(f"📏 Size: {results['file_size_mb']:.1f} MB")
-            
-            # Checks
-            checks = results.get('checks', {})
-            print(f"\n{Colors.CYAN}Data Completeness:{Colors.ENDC}")
-            print(f"   ✓ VR Data: {'✅' if checks.get('has_vr_data', False) else '❌'}")
-            print(f"   ✓ Robot Data: {'✅' if checks.get('has_robot_data', False) else '❌'}")
-            print(f"   ✓ VR Calibration: {'✅' if checks.get('has_vr_calibration', False) else '❌'}")
-            print(f"   ✓ Robot Torques: {'✅' if checks.get('has_torques', False) else '❌'}")
-            
-            # Camera data checks
-            print(f"\n{Colors.CYAN}Camera Data:{Colors.ENDC}")
-            print(f"   ✓ RGB Images: {'✅' if checks.get('has_rgb_images', False) else '❌'}")
-            print(f"   ✓ Depth Images: {'✅' if checks.get('has_depth_images', False) else '❌'}")
-            print(f"   ✓ Point Clouds: {'✅' if checks.get('has_point_clouds', False) else '❌'}")
-            print(f"   ✓ Camera Transforms: {'✅' if checks.get('has_camera_transforms', False) else '❌'}")
-            
-            # Statistics
-            stats = results.get('statistics', {})
-            if 'duration_seconds' in stats:
-                print(f"\n{Colors.CYAN}Recording Statistics:{Colors.ENDC}")
-                print(f"   ⏱️  Duration: {stats['duration_seconds']:.1f} seconds")
-                print(f"   📦 Total Messages: {checks.get('total_messages', 0):,}")
-                print(f"   📑 Total Topics: {checks.get('total_topics', 0)}")
-            
-            # Summary
-            all_checks_passed = all([
-                checks.get('has_vr_data', False),
-                checks.get('has_robot_data', False),
-                checks.get('has_vr_calibration', False),
-                checks.get('has_torques', False),
-            ])
-            
-            # Include camera checks if cameras were enabled
-            if self.launch_params.get('enable_cameras', False):
-                camera_checks_passed = all([
-                    checks.get('has_rgb_images', False),
-                    checks.get('has_depth_images', False),
-                    checks.get('has_camera_transforms', False)
-                ])
-                all_checks_passed = all_checks_passed and camera_checks_passed
-            
-            if all_checks_passed:
-                print(f"\n{Colors.GREEN}{Colors.BOLD}✅ All essential data recorded successfully!{Colors.ENDC}")
-            else:
-                print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️  Some data may be missing{Colors.ENDC}")
-            
-            print("─" * 50)
-            print("")
-            
-        except Exception as e:
-            self.get_logger().error(f"Failed to parse verification results: {e}")
-    
-    def print_health_status(self):
-        """Print system health status every 5 seconds"""
-        if not self.system_ready:
-            # Even if not fully ready, show basic status during initialization
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            print(f"\r[{timestamp}] 🔄 System initializing...", end='', flush=True)
-            return
-        
-        # Build comprehensive status line
-        status_parts = []
-        
-        # VR Status with enhanced feedback
-        if self.latest_vr_state and hasattr(self.latest_vr_state, 'grip_pressed') and self.latest_vr_state.grip_pressed and self.vr_healthy:
-            status_parts.append(f"🎮 VR: {Colors.GREEN}Active{Colors.ENDC}")
-        elif self.vr_healthy:
-            status_parts.append(f"🎮 VR: {Colors.CYAN}Ready{Colors.ENDC}")
-        else:
-            status_parts.append(f"🎮 VR: {Colors.WARNING}Fallback{Colors.ENDC}")
-        
-        # Robot Status
-        if self.robot_healthy:
-            status_parts.append(f"🤖 Robot: {Colors.GREEN}OK{Colors.ENDC}")
-        else:
-            # Check if we're in fake hardware mode
-            fake_hardware = self._get_bool_param('use_fake_hardware', False)
-            if fake_hardware:
-                status_parts.append(f"🤖 Robot: {Colors.CYAN}Fake{Colors.ENDC}")
-            else:
-                status_parts.append(f"🤖 Robot: {Colors.FAIL}Error{Colors.ENDC}")
-        
-        # MoveIt Status
-        if self.moveit_healthy:
-            status_parts.append(f"🔧 MoveIt: {Colors.GREEN}Ready{Colors.ENDC}")
-        else:
-            status_parts.append(f"🔧 MoveIt: {Colors.WARNING}Pending{Colors.ENDC}")
-        
-        # Recording Status
-        if self.latest_system_status and hasattr(self.latest_system_status, 'recording_active') and self.latest_system_status.recording_active:
-            status_parts.append(f"📹 Recording: {Colors.GREEN}Active{Colors.ENDC}")
-        else:
-            status_parts.append(f"📹 Recording: {Colors.WARNING}Off{Colors.ENDC}")
-        
-        # Performance Status
-        if hasattr(self, 'control_rate'):
-            if self.control_rate >= 44.0:  # Within 1Hz of target
-                status_parts.append(f"⚡ Rate: {Colors.GREEN}{self.control_rate:.1f}Hz{Colors.ENDC}")
-            else:
-                status_parts.append(f"⚡ Rate: {Colors.WARNING}{self.control_rate:.1f}Hz{Colors.ENDC}")
-        else:
-            status_parts.append(f"⚡ Rate: {Colors.CYAN}Monitoring{Colors.ENDC}")
-        
-        # Build final status line
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        status_line = f"[{timestamp}] " + " | ".join(status_parts)
-        
-        # Add system mode indicator
-        mode_indicator = ""
-        if not self.vr_healthy and not self.moveit_healthy:
-            mode_indicator = f" | {Colors.CYAN}🔍 Monitoring Mode{Colors.ENDC}"
-        elif not self.vr_healthy:
-            mode_indicator = f" | {Colors.CYAN}🎮 VR Graceful Fallback{Colors.ENDC}"
-        elif not self.moveit_healthy:
-            mode_indicator = f" | {Colors.YELLOW}🔧 MoveIt Initializing{Colors.ENDC}"
-        
-        status_line += mode_indicator
-        
-        # Show the status (clear previous line and print new one)
-        print(f"\r{' ' * 120}", end='')  # Clear previous line
-        print(f"\r{status_line}", end='', flush=True)
-    
     def cleanup(self):
         """Clean up resources"""
         print(f"\n\n{Colors.CYAN}Shutting down systems...{Colors.ENDC}")
@@ -709,22 +562,6 @@ class LabelboxRoboticsSystem(Node):
             # Full VR teleoperation mode
             self.enter_calibration_mode()
             
-            # Wait for calibration to complete
-            print("Waiting for VR calibration...")
-            calibration_timeout = 60.0  # 1 minute timeout for calibration
-            calibration_start = time.time()
-            
-            while self.running and (time.time() - calibration_start) < calibration_timeout:
-                if self.latest_system_status and hasattr(self.latest_system_status, 'system_state'):
-                    if self.latest_system_status.system_state == 'teleop':
-                        if hasattr(self.latest_system_status, 'calibration_mode') and self.latest_system_status.calibration_mode == "":
-                            print(f"\n{Colors.GREEN}✅ VR calibration complete!{Colors.ENDC}")
-                            break
-                await asyncio.sleep(0.1)
-            
-            if time.time() - calibration_start >= calibration_timeout:
-                print(f"\n{Colors.WARNING}⚠️  VR calibration timeout - continuing anyway{Colors.ENDC}")
-            
             # Start full teleoperation
             self.start_teleoperation()
             
@@ -748,43 +585,66 @@ class LabelboxRoboticsSystem(Node):
             
         else:
             # Basic monitoring mode
-            print(f"\n{Colors.YELLOW}{Colors.BOLD}⚠️  Basic Monitoring Mode{Colors.ENDC}")
+            print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️  Basic Monitoring Mode{Colors.ENDC}")
             print("─" * 50)
             print("   • Limited functionality - monitoring system health")
             print("   • Check robot connection and ros2_control status")
             
-        # Main monitoring loop - runs regardless of system state
-        print(f"\n{Colors.CYAN}📊 Starting system diagnostics (5-second intervals)...{Colors.ENDC}")
+        # Simple diagnostic reporting
+        print(f"\n{Colors.CYAN}📊 System diagnostics active{Colors.ENDC}")
+        print(f"   View status: ros2 topic echo /diagnostics")
+        print(f"   Monitor system: ros2 run rqt_robot_monitor rqt_robot_monitor")
         print(f"{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
         
-        # Main loop - keep running and show diagnostics
-        loop_count = 0
-        while self.running:
-            # Periodically retry system health checks
-            if loop_count % 12 == 0:  # Every 60 seconds (12 * 5s intervals)
-                # Re-check VR if not healthy
-                if not self.vr_healthy:
-                    vr_status = await self.check_vr_controller()
-                    if vr_status and not self.vr_healthy:
-                        print(f"\n🎮 VR reconnected! System upgrading...")
-                        self.vr_healthy = True
+        # Update diagnostics and keep system running
+        try:
+            while self.running:
+                # Update diagnostics
+                self.diagnostic_updater.update()
                 
-                # Re-check MoveIt if not healthy
-                if not self.moveit_healthy:
-                    moveit_status = await self.check_moveit_services()
-                    if all(moveit_status.values()) and not self.moveit_healthy:
-                        print(f"\n🔧 MoveIt services available! System upgrading...")
-                        self.moveit_healthy = True
+                # Simple health checks every 30 seconds
+                if hasattr(self, '_last_health_check'):
+                    if time.time() - self._last_health_check > 30.0:
+                        await self._periodic_health_check()
+                        self._last_health_check = time.time()
+                else:
+                    self._last_health_check = time.time()
                 
-                # Re-check robot if not healthy
-                if not self.robot_healthy:
-                    robot_status = await self.check_robot_connection()
-                    if robot_status and not self.robot_healthy:
-                        print(f"\n🤖 Robot connected! System upgrading...")
-                        self.robot_healthy = True
-            
-            await asyncio.sleep(0.5)  # More frequent checks for responsiveness
-            loop_count += 1
+                await asyncio.sleep(1.0)  # Update diagnostics every second
+        except Exception as e:
+            self.get_logger().error(f"Error in main loop: {e}")
+    
+    async def _periodic_health_check(self):
+        """Simple periodic health check for component reconnection"""
+        # Re-check VR if not healthy
+        if not self.vr_healthy:
+            try:
+                vr_status = await self.check_vr_controller()
+                if vr_status:
+                    self.get_logger().info("🎮 VR reconnected!")
+                    self.vr_healthy = True
+            except Exception:
+                pass
+        
+        # Re-check MoveIt if not healthy
+        if not self.moveit_healthy:
+            try:
+                moveit_status = await self.check_moveit_services()
+                if all(moveit_status.values()):
+                    self.get_logger().info("🔧 MoveIt services available!")
+                    self.moveit_healthy = True
+            except Exception:
+                pass
+        
+        # Re-check robot if not healthy
+        if not self.robot_healthy:
+            try:
+                robot_status = await self.check_robot_connection()
+                if robot_status:
+                    self.get_logger().info("🤖 Robot connected!")
+                    self.robot_healthy = True
+            except Exception:
+                pass
 
 
 async def async_main():

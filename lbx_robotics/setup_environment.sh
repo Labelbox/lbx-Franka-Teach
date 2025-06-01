@@ -176,31 +176,63 @@ python3 -m pip install --user --upgrade pip setuptools wheel
 echo_info "Installing colcon build tools..."
 python3 -m pip install --user --upgrade colcon-common-extensions colcon-core>=0.15.0 colcon-ros>=0.4.0
 
-# Check if ~/.local/bin is in PATH and add it if not
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    echo_warn "Adding ~/.local/bin to PATH for this session..."
-    export PATH="$HOME/.local/bin:$PATH"
-    
-    # Add to .bashrc if not already there
-    if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc; then
-        echo_info "Adding ~/.local/bin to PATH in ~/.bashrc..."
-        echo '' >> ~/.bashrc
-        echo '# Added by lbx_robotics setup script' >> ~/.bashrc
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        echo_success "PATH updated in ~/.bashrc. It will be available in new terminals."
+# Update PATH for current session and permanently
+echo_step "Updating PATH configuration..."
+
+# Always add ~/.local/bin to PATH for this session
+export PATH="$HOME/.local/bin:$PATH"
+echo_info "Added ~/.local/bin to PATH for current session"
+
+# Check if .bashrc exists, create if not
+if [ ! -f "$HOME/.bashrc" ]; then
+    echo_info "Creating ~/.bashrc file..."
+    touch "$HOME/.bashrc"
+fi
+
+# Add to .bashrc if not already there
+if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"; then
+    echo_info "Adding ~/.local/bin to PATH in ~/.bashrc..."
+    echo '' >> "$HOME/.bashrc"
+    echo '# Added by lbx_robotics setup script for pip installed executables' >> "$HOME/.bashrc"
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+    echo_success "PATH permanently updated in ~/.bashrc"
+else
+    echo_info "PATH already configured in ~/.bashrc"
+fi
+
+# Also update .profile for login shells (some Ubuntu setups use this)
+if [ -f "$HOME/.profile" ]; then
+    if ! grep -q 'PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile"; then
+        echo_info "Also updating ~/.profile for login shells..."
+        echo '' >> "$HOME/.profile"
+        echo '# Added by lbx_robotics setup script' >> "$HOME/.profile"
+        echo 'if [ -d "$HOME/.local/bin" ] ; then' >> "$HOME/.profile"
+        echo '    PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
+        echo 'fi' >> "$HOME/.profile"
     fi
+fi
+
+# Source .bashrc to ensure changes take effect
+if [ -f "$HOME/.bashrc" ]; then
+    source "$HOME/.bashrc"
+    echo_info "Sourced ~/.bashrc to apply changes"
 fi
 
 # Verify colcon is now available
 if command -v colcon &> /dev/null; then
-    echo_success "colcon is installed and available: $(which colcon)"
-    echo_info "colcon version: $(colcon version-check 2>&1 | grep 'colcon-core' | head -1)"
+    echo_success "✓ colcon is installed: $(which colcon)"
+    COLCON_VERSION=$(colcon version-check 2>&1 | grep 'colcon-core' | head -1 | awk '{print $2}')
+    echo_info "  Version: $COLCON_VERSION"
 else
-    echo_error "colcon installation failed or not in PATH!"
-    echo_info "Please manually check:"
-    echo_info "  ls -la ~/.local/bin/colcon*"
-    echo_info "  pip3 list | grep colcon"
-    exit 1
+    echo_error "✗ colcon not found in PATH"
+    echo_info "  Current PATH: $PATH"
+    if [ -f "$HOME/.local/bin/colcon" ]; then
+        echo_warn "  colcon exists at $HOME/.local/bin/colcon but is not in PATH"
+        echo_info "  Try running: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    else
+        echo_error "  colcon executable not found in $HOME/.local/bin/"
+    fi
+    VERIFICATION_FAILED=true
 fi
 
 # Now install remaining Python dependencies
@@ -261,9 +293,17 @@ fi
 # Check colcon
 if command -v colcon &> /dev/null; then
     echo_success "✓ colcon is installed: $(which colcon)"
+    COLCON_VERSION=$(colcon version-check 2>&1 | grep 'colcon-core' | head -1 | awk '{print $2}')
+    echo_info "  Version: $COLCON_VERSION"
 else
-    echo_error "✗ colcon not found"
-    echo_info "  Try: export PATH=\"$HOME/.local/bin:\$PATH\""
+    echo_error "✗ colcon not found in PATH"
+    echo_info "  Current PATH: $PATH"
+    if [ -f "$HOME/.local/bin/colcon" ]; then
+        echo_warn "  colcon exists at $HOME/.local/bin/colcon but is not in PATH"
+        echo_info "  Try running: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    else
+        echo_error "  colcon executable not found in $HOME/.local/bin/"
+    fi
     VERIFICATION_FAILED=true
 fi
 

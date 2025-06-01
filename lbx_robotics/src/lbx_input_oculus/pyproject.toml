@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lbx_input_oculus"
 version = "0.0.1"
 description = "ROS2 package to read and publish Oculus Quest controller data."
-license = "Proprietary - Labelbox Robotics Confidential"
+license = "MIT"
 authors = [
     {name = "User", email = "user@example.com"}
 ]

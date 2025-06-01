@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lbx_vision_camera"
 version = "0.0.1"
 description = "ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED)."
-license = "Proprietary"
+license = "MIT"
 authors = [
     {name = "User", email = "user@example.com"} # Corresponds to maintainer
 ]

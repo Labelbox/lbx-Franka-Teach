@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lbx_utils"
 version = "0.0.1"
 description = "Utility functions for LBX Robotics system"
-license = "Proprietary - Labelbox Robotics Confidential"
+license = "MIT"
 authors = [
     {name = "Labelbox Robotics", email = "robotics@labelbox.com"} # Or appropriate maintainer
 ]

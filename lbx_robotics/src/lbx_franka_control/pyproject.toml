@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "lbx_franka_control"
 version = "0.1.0"
 description = "VR-based Franka control system using MoveIt"
-license = "Proprietary - Labelbox Robotics Confidential"
+license = "MIT"
 authors = [
     {name = "labelbox", email = "robotics@labelbox.com"}
 ]

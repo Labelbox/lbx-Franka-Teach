@@ -41,9 +41,9 @@ def launch_setup(context, *args, **kwargs):
             use_fake_hardware,
         ]
     )
-    
+
     robot_description = {'robot_description': robot_description_content}
-    
+
     # Include the standard Franka MoveIt launch file
     # but override the robot_description parameter
     moveit_launch = IncludeLaunchDescription(
@@ -62,13 +62,13 @@ def launch_setup(context, *args, **kwargs):
             'rviz_config': rviz_config,
         }.items()
     )
-    
+
     return [moveit_launch]
 
 def generate_launch_description():
     # Declare arguments
     declared_arguments = []
-    
+
     declared_arguments.append(
         DeclareLaunchArgument(
             'robot_ip',
@@ -120,7 +120,7 @@ def generate_launch_description():
             description='Path to the RViz configuration file.'
         )
     )
-    
+
     return LaunchDescription(
         declared_arguments + [OpaqueFunction(function=launch_setup)]
     ) 

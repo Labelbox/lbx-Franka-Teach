@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lbx_launch</name>
+  <version>0.0.1</version>
+  <description>Launch files for the LBX Robotics system</description>
+  <maintainer email="manu@todo.todo">manu</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>ros2launch</exec_depend>
+  <!-- TODO: Add other exec_depend for packages whose nodes/launch files you call from system_bringup -->
+  <!-- For example: -->
+  <!-- <exec_depend>lbx_franka_control</exec_depend> -->
+  <!-- <exec_depend>lbx_vision_camera</exec_depend> -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package> 

@@ -70,6 +70,21 @@ if ! dpkg -l | grep -q libpinocchio-dev || ! pkg-config --exists pinocchio 2>/de
     (
         cd "$TEMP_DIR_PINOCCHIO"
         sudo apt install -y liburdfdom-dev libconsole-bridge-dev libassimp-dev liboctomap-dev # Pinocchio deps
+        # Ensure a recent enough CMake is used for Pinocchio
+        if ! command -v cmake || ! cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
+            echo_info "System CMake is older than 3.22 or not found. Installing a recent CMake..."
+            sudo apt purge -y cmake # Remove old version first
+            sudo apt install -y cmake # Try to get a recent one from default repos
+            # If still not >= 3.22, could add logic to download/install specific version here
+            if ! command -v cmake || ! cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
+                echo_error "Failed to get CMake >= 3.22. Pinocchio build might fail."
+            else
+                 echo_success "CMake version $(cmake --version | head -n1) is sufficient."
+            fi
+        else
+            echo_success "System CMake version $(cmake --version | head -n1) is sufficient for Pinocchio."
+        fi
+
         git clone --recursive https://github.com/stack-of-tasks/pinocchio.git
         cd pinocchio
         git checkout v2.6.20
@@ -128,9 +143,19 @@ fi
 echo_step "Installing Python dependencies from $PIP_REQ_FILE..."
 if [ -f "$SCRIPT_DIR/$PIP_REQ_FILE" ]; then
     sudo apt install -y python3-pip # Ensure pip is available for system Python
-    python3 -m pip install --upgrade pip
+    echo_info "Ensuring Python pip, setuptools, and wheel are up to date..."
+    python3 -m pip install --upgrade pip setuptools wheel
+    
+    echo_info "Installing packages from $PIP_REQ_FILE..."
+    # Use --user flag if system site-packages is not writable, or run with sudo if appropriate
+    # For system-wide ROS setup, installing to system Python is often intended.
+    # However, if non-root, pip might default to --user.
     if python3 -m pip install -r "$SCRIPT_DIR/$PIP_REQ_FILE"; then
         echo_success "Python dependencies installed successfully."
+        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+            echo_warn "~/.local/bin is not on your PATH. You might want to add it by running:"
+            echo_warn "  echo 'export PATH=\"$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
+        fi
     else
         echo_error "Failed to install Python dependencies from $PIP_REQ_FILE. Check errors above."
         exit 1

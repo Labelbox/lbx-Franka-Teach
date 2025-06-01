@@ -17,7 +17,7 @@ scikit-learn         # Machine learning tools (optional)
 # Note: Many core ROS libraries (rclpy, etc.) are part of the ROS installation itself.
 # These are Python packages often used alongside or for ROS development.
 empy==3.3.4          # Required for ROS2 Humble message generation compatibility
-tf-transformations   # For TF transformations in Python
+transformations      # For tf_transformations Python library (replacement for tf-transformations on PyPI)
 catkin_pkg           # For ROS package introspection (used by some build/dev tools)
 lark                 # Parser generator, used by some ROS tools
 

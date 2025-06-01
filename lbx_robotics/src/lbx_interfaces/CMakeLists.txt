@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/VRControllerState.msg"
   "msg/SystemStatus.msg"
   "msg/RecordingStatus.msg"
+  "srv/StartRecording.srv"
+  "srv/StopRecording.srv"
   DEPENDENCIES
     std_msgs
     geometry_msgs

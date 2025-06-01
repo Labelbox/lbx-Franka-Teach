@@ -13,6 +13,8 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
+        # Include APK directory
+        (os.path.join('share', package_name, 'APK'), glob(os.path.join('lbx_input_oculus', 'oculus_reader', 'APK', '*'))),
     ],
     install_requires=[
         'setuptools',

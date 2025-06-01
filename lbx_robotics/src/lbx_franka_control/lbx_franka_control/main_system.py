@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Main System Integration for Labelbox Robotics VR Teleoperation
 
@@ -544,8 +544,8 @@ class LabelboxRoboticsSystem(Node):
             await self.async_sleep(0.1)
 
 
-async def main():
-    """Main entry point"""
+async def async_main():
+    """Async main entry point"""
     # Initialize ROS2
     rclpy.init()
     
@@ -583,6 +583,18 @@ async def main():
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+def main():
+    """Synchronous main entry point for ROS2 entry_points"""
     import asyncio
-    asyncio.run(main()) 
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\nShutdown requested")
+    except Exception as e:
+        print(f"Error in main system: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == '__main__':
+    main() 

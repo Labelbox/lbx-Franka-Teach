@@ -34,10 +34,7 @@ from tf2_msgs.msg import TFMessage # For /tf and /tf_static
 from cv_bridge import CvBridge # For image conversion
 
 # Custom Services for recording control (define these in an srv file in your interfaces package)
-# from lbx_interfaces.srv import StartRecording, StopRecording
-# For now, using std_srvs.Trigger as placeholders if actual services are not yet defined
-from std_srvs.srv import Trigger as StartRecording  # Placeholder
-from std_srvs.srv import SetBool as StopRecording # Placeholder (SetBool.data for success)
+from lbx_interfaces.srv import StartRecording, StopRecording
 
 # Placeholder for actual robot state message if it's custom
 # from lbx_interfaces.msg import RobotFullState # Example
@@ -67,10 +64,9 @@ SCHEMA_ACTION_STR = json.dumps({
 })
 
 SCHEMA_VR_CONTROLLER_STR = json.dumps({
-    "type": "object", "title": "labelbox_robotics.VRController", "properties": {
+    "type": "object",
+    "properties": {
         "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
-        "left_controller_pose": {"type": "array", "items": {"type": "number"}, "description": "16-element flattened 4x4 matrix"},
-        "right_controller_pose": {"type": "array", "items": {"type": "number"}, "description": "16-element flattened 4x4 matrix"},
         "left_joystick": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
         "right_joystick": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
         "left_buttons": {"type": "object", "additionalProperties": {"type": "boolean"}},
@@ -81,8 +77,38 @@ SCHEMA_VR_CONTROLLER_STR = json.dumps({
     "required": ["timestamp"]
 })
 
-SCHEMA_COMPRESSED_IMAGE_STR = json.dumps(mcap.WellKnownSchema.foxglove_CompressedImage.json_schema)
-SCHEMA_CAMERA_CALIBRATION_STR = json.dumps(mcap.WellKnownSchema.foxglove_CameraCalibration.json_schema)
+# Fix MCAP WellKnownSchema compatibility issue
+try:
+    SCHEMA_COMPRESSED_IMAGE_STR = json.dumps(mcap.WellKnownSchema.foxglove_CompressedImage.json_schema)
+    SCHEMA_CAMERA_CALIBRATION_STR = json.dumps(mcap.WellKnownSchema.foxglove_CameraCalibration.json_schema)
+except AttributeError:
+    # Fallback for older mcap versions without WellKnownSchema
+    SCHEMA_COMPRESSED_IMAGE_STR = json.dumps({
+        "type": "object",
+        "properties": {
+            "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
+            "frame_id": {"type": "string"},
+            "data": {"type": "string", "description": "Base64 encoded image data"},
+            "format": {"type": "string", "description": "Image format (e.g., jpeg, png)"}
+        },
+        "required": ["timestamp", "frame_id", "data", "format"]
+    })
+    SCHEMA_CAMERA_CALIBRATION_STR = json.dumps({
+        "type": "object", 
+        "properties": {
+            "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
+            "frame_id": {"type": "string"},
+            "width": {"type": "integer"},
+            "height": {"type": "integer"},
+            "distortion_model": {"type": "string"},
+            "D": {"type": "array", "items": {"type": "number"}},
+            "K": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
+            "R": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
+            "P": {"type": "array", "items": {"type": "number"}, "minItems": 12, "maxItems": 12}
+        },
+        "required": ["timestamp", "frame_id", "width", "height"]
+    })
+
 # These will be handled by McapRos2NativeWriter using .msg definitions
 # SCHEMA_TF_MESSAGE_STR = json.dumps(mcap.WellKnownSchema.ros2_tf2_msgs_TFMessage.json_schema)
 # SCHEMA_STD_STRING_STR = json.dumps(mcap.WellKnownSchema.ros2_std_msgs_String.json_schema)

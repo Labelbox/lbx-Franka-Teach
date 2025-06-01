@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 import os
 from glob import glob
 
@@ -7,8 +7,7 @@ package_name = 'lbx_input_oculus'
 setup(
     name=package_name,
     version='0.0.1',
-    packages=[package_name, f'{package_name}.oculus_reader'],
-    package_dir={ '' : 'lbx_input_oculus'},
+    packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),

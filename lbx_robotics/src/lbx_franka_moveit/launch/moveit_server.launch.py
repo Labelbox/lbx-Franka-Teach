@@ -42,19 +42,11 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
     
-    robot_description_param = {'robot_description': robot_description_content}
-
-    # Robot State Publisher
-    robot_state_publisher_node = Node(
-        package='robot_state_publisher',
-        executable='robot_state_publisher',
-        output='screen',
-        parameters=[robot_description_param]
-    )
+    robot_description = {'robot_description': robot_description_content}
     
     # Include the standard Franka MoveIt launch file
-    # We remove the direct robot_description parameter to encourage using the topic
-    moveit_launch_include = IncludeLaunchDescription(
+    # but override the robot_description parameter
+    moveit_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([
                 FindPackageShare('franka_fr3_moveit_config'),
@@ -68,11 +60,11 @@ def launch_setup(context, *args, **kwargs):
             'load_gripper': load_gripper,
             'use_rviz': enable_rviz,
             'rviz_config': rviz_config,
-            # 'robot_description': robot_description_content, # Removed to use topic
+            'robot_description': robot_description_content,
         }).items()
     )
     
-    return [robot_state_publisher_node, moveit_launch_include]
+    return [moveit_launch]
 
 def generate_launch_description():
     # Declare arguments

@@ -1,5 +1,9 @@
 # Main Python dependencies for lbx_robotics - to be installed with pip
 # This file is used by setup_environment.sh after system and ROS 2 setup.
+#
+# COMPATIBILITY NOTE: This requirements file is designed to work with setuptools<65.5.0
+# Some packages (empy, omegaconf, etc.) are installed separately by the setup script
+# due to setuptools compatibility issues with newer versions.
 
 # --- Core & Data Processing ---
 numpy>=1.19.0,<2.0
@@ -15,16 +19,17 @@ scikit-learn         # Machine learning tools (optional)
 
 # --- ROS 2 Build Tools ---
 # Colcon and related packages - ensure latest versions to fix --editable issue
-colcon-common-extensions>=0.3.0  # Meta-package that includes most colcon packages
-colcon-core>=0.15.0              # Latest colcon-core fixes the --editable option issue
-colcon-ros>=0.4.0                # ROS-specific colcon extensions
-setuptools<65.5.0                # Required for compatibility with some packages (e.g. pure-python-adb)
+# Note: These will be installed separately by the setup script to ensure proper versions
+# colcon-common-extensions>=0.3.0  # Installed separately
+# colcon-core>=0.15.0              # Installed separately  
+# colcon-ros>=0.4.0                # Installed separately
+setuptools<65.5.0                # Required for compatibility with legacy packages
 wheel>=0.37.0                    # Required for building wheels
 
 # --- ROS 2 Related Python Packages ---
 # Note: Many core ROS libraries (rclpy, etc.) are part of the ROS installation itself.
 # These are Python packages often used alongside or for ROS development.
-empy==3.3.4          # Required for ROS2 Humble message generation compatibility
+# empy==3.3.4          # Required for ROS2 Humble message generation - installed separately due to setuptools issues
 transformations      # For tf_transformations Python library (replacement for tf-transformations on PyPI)
 catkin_pkg           # For ROS package introspection (used by some build/dev tools)
 lark                 # Parser generator, used by some ROS tools
@@ -50,15 +55,11 @@ foxglove-websocket   # For Foxglove Studio integration
 # VR Requirements - Install these for Meta Quest/Oculus VR functionality
 pure-python-adb==0.3.0.dev0  # For Meta Quest (Oculus) VR controller communication - REQUIRED for VR
 # 
-# Note: pure-python-adb requires setuptools<65.5.0 for successful installation
-# Recommended Installation:
-# 1. pip install setuptools<65.5.0
-# 2. pip install pure-python-adb==0.3.0.dev0
+# Note: pure-python-adb is compatible with setuptools<65.5.0
+# If installation fails, try:
+# pip install --force-reinstall pure-python-adb==0.3.0.dev0
 # 
-# Alternative Options:
-# Option 1 (Basic): pip install pure-python-adb
-# Option 2 (Versioned): pure-python-adb==0.3.0.dev0
-# Option 3 (All deps): pip install -r requirements.txt
+# Alternative: Comment out this line if VR functionality is not needed
 
 # oculus_reader      # If this is a pip-installable Python package for your VR setup.
                      # If it's custom code within a ROS package, it will be built by colcon.
@@ -70,8 +71,8 @@ torchvision>=0.10.0
 transformers>=4.20.0 # From Hugging Face
 wandb                # Weights & Biases for experiment tracking
 tensorboard          # For TensorFlow/PyTorch logging
-omegaconf            # For Hydra configuration management
-hydra-core           # Framework for configuring complex applications
+# omegaconf            # For Hydra configuration management - installed separately due to dependencies
+# hydra-core           # Framework for configuring complex applications - installed separately
 einops               # Flexible tensor operations
 diffusers            # For diffusion models
 accelerate           # PyTorch Distributed Training

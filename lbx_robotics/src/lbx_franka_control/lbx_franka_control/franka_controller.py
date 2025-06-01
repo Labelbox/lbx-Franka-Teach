@@ -25,6 +25,89 @@ from control_msgs.msg import JointTolerance
 from franka_msgs.action import Grasp
 from std_msgs.msg import Header
 
+# ROS 2 Diagnostics
+from diagnostic_updater import Updater, DiagnosticTask, DiagnosticStatus
+from diagnostic_msgs.msg import KeyValue
+
+
+class FrankaControllerTask(DiagnosticTask):
+    """Diagnostic task for Franka robot controller status"""
+    
+    def __init__(self, name, controller):
+        super().__init__(name)
+        self.controller = controller
+    
+    def run(self, stat):
+        """Run diagnostic check and report controller status"""
+        # Check if services are available
+        services_ready = self._check_services_availability()
+        
+        # Check robot connection status
+        robot_connected = self.controller._last_joint_positions is not None
+        
+        # Overall health assessment
+        if services_ready and robot_connected:
+            stat.summary(DiagnosticStatus.OK, "Robot controller ready and operational")
+        elif services_ready and not robot_connected:
+            stat.summary(DiagnosticStatus.WARN, "Controller ready - waiting for robot data")
+        elif not services_ready and robot_connected:
+            stat.summary(DiagnosticStatus.ERROR, "Robot connected but MoveIt services unavailable")
+        else:
+            stat.summary(DiagnosticStatus.ERROR, "Robot controller not ready - services and robot unavailable")
+        
+        # Add detailed status information
+        stat.add("Services Ready", str(services_ready))
+        stat.add("Robot Connected", str(robot_connected))
+        stat.add("Hardware Type", "Real Robot" if not self.controller.config.get('use_fake_hardware', False) else "Fake Hardware")
+        
+        # Performance metrics
+        total_ik_attempts = self.controller._ik_success_count + self.controller._ik_failure_count
+        if total_ik_attempts > 0:
+            ik_success_rate = (self.controller._ik_success_count / total_ik_attempts) * 100
+            stat.add("IK Success Rate (%)", f"{ik_success_rate:.1f}")
+            stat.add("IK Total Attempts", str(total_ik_attempts))
+        else:
+            stat.add("IK Success Rate (%)", "N/A (No attempts)")
+            stat.add("IK Total Attempts", "0")
+        
+        stat.add("Trajectory Commands Sent", str(self.controller._trajectory_success_count))
+        
+        # Service status details
+        stat.add("IK Service", "Available" if self.controller.ik_client.service_is_ready() else "Unavailable")
+        stat.add("Planning Scene Service", "Available" if self.controller.planning_scene_client.service_is_ready() else "Unavailable")
+        stat.add("FK Service", "Available" if self.controller.fk_client.service_is_ready() else "Unavailable")
+        stat.add("Trajectory Action", "Available" if self.controller.trajectory_client.server_is_ready() else "Unavailable")
+        stat.add("Gripper Action", "Available" if self.controller.gripper_client.server_is_ready() else "Unavailable")
+        
+        # Configuration info
+        stat.add("Planning Group", self.controller.config['robot']['planning_group'])
+        stat.add("Base Frame", self.controller.config['robot']['base_frame'])
+        stat.add("End Effector Link", self.controller.config['robot']['end_effector_link'])
+        
+        # Last command timing
+        if self.controller._last_command_time > 0:
+            time_since_last = time.time() - self.controller._last_command_time
+            stat.add("Time Since Last Command (s)", f"{time_since_last:.1f}")
+        else:
+            stat.add("Time Since Last Command (s)", "Never")
+        
+        # Workspace bounds
+        workspace_min = self.controller.config['robot']['workspace_min']
+        workspace_max = self.controller.config['robot']['workspace_max']
+        stat.add("Workspace X Range", f"[{workspace_min[0]:.2f}, {workspace_max[0]:.2f}]")
+        stat.add("Workspace Y Range", f"[{workspace_min[1]:.2f}, {workspace_max[1]:.2f}]")
+        stat.add("Workspace Z Range", f"[{workspace_min[2]:.2f}, {workspace_max[2]:.2f}]")
+        
+        return stat
+    
+    def _check_services_availability(self):
+        """Check if all required MoveIt services are available"""
+        return (self.controller.ik_client.service_is_ready() and
+                self.controller.planning_scene_client.service_is_ready() and
+                self.controller.fk_client.service_is_ready() and
+                self.controller.trajectory_client.server_is_ready() and
+                self.controller.gripper_client.server_is_ready())
+
 
 class FrankaController:
     """Handles Franka robot control via MoveIt"""
@@ -65,6 +148,17 @@ class FrankaController:
         self._ik_failure_count = 0
         self._trajectory_success_count = 0
         self._trajectory_failure_count = 0
+        
+        # Initialize diagnostics
+        self.diagnostic_updater = Updater(node)
+        self.diagnostic_updater.setHardwareID(f"franka_fr3_controller_{config.get('robot', {}).get('robot_ip', 'unknown')}")
+        self.diagnostic_updater.add(FrankaControllerTask("Franka Controller Status", self))
+        
+        self.node.get_logger().info("✅ Franka controller initialized with diagnostics")
+    
+    def update_diagnostics(self):
+        """Update diagnostic information - should be called periodically"""
+        self.diagnostic_updater.update()
     
     def _wait_for_services(self):
         """Wait for MoveIt services to be available"""

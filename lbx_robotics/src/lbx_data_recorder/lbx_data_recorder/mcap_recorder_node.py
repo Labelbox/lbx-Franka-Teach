@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import ParameterDescriptor  # Import ParameterDescriptor from correct location
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -123,7 +124,7 @@ class MCAPRecorderNode(Node):
         self.declare_parameter('auto_start_recording', False)
         self.declare_parameter('auto_start_filename_prefix', 'auto_trajectory')
         self.declare_parameter('topics_to_record', rclpy.Parameter.Type.STRING_ARRAY)
-        self.declare_parameter('topic_types_map', [], rclpy.ParameterDescriptor(
+        self.declare_parameter('topic_types_map', [], ParameterDescriptor(
             type=rclpy.Parameter.Type.STRING_ARRAY,
             description='Topic name to message type mapping in format topic_name:MsgType'
         ))

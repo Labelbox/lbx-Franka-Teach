@@ -83,9 +83,34 @@ class SystemDiagnosticTask(DiagnosticTask):
         stat.add("MoveIt Status", "Ready" if self.node.moveit_healthy else "Pending")
         stat.add("Robot Status", "Connected" if self.node.robot_healthy else "Disconnected")
         stat.add("Fake Hardware", str(self.node._get_bool_param('use_fake_hardware', False)))
+        stat.add("Camera Status", "Healthy" if self.node.cameras_healthy else "Issues Detected")
         
         # System ready status
         stat.add("System Ready", str(self.node.system_ready))
+        
+        # Configuration information
+        stat.add("Robot IP", self.node.config.get('robot', {}).get('robot_ip', 'Unknown'))
+        stat.add("Recording Enabled", str(self.node.config.get('recording', {}).get('enabled', False)))
+        
+        # System capabilities
+        capabilities = []
+        if self.node.launch_params.get('enable_cameras', False):
+            capabilities.append("Cameras")
+        if self.node.launch_params.get('enable_recording', False):
+            capabilities.append("Recording")
+        if self.node.launch_params.get('hot_reload', False):
+            capabilities.append("Hot Reload")
+        stat.add("Active Capabilities", ", ".join(capabilities) if capabilities else "Basic")
+        
+        # Update latest diagnostics for periodic summaries
+        self.node.latest_diagnostics = {
+            "Operation Mode": mode,
+            "VR Status": "Connected" if self.node.vr_healthy else "Graceful Fallback",
+            "MoveIt Status": "Ready" if self.node.moveit_healthy else "Pending",
+            "Robot Status": "Connected" if self.node.robot_healthy else "Disconnected",
+            "System Ready": str(self.node.system_ready),
+            "Active Capabilities": ", ".join(capabilities) if capabilities else "Basic"
+        }
         
         return stat
 
@@ -124,6 +149,26 @@ class LabelboxRoboticsSystem(Node):
         self.latest_system_status = None
         self.latest_vr_state = None
         self.latest_diagnostics = {}
+        
+        # Diagnostic collection and summary
+        self.node_diagnostics = {}  # Store diagnostics from all nodes
+        self.last_diagnostic_summary_time = 0
+        self.diagnostic_summary_interval = 30.0  # Print summary every 30 seconds
+        
+        # QoS profile for diagnostics subscription
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        
+        # Subscribe to diagnostics from all nodes
+        self.diagnostics_subscription = self.create_subscription(
+            DiagnosticArray,
+            '/diagnostics',
+            self.diagnostics_callback,
+            qos_profile
+        )
     
     def signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
@@ -168,6 +213,9 @@ class LabelboxRoboticsSystem(Node):
         print(f"   ├─ 🔄 Hot Reload: {self._get_hotreload_status()}")
         print(f"   ├─ 🔍 Data Verification: {self._get_verification_status()}")
         print(f"   └─ 🤖 Robot IP: {Colors.BOLD}{self.config['robot']['robot_ip']}{Colors.ENDC}\n")
+        
+        # Force flush output to ensure it appears immediately
+        sys.stdout.flush()
     
     def _get_vr_mode(self):
         """Get VR connection mode description"""
@@ -543,76 +591,92 @@ class LabelboxRoboticsSystem(Node):
     
     async def run(self):
         """Main run loop with graceful degradation support"""
-        # Welcome message
-        self.print_welcome_message()
-        
-        # Initialize system
-        if not await self.initialize_system():
-            print(f"\n{Colors.FAIL}Critical system initialization failed. Exiting.{Colors.ENDC}")
-            return
-        
-        # Reset robot (only if robot and MoveIt are healthy)
-        if self.robot_healthy and self.moveit_healthy:
-            self.reset_robot_to_home()
-        else:
-            print(f"\n{Colors.WARNING}⚠️  Skipping robot reset - running in monitoring mode{Colors.ENDC}")
-        
-        # Handle calibration based on system state
-        if self.vr_healthy and self.moveit_healthy:
-            # Full VR teleoperation mode
-            self.enter_calibration_mode()
-            
-            # Start full teleoperation
-            self.start_teleoperation()
-            
-        elif self.robot_healthy:
-            # Robot monitoring mode (no VR or degraded MoveIt)
-            print(f"\n{Colors.CYAN}{Colors.BOLD}🔍 System Monitoring Mode{Colors.ENDC}")
-            print("─" * 50)
-            print(f"\n{Colors.CYAN}Current Status:{Colors.ENDC}")
-            if not self.vr_healthy:
-                print("   • 🎮 VR: Graceful fallback active (will auto-reconnect)")
-            if not self.moveit_healthy:
-                print("   • 🔧 MoveIt: Services initializing (check progress below)")
-            print("   • 📊 System diagnostics: Active")
-            print("   • 🔄 Hot-plugging: VR and services supported")
-            print(f"\n{Colors.GREEN}Features available:{Colors.ENDC}")
-            print("   • Real-time system status monitoring")
-            print("   • Automatic VR reconnection detection")
-            print("   • Service availability monitoring")
-            print("   • Data recording (if enabled)")
-            print(f"\n{Colors.WARNING}System will automatically upgrade when components become available{Colors.ENDC}")
-            
-        else:
-            # Basic monitoring mode
-            print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️  Basic Monitoring Mode{Colors.ENDC}")
-            print("─" * 50)
-            print("   • Limited functionality - monitoring system health")
-            print("   • Check robot connection and ros2_control status")
-            
-        # Simple diagnostic reporting
-        print(f"\n{Colors.CYAN}📊 System diagnostics active{Colors.ENDC}")
-        print(f"   View status: ros2 topic echo /diagnostics")
-        print(f"   Monitor system: ros2 run rqt_robot_monitor rqt_robot_monitor")
-        print(f"{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
-        
-        # Update diagnostics and keep system running
         try:
-            while self.running:
-                # Update diagnostics
-                self.diagnostic_updater.update()
+            # Welcome message
+            self.print_welcome_message()
+            
+            # Initialize system
+            if not await self.initialize_system():
+                print(f"\n{Colors.FAIL}Critical system initialization failed. Exiting.{Colors.ENDC}")
+                return
+            
+            # Reset robot (only if robot and MoveIt are healthy)
+            if self.robot_healthy and self.moveit_healthy:
+                self.reset_robot_to_home()
+            else:
+                print(f"\n{Colors.WARNING}⚠️  Skipping robot reset - running in monitoring mode{Colors.ENDC}")
+            
+            # Handle calibration based on system state
+            if self.vr_healthy and self.moveit_healthy:
+                # Full VR teleoperation mode
+                self.enter_calibration_mode()
                 
-                # Simple health checks every 30 seconds
-                if hasattr(self, '_last_health_check'):
+                # Start full teleoperation
+                self.start_teleoperation()
+                
+            elif self.robot_healthy:
+                # Robot monitoring mode (no VR or degraded MoveIt)
+                print(f"\n{Colors.CYAN}{Colors.BOLD}🔍 System Monitoring Mode{Colors.ENDC}")
+                print("─" * 50)
+                print(f"\n{Colors.CYAN}Current Status:{Colors.ENDC}")
+                if not self.vr_healthy:
+                    print("   • 🎮 VR: Graceful fallback active (will auto-reconnect)")
+                if not self.moveit_healthy:
+                    print("   • 🔧 MoveIt: Services initializing (check progress below)")
+                print("   • 📊 System diagnostics: Active")
+                print("   • 🔄 Hot-plugging: VR and services supported")
+                print(f"\n{Colors.GREEN}Features available:{Colors.ENDC}")
+                print("   • Real-time system status monitoring")
+                print("   • Automatic VR reconnection detection")
+                print("   • Service availability monitoring")
+                print("   • Data recording (if enabled)")
+                print(f"\n{Colors.WARNING}System will automatically upgrade when components become available{Colors.ENDC}")
+                
+            else:
+                # Basic monitoring mode
+                print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️  Basic Monitoring Mode{Colors.ENDC}")
+                print("─" * 50)
+                print("   • Limited functionality - monitoring system health")
+                print("   • Check robot connection and ros2_control status")
+            
+            # Simple diagnostic reporting
+            print(f"\n{Colors.CYAN}📊 System diagnostics active{Colors.ENDC}")
+            print(f"   View status: ros2 topic echo /diagnostics")
+            print(f"   Monitor system: ros2 run rqt_robot_monitor rqt_robot_monitor")
+            print(f"{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
+            
+            # Force flush output
+            sys.stdout.flush()
+            
+            # Update diagnostics and keep system running
+            self._last_health_check = time.time()
+            self.last_diagnostic_summary_time = time.time()  # Initialize summary timer
+            
+            while self.running:
+                try:
+                    # Update diagnostics more frequently
+                    self.diagnostic_updater.update()
+                    
+                    # Health checks every 30 seconds
                     if time.time() - self._last_health_check > 30.0:
                         await self._periodic_health_check()
                         self._last_health_check = time.time()
-                else:
-                    self._last_health_check = time.time()
-                
-                await asyncio.sleep(1.0)  # Update diagnostics every second
+                    
+                    # Short sleep for responsive diagnostics
+                    await asyncio.sleep(2.0)  # Update every 2 seconds for better responsiveness
+                    
+                except Exception as e:
+                    self.get_logger().error(f"Error in main loop iteration: {e}")
+                    # Continue running even if there are errors
+                    await asyncio.sleep(1.0)
+                    
         except Exception as e:
-            self.get_logger().error(f"Error in main loop: {e}")
+            self.get_logger().error(f"Critical error in main system run: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"\n{Colors.FAIL}System encountered critical error: {e}{Colors.ENDC}")
+            print(f"Check logs for details. System will attempt to continue...")
+            # Don't exit immediately, allow cleanup
     
     async def _periodic_health_check(self):
         """Simple periodic health check for component reconnection"""
@@ -645,6 +709,155 @@ class LabelboxRoboticsSystem(Node):
                     self.robot_healthy = True
             except Exception:
                 pass
+        
+        # Trigger a diagnostic summary if it's been a while
+        current_time = time.time()
+        if current_time - self.last_diagnostic_summary_time > self.diagnostic_summary_interval:
+            self.print_diagnostic_summary()
+            self.last_diagnostic_summary_time = current_time
+
+    def diagnostics_callback(self, msg):
+        """Callback for receiving diagnostics from all nodes"""
+        for status in msg.status:
+            node_name = status.name
+            if node_name not in self.node_diagnostics:
+                self.node_diagnostics[node_name] = {}
+            
+            # Store the summary/status message
+            self.node_diagnostics[node_name]['Summary'] = status.message
+            self.node_diagnostics[node_name]['Level'] = self._diagnostic_level_to_string(status.level)
+            
+            # Store individual key-value pairs
+            for item in status.values:
+                self.node_diagnostics[node_name][item.key] = item.value
+        
+        # Check if it's time to print a diagnostic summary
+        current_time = time.time()
+        if current_time - self.last_diagnostic_summary_time > self.diagnostic_summary_interval:
+            self.last_diagnostic_summary_time = current_time
+            self.print_diagnostic_summary()
+    
+    def _diagnostic_level_to_string(self, level):
+        """Convert diagnostic level to human-readable string"""
+        level_map = {
+            DiagnosticStatus.OK: "OK",
+            DiagnosticStatus.WARN: "WARNING", 
+            DiagnosticStatus.ERROR: "ERROR",
+            DiagnosticStatus.STALE: "STALE"
+        }
+        return level_map.get(level, f"UNKNOWN({level})")
+    
+    def print_diagnostic_summary(self):
+        """Print a comprehensive system health summary"""
+        print(f"\n{Colors.CYAN}{Colors.BOLD}📊 System Health Summary{Colors.ENDC}")
+        print("─" * 70)
+        
+        # Print timestamp
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"📅 Time: {current_time}")
+        
+        # Print overall system status
+        if self.vr_healthy and self.moveit_healthy and self.robot_healthy:
+            status_icon = "✅"
+            status_text = f"{Colors.GREEN}All systems fully operational{Colors.ENDC}"
+        elif self.moveit_healthy and self.robot_healthy:
+            status_icon = "⚠️"
+            status_text = f"{Colors.WARNING}Core systems operational (VR graceful fallback active){Colors.ENDC}"
+        elif self.robot_healthy:
+            status_icon = "⚠️"
+            status_text = f"{Colors.WARNING}Robot connected (MoveIt services pending){Colors.ENDC}"
+        else:
+            status_icon = "❌"
+            status_text = f"{Colors.FAIL}Robot connection required for system operation{Colors.ENDC}"
+        
+        print(f"🏥 Overall Status: {status_icon} {status_text}")
+        
+        # Print system components with more detail
+        print(f"\n{Colors.CYAN}System Components:{Colors.ENDC}")
+        
+        # VR Component
+        if self.vr_healthy:
+            print(f"   ├─ 🎮 VR Controller: {Colors.GREEN}Connected and operational{Colors.ENDC}")
+        else:
+            print(f"   ├─ 🎮 VR Controller: {Colors.WARNING}Graceful fallback active{Colors.ENDC}")
+            print(f"   │   💡 System continues without VR - will auto-reconnect when available")
+        
+        # Robot Component
+        if self.robot_healthy:
+            hardware_type = "Fake Hardware" if self._get_bool_param('use_fake_hardware', False) else "Real Robot"
+            print(f"   ├─ 🤖 Robot: {Colors.GREEN}Connected ({hardware_type}){Colors.ENDC}")
+        else:
+            print(f"   ├─ 🤖 Robot: {Colors.FAIL}Disconnected{Colors.ENDC}")
+            print(f"   │   💡 Check robot power, network, and ros2_control status")
+        
+        # MoveIt Component
+        if self.moveit_healthy:
+            print(f"   ├─ 🔧 MoveIt: {Colors.GREEN}Services ready{Colors.ENDC}")
+        else:
+            print(f"   ├─ 🔧 MoveIt: {Colors.WARNING}Services pending{Colors.ENDC}")
+            print(f"   │   💡 Services may still be initializing - system can run in monitoring mode")
+        
+        # Camera Component
+        cameras_enabled = self.launch_params.get('enable_cameras', False)
+        if cameras_enabled:
+            if self.cameras_healthy:
+                print(f"   └─ 📹 Cameras: {Colors.GREEN}Operational{Colors.ENDC}")
+            else:
+                print(f"   └─ 📹 Cameras: {Colors.WARNING}Issues detected{Colors.ENDC}")
+        else:
+            print(f"   └─ 📹 Cameras: {Colors.CYAN}Disabled{Colors.ENDC}")
+        
+        # Print detailed node diagnostics if available
+        if self.node_diagnostics:
+            print(f"\n{Colors.CYAN}Component Details:{Colors.ENDC}")
+            node_categories = {
+                'VR': ['Oculus Connection', 'Oculus Data Rates'],
+                'Camera': ['Camera System Status'],
+                'Recording': ['MCAP Recorder Status'],
+                'Robot': ['Franka Controller Status'],
+                'System': ['LBX Robotics System Status']
+            }
+            
+            for category, expected_nodes in node_categories.items():
+                found_nodes = [node for node in self.node_diagnostics.keys() 
+                             if any(expected in node for expected in expected_nodes)]
+                
+                if found_nodes:
+                    print(f"   📋 {category}:")
+                    for node_name in found_nodes:
+                        diagnostics = self.node_diagnostics[node_name]
+                        # Show key metrics for each component
+                        if 'Status' in diagnostics:
+                            print(f"     • {node_name}: {diagnostics['Status']}")
+                        elif 'Summary' in diagnostics:
+                            print(f"     • {node_name}: {diagnostics['Summary']}")
+                        
+                        # Show specific important metrics
+                        if 'Connection Status' in diagnostics:
+                            print(f"       └─ Connection: {diagnostics['Connection Status']}")
+                        if 'Active Cameras (Mgr)' in diagnostics:
+                            print(f"       └─ Active Cameras: {diagnostics['Active Cameras (Mgr)']}")
+                        if 'IK Success Rate (%)' in diagnostics:
+                            print(f"       └─ IK Success Rate: {diagnostics['IK Success Rate (%)']}%")
+                        if 'Recording Status' in diagnostics:
+                            print(f"       └─ Recording: {diagnostics['Recording Status']}")
+                else:
+                    print(f"   📋 {category}: {Colors.WARNING}No diagnostics received yet{Colors.ENDC}")
+        else:
+            print(f"\n{Colors.WARNING}⏳ Waiting for diagnostic reports from nodes...{Colors.ENDC}")
+            print(f"   💡 Nodes may still be initializing or diagnostics may be delayed")
+        
+        # Print actionable information
+        print(f"\n{Colors.CYAN}Quick Actions:{Colors.ENDC}")
+        print(f"   • View live diagnostics: ros2 topic echo /diagnostics")
+        print(f"   • Monitor in GUI: ros2 run rqt_robot_monitor rqt_robot_monitor")
+        print(f"   • Check node status: ros2 node list")
+        print(f"   • Emergency stop: {Colors.WARNING}Ctrl+C{Colors.ENDC}")
+        
+        print("─" * 70 + "\n")
+        
+        # Force flush output
+        sys.stdout.flush()
 
 
 async def async_main():
@@ -710,14 +923,42 @@ async def async_main():
     executor = MultiThreadedExecutor()
     executor.add_node(system)
     
-    # Run system
+    # Run system with proper executor integration
     try:
-        # Run the async initialization and main loop
+        # Start the executor in a separate thread
+        import threading
+        import concurrent.futures
+        
+        # Create a future for the system run task
+        loop = asyncio.get_event_loop()
+        
+        # Run executor in a separate thread
+        def spin_executor():
+            try:
+                executor.spin()
+            except Exception as e:
+                print(f"Executor error: {e}")
+        
+        executor_thread = threading.Thread(target=spin_executor, daemon=True)
+        executor_thread.start()
+        
+        # Give the executor a moment to start
+        await asyncio.sleep(0.1)
+        
+        # Run the main system loop
         await system.run()
+        
     except KeyboardInterrupt:
         print("\n\nKeyboard interrupt received")
+    except Exception as e:
+        print(f"Error in main system: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        # Shutdown in the correct order
+        system.running = False
         system.cleanup()
+        executor.shutdown(timeout_sec=5.0)
         system.destroy_node()
         rclpy.shutdown()
 

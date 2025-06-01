@@ -16,4 +16,11 @@ dependencies = [
     "setuptools" # If it has direct Python dependencies, list them
 ]
 
-# No entry points if it's just a library 
+# No entry points if it's just a library
+
+[tool.setuptools.packages.find]
+exclude = ["test*"]
+
+[tool.setuptools.data-files]
+"share/ament_index/resource_index/packages" = ["resource/lbx_utils"]
+"share/lbx_utils" = ["package.xml"] 

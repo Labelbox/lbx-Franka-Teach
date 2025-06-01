@@ -17,7 +17,7 @@ foxglove-websocket
 # Python 3.10+ compatible packages (latest versions)
 
 # Core data processing
-numpy
+# numpy is managed by conda (environment.yaml)
 scipy
 opencv-python
 pyyaml

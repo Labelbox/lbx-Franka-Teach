@@ -397,8 +397,8 @@ perform_build() {
     # Add parallel workers
     BUILD_CMD="$BUILD_CMD --parallel-workers $BUILD_PARALLEL_WORKERS"
     
-    # Add merge-install for faster installation
-    if [ "$MERGE_INSTALL" = "true" ]; then
+    # Add merge-install for faster installation (unless in dev mode)
+    if [ "$MERGE_INSTALL" = "true" ] && [ "$DEV_MODE" != "true" ]; then
         BUILD_CMD="$BUILD_CMD --merge-install"
     fi
     
@@ -406,8 +406,6 @@ perform_build() {
     if [ "$DEV_MODE" = "true" ]; then
         BUILD_CMD="$BUILD_CMD --symlink-install"
         print_info "Development mode enabled - Python changes will take effect immediately"
-        # Disable merge-install in dev mode as it conflicts with symlink-install
-        BUILD_CMD=$(echo "$BUILD_CMD" | sed 's/--merge-install//g')
     fi
     
     # Add specific packages if requested
@@ -442,6 +440,25 @@ perform_build() {
     
     if [ $BUILD_RESULT -eq 0 ]; then
         print_success "Build completed successfully in ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
+        
+        # Fix Python executable installation paths if needed
+        print_info "Checking Python package installations..."
+        for pkg_dir in install/*/; do
+            if [ -d "$pkg_dir/bin" ] && [ ! -d "$pkg_dir/lib/$(basename $pkg_dir)" ]; then
+                pkg_name=$(basename "$pkg_dir")
+                print_info "Fixing executable paths for $pkg_name..."
+                mkdir -p "$pkg_dir/lib/$pkg_name"
+                for exe in "$pkg_dir/bin"/*; do
+                    if [ -f "$exe" ]; then
+                        exe_name=$(basename "$exe")
+                        if [ ! -f "$pkg_dir/lib/$pkg_name/$exe_name" ]; then
+                            ln -sf "../../bin/$exe_name" "$pkg_dir/lib/$pkg_name/$exe_name"
+                            print_info "  Created symlink for $exe_name"
+                        fi
+                    fi
+                done
+            fi
+        done
         
         # Show ccache stats if enabled
         if [ "$USE_CCACHE" = "true" ] && command -v ccache &> /dev/null; then

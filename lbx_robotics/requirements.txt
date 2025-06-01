@@ -1,57 +1,77 @@
-# LBX Robotics Python Dependencies (for pip, after Conda setup)
-# Use this file for packages best installed via pip within the Conda environment.
+# Main Python dependencies for lbx_robotics - to be installed with pip
+# This file is used by setup_environment.sh after system and ROS 2 setup.
 
-# Example for a pip-only package or a specific version:
-# some-pip-only-package==1.2.3
-
-# Most dependencies should be managed by environment.yaml for better compatibility.
-# This file is primarily for:
-# 1. Packages not available on Conda channels (intel, conda-forge).
-# 2. When a very specific version available only on PyPI is needed.
-# 3. Development tools or utilities that are typically pip-installed.
-
-# If mcap or foxglove-websocket are not found on Conda channels, uncomment them here:
-# mcap
-foxglove-websocket
-
-# Python 3.10+ compatible packages (latest versions)
-
-# Core data processing
-# numpy is managed by conda (environment.yaml)
+# --- Core & Data Processing ---
+numpy>=1.19.0,<2.0
 scipy
-opencv-python
-pyyaml
+opencv-python>=4.5.0  # For image processing
+pyyaml               # For configuration files
+matplotlib           # For plotting (optional, for tools/analysis)
+Pillow               # Image manipulation
+pyserial             # Serial communication (e.g., for some sensors)
+h5py                 # For HDF5 file format (data storage)
+pandas               # Data analysis and manipulation
+scikit-learn         # Machine learning tools (optional)
 
-# ROS2 Interaction (usually handled by ROS environment, good for venv)
-# rclpy # part of ROS installation
-# launch # part of ROS installation
-# launch_ros # part of ROS installation
+# --- ROS 2 Related Python Packages ---
+# Note: Many core ROS libraries (rclpy, etc.) are part of the ROS installation itself.
+# These are Python packages often used alongside or for ROS development.
+empy==3.3.4          # Required for ROS2 Humble message generation compatibility
+tf-transformations   # For TF transformations in Python
+catkin_pkg           # For ROS package introspection (used by some build/dev tools)
+lark                 # Parser generator, used by some ROS tools
 
-# Communication & Networking
-# protobuf is managed by conda (environment.yaml)
-websocket-client
-websockets
-requests
-pyzmq
-psutil
+# --- Communication & Networking ---
+pyzmq                # ZeroMQ messaging library
+websocket-client     # For WebSocket communication
+websockets           # Another library for WebSocket servers/clients
+requests             # HTTP requests
+psutil               # System process and utilization information
 
-# Vision & Sensors
-pyrealsense2
+# --- Vision & Sensors ---
+# pyrealsense2       # Recommended: Install via librealsense SDK apt packages or build from source for best compatibility.
+                     # If installing via pip is necessary, uncomment and test carefully.
 
-# Data Recording & Visualization
-blosc
+# --- Data Recording & Visualization ---
+mcap                 # MCAP file format reading/writing
+mcap-ros2-support==0.5.3 # MCAP support for ROS 2 messages
+blosc                # High-performance compressor (often used with mcap/h5py)
+foxglove-websocket   # For Foxglove Studio integration
 
-# Development & Code Quality
+# --- VR / Robot Control Specific (Python Components) ---
+# oculus_reader      # If this is a pip-installable Python package for your VR setup.
+                     # If it's custom code within a ROS package, it will be built by colcon.
+pure-python-adb>=0.3.0.dev0 # For Meta Quest (Oculus) VR controller communication
+# deoxys             # If this project has Python components that need to be pip installed.
+
+# --- Machine Learning & AI (Optional, if used by your algorithms) ---
+torch>=1.9.0
+torchvision>=0.10.0
+transformers>=4.20.0 # From Hugging Face
+wandb                # Weights & Biases for experiment tracking
+tensorboard          # For TensorFlow/PyTorch logging
+omegaconf            # For Hydra configuration management
+hydra-core           # Framework for configuring complex applications
+einops               # Flexible tensor operations
+diffusers            # For diffusion models
+accelerate           # PyTorch Distributed Training
+
+# --- Development & Code Quality Tools ---
+pytest
+pytest-asyncio
 black
 flake8
+mypy
+ipython
+jupyter
+watchdog             # For hot-reload functionality in some development servers
 
-# empy is managed by conda (environment.yaml)
+# --- Additional Async Support (Python) ---
+asyncio-mqtt
+aiohttp
 
-# Notes:
-# - All versions are unpinned to get latest stable releases
-# - This list assumes Python 3.10+ (for ROS2 Humble)
-# - 'dataclasses' is standard in Python 3.7+
-# - If 'deoxys' is a Python package dependency for any node here, add it
-# - 'oculus_reader' handling: If it's a pip package, add it. If it's local code,
-#   ensure it's included in the appropriate ROS package (e.g., lbx_input_oculus)
-# - Excluded nvidia/torch packages as requested 
+# --- Performance Optimizations (Python, Optional) ---
+# These can sometimes have OS-specific or complex build steps if not available as wheels.
+# uvloop             # Faster asyncio event loop
+# aiofiles           # Async file I/O
+# aioserial          # Async serial communication 

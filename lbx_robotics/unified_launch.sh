@@ -274,27 +274,15 @@ perform_build() {
     cd "$WORKSPACE_DIR"
     
     # Fix paths for conda environment to find system libraries
+    # This section is now less critical as we are de-emphasizing conda for C++ builds.
+    # However, we keep some basic path setup in case conda is active for Python parts.
     if [ ! -z "$CONDA_PREFIX" ]; then
-        print_info "Detected conda environment. Build will primarily use libraries from conda."
-        # Basic system paths for ROS and essential tools if needed
-        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CONDA_PREFIX/lib/cmake:$CONDA_PREFIX/share:$CMAKE_PREFIX_PATH"
-        export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
-        
-        # Add ROS2 paths for packages like pinocchio if ROS is sourced
-        if [ ! -z "$ROS_DISTRO" ] && [ -d "/opt/ros/$ROS_DISTRO" ]; then
-            print_info "Adding ROS ($ROS_DISTRO) paths to build environment."
-            export CMAKE_PREFIX_PATH="/opt/ros/$ROS_DISTRO/share:/opt/ros/$ROS_DISTRO/lib/cmake:$CMAKE_PREFIX_PATH"
-            export PKG_CONFIG_PATH="/opt/ros/$ROS_DISTRO/lib/pkgconfig:$PKG_CONFIG_PATH"
-            export LD_LIBRARY_PATH="/opt/ros/$ROS_DISTRO/lib:$LD_LIBRARY_PATH"
-        fi
-        
-        # If cmake issues persist with conda's cmake, temporarily use system cmake
-        # This is usually only needed if conda's cmake version has issues with certain find_package modules.
-        # if command -v /usr/bin/cmake &> /dev/null && ! /usr/bin/cmake --version | grep -q "$($CONDA_PREFIX/bin/cmake --version | head -n1 | awk '{print $3}')"; then
-        #     print_warning "Conda CMake and system CMake versions differ. Temporarily prefering system CMake for broader compatibility."
-        #     export PATH="/usr/bin:$PATH"
-        # fi
+        print_warn "Conda environment ($CONDA_DEFAULT_ENV) is active."
+        print_warn "ROS 2 builds are more stable with system libraries. Ensure conda is deactivated or paths are correctly managed."
+        # Prepending conda paths can still be useful for Python scripts in the build
+        export CMAKE_PREFIX_PATH="$CONDA_PREFIX/lib/cmake:$CONDA_PREFIX/share:$CMAKE_PREFIX_PATH"
+        export PKG_CONFIG_PATH="$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
     fi
     
     # Clean only if explicitly requested with --clean-build
@@ -304,46 +292,22 @@ perform_build() {
     fi
     
     # Source ROS2 environment for build
-    print_info "Sourcing ROS2 environment for build..."
+    print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
     source "/opt/ros/$ROS_DISTRO/setup.bash"
     
-    # Build the workspace
-    print_info "Building with: colcon build --symlink-install"
+    # Build the workspace using system-level libraries
+    print_info "Building workspace with colcon build --symlink-install -DCMAKE_BUILD_TYPE=Release..."
     
-    # Find PCRE library location
-    PCRE_LIB=""
-    if [ -f "$CONDA_PREFIX/lib/libpcre.so" ]; then
-        PCRE_LIB="$CONDA_PREFIX/lib/libpcre.so"
-    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ]; then
-        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre.so"
-    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre3.so" ]; then
-        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre3.so"
-    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so.3" ]; then
-        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre.so.3"
-    fi
-    
-    if [ ! -z "$PCRE_LIB" ]; then
-        print_info "Using PCRE library at: $PCRE_LIB"
-    else
-        print_warning "PCRE library not found. Ensure pcre is in your conda environment."
-    fi
-    
-    # Build with Pinocchio directory if found
+    # Basic CMake arguments, relying on system/ROS paths
     CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_PREFIX_PATH=\"/usr/local/lib/cmake:/usr/local/share:/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:$CMAKE_PREFIX_PATH\""
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH"
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH"
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=\"$CONDA_PREFIX;/usr/local;/usr;/opt/ros/$ROS_DISTRO;/opt/openrobots\""
     
-    if [ ! -z "$PCRE_LIB" ]; then
-        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_LIBRARY=\"$PCRE_LIB\""
-        CMAKE_ARGS="$CMAKE_ARGS -DPCRE_INCLUDE_DIR=\"$CONDA_PREFIX/include:/usr/include\""
-    fi
-    
+    # Add hints for system libraries if they were installed to /usr/local
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_PREFIX_PATH=/usr/local;/opt/ros/$ROS_DISTRO"
+    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=/usr/local;/opt/ros/$ROS_DISTRO;/usr"
+
     print_info "Final CMake arguments: $CMAKE_ARGS"
     
-    if eval "colcon build --symlink-install --cmake-args $CMAKE_ARGS" 2>&1; then
+    if colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1; then
         print_success "Build completed successfully"
     else
         print_error "Build failed"

@@ -1,6 +1,0 @@
-[develop]
-script_dir=$base/lib/lbx_vision_camera
-install_layout = deb
-
-[install]
-install_scripts=$base/lib/lbx_vision_camera 

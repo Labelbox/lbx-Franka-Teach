@@ -1,6 +1,0 @@
-[develop]
-script_dir=$base/lib/lbx_launch
-install_layout = deb
-
-[install]
-install_scripts=$base/lib/lbx_launch 

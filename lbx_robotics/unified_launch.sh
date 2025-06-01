@@ -30,7 +30,7 @@ BUILD_PARALLEL_WORKERS=""  # Auto-detect if not specified
 USE_CCACHE="true"
 BUILD_PACKAGES=""  # Specific packages to build
 BUILD_TESTS="false"
-MERGE_INSTALL="true"
+MERGE_INSTALL="false"
 DEV_MODE="false"  # Development mode with symlink-install
 
 # Get the directory of this script
@@ -70,7 +70,6 @@ show_help() {
     echo "  --packages <PKG1,PKG2>    Build only specific packages (comma-separated)"
     echo "  --with-tests              Build and run tests"
     echo "  --no-ccache               Disable ccache (enabled by default)"
-    echo "  --no-merge-install        Disable merge-install optimization"
     echo "  --dev-mode                Enable development mode (symlink-install for Python)"
     echo ""
     echo -e "${BLUE}Robot Options:${NC}"
@@ -219,10 +218,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-ccache)
             USE_CCACHE="false"
-            shift
-            ;;
-        --no-merge-install)
-            MERGE_INSTALL="false"
             shift
             ;;
         --dev-mode)
@@ -396,11 +391,6 @@ perform_build() {
     
     # Add parallel workers
     BUILD_CMD="$BUILD_CMD --parallel-workers $BUILD_PARALLEL_WORKERS"
-    
-    # Add merge-install for faster installation (unless in dev mode)
-    if [ "$MERGE_INSTALL" = "true" ] && [ "$DEV_MODE" != "true" ]; then
-        BUILD_CMD="$BUILD_CMD --merge-install"
-    fi
     
     # Enable symlink-install in dev mode
     if [ "$DEV_MODE" = "true" ]; then

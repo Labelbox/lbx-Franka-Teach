@@ -18,8 +18,8 @@ from typing import Dict, Optional, Any, List, Tuple
 import cv2 # For image encoding
 import sys
 
-from mcap.writer import Writer
-from mcap_ros2.writer import ROS2Writer # Using mcap_ros2.writer for ROS2 specific schemas/types
+from mcap.writer import Writer as BaseMcapWriter
+from mcap_ros2.writer import Writer as McapRos2NativeWriter
 
 from diagnostic_updater import Updater, DiagnosticTask, DiagnosticStatus
 from diagnostic_msgs.msg import KeyValue
@@ -82,9 +82,10 @@ SCHEMA_VR_CONTROLLER_STR = json.dumps({
 
 SCHEMA_COMPRESSED_IMAGE_STR = json.dumps(mcap.WellKnownSchema.foxglove_CompressedImage.json_schema)
 SCHEMA_CAMERA_CALIBRATION_STR = json.dumps(mcap.WellKnownSchema.foxglove_CameraCalibration.json_schema)
-SCHEMA_TF_MESSAGE_STR = json.dumps(mcap.WellKnownSchema.ros2_tf2_msgs_TFMessage.json_schema)
-SCHEMA_STD_STRING_STR = json.dumps(mcap.WellKnownSchema.ros2_std_msgs_String.json_schema)
-SCHEMA_SENSOR_JOINTSTATE_STR = json.dumps(mcap.WellKnownSchema.ros2_sensor_msgs_JointState.json_schema)
+# These will be handled by McapRos2NativeWriter using .msg definitions
+# SCHEMA_TF_MESSAGE_STR = json.dumps(mcap.WellKnownSchema.ros2_tf2_msgs_TFMessage.json_schema)
+# SCHEMA_STD_STRING_STR = json.dumps(mcap.WellKnownSchema.ros2_std_msgs_String.json_schema)
+# SCHEMA_SENSOR_JOINTSTATE_STR = json.dumps(mcap.WellKnownSchema.ros2_sensor_msgs_JointState.json_schema)
 
 class MCAPRecorderNode(Node):
     def __init__(self):
@@ -289,17 +290,26 @@ class MCAPRecorderNode(Node):
         return self.registered_schemas_by_name[schema_name]
 
     def _get_or_register_channel(self, topic: str, schema_name: str, msg_encoding="json") -> int: # Default to json for custom schemas
+        # This method is primarily for channels that use custom JSON serialization.
+        # For standard ROS messages written with McapRos2NativeWriter, channels are handled by write_message().
         if topic not in self.registered_channels_by_topic:
             if not self.mcap_writer: raise Exception("MCAP writer not initialized for channel reg")
+            
             schema_id_to_use = self.registered_schemas_by_name.get(schema_name, 0)
-            if schema_id_to_use == 0: self.get_logger().error(f"Schema '{schema_name}' not pre-registered for topic '{topic}'. MCAP may be invalid.")
+            if schema_id_to_use == 0:
+                 self.get_logger().error(f"Schema '{schema_name}' (for JSON encoding) not pre-registered for topic '{topic}'. MCAP may be invalid.")
+                 # It's critical that schema_name here maps to a JSON schema registered in _get_or_register_schema
+                 # If this channel is for a standard ROS type meant for CDR, this manual registration path shouldn't be hit.
+            
             try:
+                # Use the base writer's register_channel for explicit JSON channel registration
+                # McapRos2NativeWriter inherits from mcap.writer.Writer, so this is valid.
                 channel_id = self.mcap_writer.register_channel(topic=topic, message_encoding=msg_encoding, schema_id=schema_id_to_use)
                 self.registered_channels_by_topic[topic] = channel_id
-                self.get_logger().info(f"Registered channel for topic: {topic} (Schema: {schema_name}, ID: {channel_id})")
+                self.get_logger().info(f"Registered JSON channel for topic: {topic} (Schema: {schema_name}, Encoding: {msg_encoding}, ID: {channel_id})")
                 return channel_id
             except Exception as e:
-                self.get_logger().error(f"Failed to register channel for {topic}: {e}"); raise
+                self.get_logger().error(f"Failed to register JSON channel for {topic}: {e}"); raise
         return self.registered_channels_by_topic[topic]
 
     def _serialize_ros_message_to_custom_json(self, msg: Any, schema_name: str, timestamp_ns: int) -> bytes:
@@ -328,54 +338,63 @@ class MCAPRecorderNode(Node):
                 if item['type'] == 'serialized_mcap_messages' and self.mcap_writer:
                     log_time_ns = item['log_time_ns']
                     for msg_entry in item['messages_to_write']:
-                        topic, data_bytes, schema_name = msg_entry['topic'], msg_entry['data'], msg_entry['schema_name']
+                        topic, ros_msg_object, schema_name_hint = msg_entry['topic'], msg_entry['data'], msg_entry['schema_name']
                         ros_pub_time_ns = msg_entry['publish_time_ns']
                         
-                        # Determine schema and channel based on topic
-                        channel_id = self.registered_channels_by_topic.get(topic)
-                        
-                        if not channel_id:
-                             # Fallback for ROS2 standard messages if using mcap_ros2.writer or if schema can be auto-detected by base writer
-                            if isinstance(data_bytes, (Image, CameraInfo, JointState, PoseStamped, String, TransformStamped)):
-                                # For standard ROS types, the ROS2Writer would handle schema/channel. With base Writer, we need to be explicit.
-                                # This is a simplified path; robust handling requires mapping ROS types to schema names and registering.
-                                self.get_logger().warn(f"Channel for topic '{topic}' not explicitly registered. Attempting default ROS type handling or skipping.")
-                                # If you were using ROS2Writer, it would try to register here.
-                                # With base Writer, we need to register schema and channel manually.
-                                # For now, we'll skip if not pre-registered via _get_or_register_channel in start_new_recording
-                                continue # Skip if channel not ready for base writer
-                            else:
-                                # This is for your custom JSON schemas
-                                if not schema_name: self.get_logger().error(f"No schema name for {topic}"); continue
-                                channel_id = self._get_or_register_channel(topic, schema_name, "json") # msg_encoding is json
-                        
-                        serialized_data = b''
-                        # Handle serialization based on message type / schema
-                        if schema_name in ["labelbox_robotics.RobotState", "labelbox_robotics.Action", "labelbox_robotics.VRController"]:
-                            serialized_data = self._serialize_ros_message_to_custom_json(data_bytes, schema_name, ros_pub_time_ns)
-                        elif isinstance(data_bytes, Image) and "compressed" in topic: # Assuming compressed image topic
-                            if not CV2_AVAILABLE: self.get_logger().warn("OpenCV not available for image compression."); continue
-                            _, buffer = cv2.imencode('.jpg', self.cv_bridge.imgmsg_to_cv2(data_bytes, "bgr8"), [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
-                            img_data_b64 = base64.b64encode(buffer).decode('utf-8')
-                            json_payload = {"timestamp": {"sec": int(ros_pub_time_ns//1e9), "nanosec": int(ros_pub_time_ns%1e9)},
-                                            "frame_id": data_bytes.header.frame_id, "data": img_data_b64, "format": "jpeg"}
-                            serialized_data = json.dumps(json_payload).encode('utf-8')
-                        # Add more handlers for CameraInfo, other ROS standard types for JSON if needed
-                        # Or, if you can get mcap_ros2.writer to work, it handles CDR for std msgs.
-                        else: # Fallback or standard ROS msgs if mcap_writer is ROS2Writer
-                            # This path is problematic with base mcap.Writer as it expects bytes directly.
-                            # ROS2Writer handles ROS2 msg objects directly.
-                            # If using base Writer for ROS messages, you need to serialize to CDR manually.
-                            self.get_logger().warn(f"No custom serialization for {topic} ({type(data_bytes)}), attempting direct write (may fail with base Writer).")
-                            # serialized_data = data_bytes # This will fail for base Writer
-                            continue # Skip for now
+                        # Check if this topic is intended for custom JSON serialization
+                        # This relies on schema_name_hint being one of your custom JSON schema names.
+                        is_custom_json_topic = schema_name_hint in ["labelbox_robotics.RobotState", 
+                                                               "labelbox_robotics.Action", 
+                                                               "labelbox_robotics.VRController", 
+                                                               "foxglove.CompressedImage", 
+                                                               "foxglove.CameraCalibration"]
+                                                               # Add other custom JSON schema names if any
 
-                        if serialized_data and channel_id:
-                            seq = self.message_sequence_counts.get(channel_id, 0)
+                        if is_custom_json_topic:
+                            # Custom JSON serialization path
+                            channel_id = self.registered_channels_by_topic.get(topic)
+                            if not channel_id:
+                                # This implies a custom JSON topic was not pre-registered with _get_or_register_channel
+                                # which should have happened in start_new_recording or _setup_subscribers if specific topics are known.
+                                self.get_logger().error(f"Channel for custom JSON topic '{topic}' (schema: '{schema_name_hint}') not registered. Skipping.")
+                                continue
+                            
+                            serialized_data = b''
+                            if schema_name_hint in ["labelbox_robotics.RobotState", "labelbox_robotics.Action", "labelbox_robotics.VRController"]:
+                                serialized_data = self._serialize_ros_message_to_custom_json(ros_msg_object, schema_name_hint, ros_pub_time_ns)
+                            elif schema_name_hint == "foxglove.CompressedImage" and isinstance(ros_msg_object, Image):
+                                # Assuming ros_msg_object is a sensor_msgs/Image for compressed path
+                                try:
+                                    _, buffer = cv2.imencode('.jpg', self.cv_bridge.imgmsg_to_cv2(ros_msg_object, "bgr8"), [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+                                    img_data_b64 = base64.b64encode(buffer).decode('utf-8')
+                                    json_payload = {"timestamp": {"sec": int(ros_pub_time_ns//1e9), "nanosec": int(ros_pub_time_ns%1e9)},
+                                                    "frame_id": ros_msg_object.header.frame_id, "data": img_data_b64, "format": "jpeg"}
+                                    serialized_data = json.dumps(json_payload).encode('utf-8')
+                                except Exception as e:
+                                    self.get_logger().error(f"Error compressing image for {topic}: {e}"); continue
+                            # Add other custom JSON serializations if needed (e.g. CameraCalibration)
+                            else:
+                                self.get_logger().warn(f"Unhandled custom JSON schema '{schema_name_hint}' for topic '{topic}'. Skipping.")
+                                continue
+                            
+                            if serialized_data:
+                                seq = self.message_sequence_counts.get(channel_id, 0)
+                                try:
+                                    # Use add_message for pre-serialized JSON data
+                                    self.mcap_writer.add_message(channel_id=channel_id, log_time=log_time_ns, data=serialized_data, publish_time=ros_pub_time_ns, sequence=seq)
+                                    self.message_sequence_counts[channel_id] = seq + 1
+                                except Exception as e: self.get_logger().error(f"MCAP JSON write error {topic}: {e}")
+                        
+                        else:
+                            # Standard ROS2 message path (use McapRos2NativeWriter.write_message for CDR)
                             try:
-                                self.mcap_writer.add_message(channel_id=channel_id, log_time=log_time_ns, data=serialized_data, publish_time=ros_pub_time_ns, sequence=seq)
-                                self.message_sequence_counts[channel_id] = seq + 1
-                            except Exception as e: self.get_logger().error(f"MCAP write error {topic}: {e}")
+                                # McapRos2NativeWriter.write_message handles schema and channel registration for ROS types
+                                # It also handles sequence numbers internally per topic.
+                                self.mcap_writer.write_message(topic=topic, message=ros_msg_object, log_time=log_time_ns, publish_time=ros_pub_time_ns)
+                                # self.get_logger().info(f"Wrote ROS msg to {topic} ({type(ros_msg_object).__name__})")
+                            except Exception as e:
+                                self.get_logger().error(f"MCAP ROS2 native write error for topic '{topic}' (type: {type(ros_msg_object).__name__}): {e}")
+
                 self.mcap_write_queue.task_done()
             except Empty: 
                 if self._writer_thread_stop_event.is_set(): break
@@ -395,22 +414,26 @@ class MCAPRecorderNode(Node):
 
         try:
             self.mcap_file_io = open(self.current_mcap_path, "wb")
-            self.mcap_writer = Writer(self.mcap_file_io, chunk_size=self.mcap_chunk_size)
-            self.mcap_writer.start(profile="ros2", library=f"lbx_data_recorder-{self.get_name()}")
+            # Use McapRos2NativeWriter, which handles ROS2 specific message writing (CDR, schema)
+            self.mcap_writer = McapRos2NativeWriter(output=self.mcap_file_io, chunk_size=self.mcap_chunk_size)
+            self.mcap_writer.start() # McapRos2NativeWriter.start() doesn't take profile/library, it calls super().start()
             
-            # Pre-register known custom schemas
+            # Pre-register custom JSON schemas
             self.registered_schemas_by_name.clear(); self.registered_channels_by_topic.clear()
             self._get_or_register_schema("labelbox_robotics.RobotState", SCHEMA_ROBOT_STATE_STR.encode('utf-8'))
             self._get_or_register_schema("labelbox_robotics.Action", SCHEMA_ACTION_STR.encode('utf-8'))
             self._get_or_register_schema("labelbox_robotics.VRController", SCHEMA_VR_CONTROLLER_STR.encode('utf-8'))
             self._get_or_register_schema("foxglove.CompressedImage", SCHEMA_COMPRESSED_IMAGE_STR.encode('utf-8'))
             self._get_or_register_schema("foxglove.CameraCalibration", SCHEMA_CAMERA_CALIBRATION_STR.encode('utf-8'))
-            self._get_or_register_schema("tf2_msgs/TFMessage", SCHEMA_TF_MESSAGE_STR.encode('utf-8'))
-            self._get_or_register_schema("std_msgs/String", SCHEMA_STD_STRING_STR.encode('utf-8'))
-            self._get_or_register_schema("sensor_msgs/JointState", SCHEMA_SENSOR_JOINTSTATE_STR.encode('utf-8'))
+            # Do NOT register JSON schemas for standard ROS types like TFMessage, String, JointState here if McapRos2NativeWriter handles them
+
+            # Register channels for topics that will use custom JSON serialization
+            # Example: If /robot_state_custom_json is a topic meant for custom JSON
+            # self._get_or_register_channel("/robot_state_custom_json", "labelbox_robotics.RobotState", "json")
 
             initial_meta = {"robot_type": self.robot_name, "recording_software": "lbx_data_recorder", 
-                              "start_time_iso": datetime.now().isoformat()}
+                              "start_time_iso": datetime.now().isoformat(),
+                              "ros_distro": os.environ.get("ROS_DISTRO", "unknown")}
             if extra_metadata: initial_meta.update(extra_metadata)
             self.mcap_writer.add_metadata("recording_initial_metadata", initial_meta)
 

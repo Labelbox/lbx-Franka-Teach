@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'recorder_node = lbx_data_recorder.recorder_node:main',
+            'mcap_recorder_node = lbx_data_recorder.mcap_recorder_node:main',
         ],
     },
 ) 

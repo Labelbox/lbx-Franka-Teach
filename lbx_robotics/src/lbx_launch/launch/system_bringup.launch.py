@@ -197,7 +197,7 @@ def generate_launch_description():
                     PathJoinSubstitution([
                         FindPackageShare('lbx_vision_camera'),
                         'launch',
-                        'camera_system.launch.py'
+                        'camera.launch.py'
                     ])
                 ]),
                 launch_arguments={

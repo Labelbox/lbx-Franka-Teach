@@ -28,43 +28,53 @@ echo_info "Starting system-level setup for lbx_robotics with ROS 2 Humble..."
 echo_step "Installing system build tools and essential C++ libraries..."
 sudo apt update
 
-# Ensure a recent CMake (>=3.22) is installed and used
-echo_info "Checking and updating CMake version if necessary..."
-# Remove any existing cmake to ensure a clean slate
-sudo apt-get remove --purge -y cmake cmake-data cmake-qt-gui 2>/dev/null || echo_info "No old CMake to purge or purge failed (continuing)."
+# Install CMake 3.22.1 (always remove existing and install fresh)
+echo_step "Installing CMake 3.22.1..."
 
-# Install CMake 3.27 specifically (stable version for Ubuntu 22.04)
-echo_info "Installing CMake 3.27..."
-# First try to install from apt if available
-if apt-cache show cmake=3.27* &>/dev/null; then
-    sudo apt install -y cmake=3.27*
-else
-    # If not available via apt, build from source
-    echo_info "CMake 3.27 not available via apt, building from source..."
-    TEMP_DIR_CMAKE=$(mktemp -d)
-    (
-        cd "$TEMP_DIR_CMAKE"
-        wget https://github.com/Kitware/CMake/releases/download/v3.27.9/cmake-3.27.9.tar.gz
-        tar -xzf cmake-3.27.9.tar.gz
-        cd cmake-3.27.9
-        ./bootstrap --prefix=/usr/local
-        make -j$(nproc)
-        sudo make install
-        sudo update-alternatives --install /usr/bin/cmake cmake /usr/local/bin/cmake 100
-    )
-    rm -rf "$TEMP_DIR_CMAKE"
-fi
+# Remove any existing CMake installation
+echo_info "Removing any existing CMake installation..."
 
-# Verify CMake version
-CMAKE_EXE=$(which cmake)
-if [ -z "$CMAKE_EXE" ]; then CMAKE_EXE="/usr/bin/cmake"; fi # Fallback if not in PATH immediately
+# Remove Kitware repository if it exists
+sudo rm -f /etc/apt/sources.list.d/kitware.list
+sudo rm -f /usr/share/keyrings/kitware-archive-keyring.gpg
 
-if $CMAKE_EXE --version | head -n1 | grep -q "3\.2[2-9]\|3\.[3-9][0-9]"; then
-    echo_success "CMake version $($CMAKE_EXE --version | head -n1) is installed and sufficient."
-else
-    echo_error "Failed to install CMake >= 3.22. Current version: $($CMAKE_EXE --version | head -n1 || echo 'Not Found'). Build may fail."
-    # exit 1 # Optionally exit
-fi
+# Remove all CMake packages
+sudo apt-get remove --purge -y cmake cmake-data cmake-qt-gui cmake-curses-gui 2>/dev/null || true
+sudo apt-get autoremove -y
+
+# Remove CMake from /usr/local if it exists
+sudo rm -f /usr/local/bin/cmake /usr/local/bin/ctest /usr/local/bin/cpack
+sudo rm -rf /usr/local/share/cmake* /usr/local/doc/cmake*
+
+# Update package list
+sudo apt update
+
+# Build and install CMake 3.22.1 from source
+echo_info "Building CMake 3.22.1 from source..."
+TEMP_DIR_CMAKE=$(mktemp -d)
+(
+    cd "$TEMP_DIR_CMAKE"
+    # Install build dependencies
+    sudo apt install -y build-essential libssl-dev
+    
+    # Download and extract
+    wget https://github.com/Kitware/CMake/releases/download/v3.22.1/cmake-3.22.1.tar.gz
+    tar -xzf cmake-3.22.1.tar.gz
+    cd cmake-3.22.1
+    
+    # Build and install
+    ./bootstrap --prefix=/usr --parallel=$(nproc)
+    make -j$(nproc)
+    sudo make install
+    
+    # Update library cache
+    sudo ldconfig
+)
+rm -rf "$TEMP_DIR_CMAKE"
+
+# Verify installation
+CMAKE_VERSION=$(cmake --version | head -n1 | awk '{print $3}')
+echo_success "CMake $CMAKE_VERSION installed successfully"
 
 REQUIRED_PKGS=(
     build-essential git pkg-config libboost-all-dev 

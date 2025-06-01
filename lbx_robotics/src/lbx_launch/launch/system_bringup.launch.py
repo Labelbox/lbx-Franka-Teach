@@ -34,10 +34,16 @@ def generate_launch_description():
         description='IP address of the Franka robot'
     )
     
-    declare_use_sim = DeclareLaunchArgument(
-        'use_sim',
+    declare_use_fake_hardware = DeclareLaunchArgument(
+        'use_fake_hardware',
         default_value='false',
         description='Use simulated robot instead of real hardware'
+    )
+    
+    declare_enable_rviz = DeclareLaunchArgument(
+        'enable_rviz',
+        default_value='true',
+        description='Enable RViz visualization'
     )
     
     declare_enable_recording = DeclareLaunchArgument(
@@ -64,16 +70,28 @@ def generate_launch_description():
         description='IP address of Quest device (empty for USB connection)'
     )
     
-    declare_use_left_controller = DeclareLaunchArgument(
-        'use_left_controller',
-        default_value='false',
-        description='Use left controller instead of right'
+    declare_use_right_controller = DeclareLaunchArgument(
+        'use_right_controller',
+        default_value='true',
+        description='Use right controller (false for left)'
     )
     
-    declare_performance_mode = DeclareLaunchArgument(
-        'performance_mode',
+    declare_hot_reload = DeclareLaunchArgument(
+        'hot_reload',
         default_value='false',
-        description='Enable performance mode for tighter tracking'
+        description='Enable hot reload for development'
+    )
+    
+    declare_vr_mode = DeclareLaunchArgument(
+        'vr_mode',
+        default_value='usb',
+        description='VR connection mode (usb or network)'
+    )
+    
+    declare_log_level = DeclareLaunchArgument(
+        'log_level',
+        default_value='INFO',
+        description='Logging level (DEBUG, INFO, WARN, ERROR)'
     )
     
     # Config file for system_manager_node
@@ -96,16 +114,18 @@ def generate_launch_description():
     
     # MoveIt launch
     moveit_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
+        PythonLaunchDescriptionSource(
             PathJoinSubstitution([
                 FindPackageShare('lbx_franka_moveit'),
                 'launch',
-                'franka_moveit.launch.py'
+                'moveit_server.launch.py'
             ])
-        ]),
+        ),
         launch_arguments={
             'robot_ip': LaunchConfiguration('robot_ip'),
-            'use_sim': LaunchConfiguration('use_sim'),
+            'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+            'enable_rviz': LaunchConfiguration('enable_rviz'),
+            'load_gripper': 'true',  # Always load gripper for VR control
         }.items()
     )
     
@@ -118,7 +138,7 @@ def generate_launch_description():
                 executable='oculus_node',
                 name='oculus_reader',
                 parameters=[{
-                    'use_network': PythonExpression(["'", LaunchConfiguration('vr_ip'), "' != ''"]),
+                    'use_network': PythonExpression(["'", LaunchConfiguration('vr_mode'), "' == 'network'"]),
                     'ip_address': LaunchConfiguration('vr_ip'),
                     'poll_rate_hz': 60.0,
                     'publish_rate_hz': 60.0,
@@ -136,14 +156,18 @@ def generate_launch_description():
         name='system_manager',
         parameters=[{
             'config_file': franka_control_config,
-            'use_left_controller': LaunchConfiguration('use_left_controller'),
-            'performance_mode': LaunchConfiguration('performance_mode'),
+            'use_right_controller': LaunchConfiguration('use_right_controller'),
+            'hot_reload': LaunchConfiguration('hot_reload'),
             'enable_recording': LaunchConfiguration('enable_recording'),
+            'log_level': LaunchConfiguration('log_level'),
         }],
         output='screen',
         remappings=[
             # Remap VR inputs to match oculus_node outputs
-            ('/vr/controller_pose', '/vr/right_controller_pose' if not LaunchConfiguration('use_left_controller') else '/vr/left_controller_pose'),
+            ('/vr/controller_pose', PythonExpression([
+                "'/vr/right_controller_pose' if '", LaunchConfiguration('use_right_controller'), 
+                "' == 'true' else '/vr/left_controller_pose'"
+            ])),
             ('/vr/controller_buttons', '/vr/buttons'),
         ]
     )
@@ -190,7 +214,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz',
         arguments=['-d', rviz_config_path],
-        condition=IfCondition(PythonExpression(["not ", LaunchConfiguration('use_sim')]))
+        condition=IfCondition(LaunchConfiguration('enable_rviz'))
     )
     
     # Status echo nodes for debugging
@@ -205,13 +229,16 @@ def generate_launch_description():
     return LaunchDescription([
         # Declare arguments
         declare_robot_ip,
-        declare_use_sim,
+        declare_use_fake_hardware,
+        declare_enable_rviz,
         declare_enable_recording,
         declare_enable_cameras,
         declare_camera_config,
         declare_vr_ip,
-        declare_use_left_controller,
-        declare_performance_mode,
+        declare_use_right_controller,
+        declare_hot_reload,
+        declare_vr_mode,
+        declare_log_level,
         
         # Launch components
         moveit_launch,

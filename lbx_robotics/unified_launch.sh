@@ -23,6 +23,7 @@ HOT_RELOAD="false"
 LOG_LEVEL="INFO"
 PERFORM_BUILD="false"
 CLEAN_BUILD="false"
+SKIP_BUILD="false"
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
@@ -56,6 +57,7 @@ show_help() {
     echo -e "${BLUE}Build Options:${NC}"
     echo "  --build                   Perform colcon build"
     echo "  --clean-build             Clean workspace then build"
+    echo "  --no-build                Skip build step"
     echo ""
     echo -e "${BLUE}Robot Options:${NC}"
     echo "  --robot-ip <IP>           Robot IP address (default: $ROBOT_IP)"
@@ -91,6 +93,7 @@ show_help() {
     echo "  $0 --clean-build --fake-hardware    # Clean build for testing"
     echo "  $0 --cameras --no-recording          # Run with cameras, no recording"
     echo "  $0 --network-vr 192.168.1.50        # Network VR mode"
+    echo "  $0 --no-build                        # Skip build, just run"
     echo ""
 }
 
@@ -104,6 +107,10 @@ while [[ $# -gt 0 ]]; do
         --clean-build)
             PERFORM_BUILD="true"
             CLEAN_BUILD="true"
+            shift
+            ;;
+        --no-build)
+            SKIP_BUILD="true"
             shift
             ;;
         --robot-ip)
@@ -184,6 +191,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate conflicting options
+if [ "$PERFORM_BUILD" = "true" ] && [ "$SKIP_BUILD" = "true" ]; then
+    print_error "Conflicting options: --build/--clean-build and --no-build cannot be used together"
+    show_help
+    exit 1
+fi
 
 # Function to check ROS2 environment
 check_ros2_environment() {
@@ -308,9 +322,10 @@ perform_build() {
     print_info "Final CMake arguments: $CMAKE_ARGS"
     
     # Use colcon build with proper arguments
-    # Note: --symlink-install allows for faster development by symlinking Python files
-    # The --editable option issue has been fixed in colcon-core >= 0.8.3
-    colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1 | tee build.log
+    # Note: We don't use --symlink-install to avoid compatibility issues with older
+    # colcon-python-setup-py versions. This means Python files need rebuilding after
+    # changes, but the build process is simpler and more reliable across systems.
+    colcon build --cmake-args $CMAKE_ARGS 2>&1 | tee build.log
     BUILD_RESULT=${PIPESTATUS[0]}  # Get colcon's exit code, not tee's
     
     if [ $BUILD_RESULT -eq 0 ]; then
@@ -461,7 +476,14 @@ echo -e "${CYAN}═════════════════════�
 # Setup steps
 if ! check_ros2_environment; then exit 1; fi
 if ! kill_existing_processes; then exit 1; fi
-if ! perform_build; then exit 1; fi
+
+# Only build if not skipping build
+if [ "$SKIP_BUILD" != "true" ]; then
+    if ! perform_build; then exit 1; fi
+else
+    print_info "Skipping build step (--no-build specified)"
+fi
+
 if ! source_workspace; then exit 1; fi
 if ! check_robot_connectivity; then
     print_warning "Continuing despite connectivity issues..."

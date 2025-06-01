@@ -29,6 +29,7 @@ accelerate
 
 # ROS2 dependencies (install via rosdep/apt for system packages)
 # These are Python packages that can be installed via pip
+empy==3.3.4  # Required for ROS2 Humble compatibility
 
 # Performance optimizations
 uvloop  # Faster event loop

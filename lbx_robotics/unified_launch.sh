@@ -46,6 +46,41 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to fix CMake version issues in dependencies
+fix_cmake_versions() {
+    print_info "Fixing CMake version requirements in dependencies..."
+    
+    # Find all CMakeLists.txt files in src directory
+    find "$WORKSPACE_DIR/src" -name "CMakeLists.txt" -type f | while read -r cmake_file; do
+        # Check if file contains old cmake_minimum_required
+        if grep -q "cmake_minimum_required.*VERSION.*[0-2]\." "$cmake_file" || \
+           grep -q "cmake_minimum_required.*VERSION.*3\.[0-9])" "$cmake_file"; then
+            
+            # Get the relative path for display
+            rel_path=$(realpath --relative-to="$WORKSPACE_DIR" "$cmake_file")
+            
+            # Backup original file
+            cp "$cmake_file" "${cmake_file}.bak"
+            
+            # Update cmake_minimum_required to version 3.11
+            sed -i.tmp 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+            
+            # Remove temporary file created by sed on macOS
+            rm -f "${cmake_file}.tmp"
+            
+            if diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null; then
+                # No changes made, remove backup
+                rm "${cmake_file}.bak"
+            else
+                print_success "  ✓ Updated CMake version in $rel_path"
+                rm "${cmake_file}.bak"
+            fi
+        fi
+    done
+    
+    print_success "CMake version fixes completed"
+}
+
 # Help function
 show_help() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
@@ -202,6 +237,14 @@ fi
 # Function to check ROS2 environment
 check_ros2_environment() {
     print_info "Checking ROS2 environment..."
+    
+    # Check if we're on macOS
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        print_warning "Running on macOS - ROS2 is not natively supported"
+        print_info "Development mode: Will prepare workspace for Ubuntu deployment"
+        return 0
+    fi
+    
     if ! command -v ros2 &> /dev/null; then
         print_error "ROS2 not found. Please source your ROS2 environment."
         echo "Example: source /opt/ros/humble/setup.bash"
@@ -287,6 +330,9 @@ perform_build() {
     print_info "Performing build..."
     cd "$WORKSPACE_DIR"
     
+    # Fix CMake versions before building
+    fix_cmake_versions
+    
     # Check if colcon is available
     if ! command -v colcon &> /dev/null; then
         print_error "colcon is not installed or not in PATH."
@@ -305,9 +351,11 @@ perform_build() {
         rm -rf build/ install/ log/ 2>/dev/null || true
     fi
     
-    # Source ROS2 environment for build
-    print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
-    source "/opt/ros/$ROS_DISTRO/setup.bash"
+    # Source ROS2 environment for build (only on Linux)
+    if [[ "$OSTYPE" != "darwin"* ]]; then
+        print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
+        source "/opt/ros/$ROS_DISTRO/setup.bash"
+    fi
     
     # Build the workspace using system-level libraries
     print_info "Building workspace with colcon build..."

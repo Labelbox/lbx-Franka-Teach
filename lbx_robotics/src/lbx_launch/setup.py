@@ -4,6 +4,7 @@ from glob import glob
 
 package_name = 'lbx_launch'
 
+# Metadata is primarily in pyproject.toml
 setup(
     name=package_name,
     packages=[package_name],
@@ -16,5 +17,6 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.launch.xml'))), # If you have XML launch files
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))), # If you have config files
     ],
+    install_requires=['setuptools'], # Explicitly list setuptools here too
     zip_safe=True
 ) 

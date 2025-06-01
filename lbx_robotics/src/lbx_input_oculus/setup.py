@@ -16,5 +16,6 @@ setup(
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
         (os.path.join('share', package_name, 'oculus_reader', 'APK'), glob(os.path.join('lbx_input_oculus', 'oculus_reader', 'APK', '*.apk'))),
     ],
+    install_requires=['setuptools'],
     zip_safe=True
 ) 

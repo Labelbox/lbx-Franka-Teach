@@ -19,6 +19,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
     ],
+    install_requires=['setuptools'], # Explicitly list setuptools here too
     zip_safe=True # Standard option
     # No install_requires, entry_points, license, description, etc. - moved to pyproject.toml
     # tests_require can be moved to [project.optional-dependencies] in pyproject.toml

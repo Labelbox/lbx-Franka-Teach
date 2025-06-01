@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+backend-path = ["."]
+
+[project]
+name = "lbx_vision_camera"
+version = "0.0.1"
+# Add other project metadata here if desired, like authors, description, etc.
+# readme = "README.md"
+# license = {text = "TODO: License declaration"}
+# classifiers = [
+#     "Programming Language :: Python :: 3",
+#     # Add other classifiers
+# ]
+# dependencies = [
+#    "rclpy",
+#    "sensor_msgs", 
+#    # ... list runtime dependencies here, matching install_requires in setup.py
+# ] 

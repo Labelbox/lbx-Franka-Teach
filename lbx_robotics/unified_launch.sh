@@ -299,13 +299,32 @@ perform_build() {
     
     # Build the workspace
     print_info "Building with: colcon build --symlink-install"
+    
+    # Find PCRE library location
+    PCRE_LIB=""
+    if [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ]; then
+        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre.so"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre3.so" ]; then
+        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre3.so"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so.3" ]; then
+        PCRE_LIB="/usr/lib/x86_64-linux-gnu/libpcre.so.3"
+    fi
+    
+    if [ ! -z "$PCRE_LIB" ]; then
+        print_info "Found PCRE library at: $PCRE_LIB"
+    else
+        print_warning "PCRE library not found in standard locations"
+    fi
+    
     if colcon build --symlink-install --cmake-args \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH" \
         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local" 2>&1; then
+        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local" \
+        -DPCRE_LIBRARY="$PCRE_LIB" \
+        -DPCRE_INCLUDE_DIR="/usr/include" 2>&1; then
         print_success "Build completed successfully"
     else
         print_error "Build failed"

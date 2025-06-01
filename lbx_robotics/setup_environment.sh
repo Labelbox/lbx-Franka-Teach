@@ -148,6 +148,12 @@ echo_info "Installing Poco C++ libraries..."
 # First install PCRE which is a dependency of Poco
 if sudo apt install -y libpcre3 libpcre3-dev; then
     echo_success "PCRE libraries installed successfully."
+    
+    # Create symlink if needed for CMake to find it
+    if [ ! -f "/usr/lib/x86_64-linux-gnu/libpcre.so" ] && [ -f "/usr/lib/x86_64-linux-gnu/libpcre.so.3" ]; then
+        echo_info "Creating PCRE symlink for CMake compatibility..."
+        sudo ln -sf /usr/lib/x86_64-linux-gnu/libpcre.so.3 /usr/lib/x86_64-linux-gnu/libpcre.so
+    fi
 else
     echo_warn "Failed to install PCRE libraries via apt."
     # Try to install in conda environment

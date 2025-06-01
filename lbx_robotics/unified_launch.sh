@@ -46,89 +46,6 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Function to fix CMake version issues in dependencies
-fix_cmake_versions() {
-    print_info "Fixing CMake version requirements in dependencies..."
-    
-    # Find all CMakeLists.txt and .in template files in src directory
-    find "$WORKSPACE_DIR/src" \( -name "CMakeLists.txt" -o -name "*.cmake" -o -name "*.cmake.in" -o -name "CMakeLists.txt.in" \) -type f 2>/dev/null | while read -r cmake_file; do
-        # Check if file contains old cmake_minimum_required
-        if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
-            
-            # Get the relative path for display
-            rel_path="${cmake_file#$WORKSPACE_DIR/}"
-            
-            # Create backup
-            cp "$cmake_file" "${cmake_file}.bak"
-            
-            # Update cmake_minimum_required to version 3.11
-            # Use perl for better cross-platform compatibility
-            if command -v perl &> /dev/null; then
-                perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
-            elif [[ "$OSTYPE" == "darwin"* ]]; then
-                # macOS sed with backup
-                sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-            else
-                # Linux sed
-                sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-            fi
-            
-            # Check if changes were made
-            if ! diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null 2>&1; then
-                print_success "  ✓ Updated CMake version in $rel_path"
-            fi
-            
-            # Clean up backup
-            rm -f "${cmake_file}.bak"
-        fi
-    done
-    
-    # Also check for any nested CMakeLists.txt files in subdirectories like 'common'
-    # This is specifically for libfranka which has issues with submodules
-    if [ -d "$WORKSPACE_DIR/src/libfranka" ]; then
-        print_info "Checking libfranka submodules..."
-        
-        # Ensure submodules are initialized
-        (cd "$WORKSPACE_DIR/src/libfranka" && git submodule update --init --recursive 2>/dev/null || true)
-        
-        # Fix common/CMakeLists.txt specifically
-        if [ -f "$WORKSPACE_DIR/src/libfranka/common/CMakeLists.txt" ]; then
-            cmake_file="$WORKSPACE_DIR/src/libfranka/common/CMakeLists.txt"
-            if grep -E "cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
-                print_info "  Fixing libfranka/common/CMakeLists.txt..."
-                if command -v perl &> /dev/null; then
-                    perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
-                elif [[ "$OSTYPE" == "darwin"* ]]; then
-                    sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-                else
-                    sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-                fi
-                print_success "  ✓ Fixed libfranka/common/CMakeLists.txt"
-            fi
-        fi
-        
-        # Also fix any other problematic files in build directory if they were already generated
-        if [ -d "$WORKSPACE_DIR/build" ]; then
-            print_info "  Checking for generated CMake files in build directory..."
-            find "$WORKSPACE_DIR/build" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
-                if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
-                    if command -v perl &> /dev/null; then
-                        perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
-                    elif [[ "$OSTYPE" == "darwin"* ]]; then
-                        sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-                    else
-                        sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-                    fi
-                    rel_path="${cmake_file#$WORKSPACE_DIR/}"
-                    print_success "  ✓ Fixed generated file: $rel_path"
-                fi
-            done
-        fi
-    fi
-    
-    print_success "CMake version fixes completed"
-}
-
 # Help function
 show_help() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
@@ -285,14 +202,6 @@ fi
 # Function to check ROS2 environment
 check_ros2_environment() {
     print_info "Checking ROS2 environment..."
-    
-    # Check if we're on macOS
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        print_warning "Running on macOS - ROS2 is not natively supported"
-        print_info "Development mode: Will prepare workspace for Ubuntu deployment"
-        return 0
-    fi
-    
     if ! command -v ros2 &> /dev/null; then
         print_error "ROS2 not found. Please source your ROS2 environment."
         echo "Example: source /opt/ros/humble/setup.bash"
@@ -378,9 +287,6 @@ perform_build() {
     print_info "Performing build..."
     cd "$WORKSPACE_DIR"
     
-    # Fix CMake versions before building
-    fix_cmake_versions
-    
     # Check if colcon is available
     if ! command -v colcon &> /dev/null; then
         print_error "colcon is not installed or not in PATH."
@@ -399,11 +305,9 @@ perform_build() {
         rm -rf build/ install/ log/ 2>/dev/null || true
     fi
     
-    # Source ROS2 environment for build (only on Linux)
-    if [[ "$OSTYPE" != "darwin"* ]]; then
-        print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
-        source "/opt/ros/$ROS_DISTRO/setup.bash"
-    fi
+    # Source ROS2 environment for build
+    print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
+    source "/opt/ros/$ROS_DISTRO/setup.bash"
     
     # Build the workspace using system-level libraries
     print_info "Building workspace with colcon build..."

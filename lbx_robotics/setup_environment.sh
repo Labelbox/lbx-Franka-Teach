@@ -24,22 +24,6 @@ echo_step() { echo -e "${CYAN}${BOLD}STEP:${NC}${CYAN} $1${NC}"; }
 # --- Main Setup --- 
 echo_info "Starting system-level setup for lbx_robotics with ROS 2 Humble..."
 
-# 0. Ensure no Conda environment is active
-echo_step "Ensuring no Conda environment is active..."
-if [ ! -z "$CONDA_DEFAULT_ENV" ] || [ ! -z "$CONDA_PREFIX" ]; then
-    echo_warn "A Conda environment appears to be active ($CONDA_DEFAULT_ENV)."
-    echo_warn "This script will proceed with system-level installations."
-    echo_warn "It is STRONGLY recommended to run 'conda deactivate' until no environment is active before proceeding."
-    read -p "Do you want to continue? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo_error "Setup aborted by user due to active Conda environment."
-        exit 1
-    fi
-else
-    echo_success "No Conda environment active. Proceeding with system setup."
-fi
-
 # 1. Install System Build Tools & Essential Libraries
 echo_step "Installing system build tools and essential C++ libraries..."
 sudo apt update
@@ -240,9 +224,8 @@ echo_success " System-level environment setup for lbx_robotics complete!  "
 echo_success "--------------------------------------------------------------"
 echo ""
 echo_info "To build and run the system:"
-echo -e "  1. ${CYAN}Ensure no Conda environment is active.${NC}"
-echo -e "  2. ${CYAN}Open a new terminal or re-source your .bashrc (if ROS setup was added).${NC}"
-echo -e "  3. ${CYAN}Source ROS 2 Humble: source /opt/ros/humble/setup.bash${NC}"
-echo -e "  4. ${CYAN}Navigate to workspace: cd $SCRIPT_DIR${NC}"
-echo -e "  5. ${CYAN}Build: ./unified_launch.sh --clean-build${NC} (this will use system libraries)"
-echo -e "  6. ${CYAN}Source built workspace: source install/setup.bash${NC}" 
+echo -e "  1. ${CYAN}Open a new terminal or re-source your .bashrc (if ROS setup was added).${NC}"
+echo -e "  2. ${CYAN}Source ROS 2 Humble: source /opt/ros/humble/setup.bash${NC}"
+echo -e "  3. ${CYAN}Navigate to workspace: cd $SCRIPT_DIR${NC}"
+echo -e "  4. ${CYAN}Build: ./unified_launch.sh --clean-build${NC} (this will use system libraries)"
+echo -e "  5. ${CYAN}Source built workspace: source install/setup.bash${NC}" 

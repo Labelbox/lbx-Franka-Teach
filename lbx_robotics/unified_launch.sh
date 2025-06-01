@@ -273,16 +273,16 @@ perform_build() {
     print_info "Performing build..."
     cd "$WORKSPACE_DIR"
     
-    # Fix paths for conda environment to find system libraries
-    # This section is now less critical as we are de-emphasizing conda for C++ builds.
-    # However, we keep some basic path setup in case conda is active for Python parts.
-    if [ ! -z "$CONDA_PREFIX" ]; then
-        print_warning "Conda environment ($CONDA_DEFAULT_ENV) is active."
-        print_warning "ROS 2 builds are more stable with system libraries. Ensure conda is deactivated or paths are correctly managed."
-        # Prepending conda paths can still be useful for Python scripts in the build
-        export CMAKE_PREFIX_PATH="$CONDA_PREFIX/lib/cmake:$CONDA_PREFIX/share:$CMAKE_PREFIX_PATH"
-        export PKG_CONFIG_PATH="$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+    # Check if colcon is available
+    if ! command -v colcon &> /dev/null; then
+        print_error "colcon is not installed or not in PATH."
+        print_info "Please run the setup script first:"
+        print_info "  cd $WORKSPACE_DIR"
+        print_info "  ./setup_environment.sh"
+        print_info ""
+        print_info "If colcon was installed via pip, ensure ~/.local/bin is in your PATH:"
+        print_info "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+        return 1
     fi
     
     # Clean only if explicitly requested with --clean-build
@@ -310,7 +310,10 @@ perform_build() {
     # Use colcon build with proper arguments
     # Note: --symlink-install allows for faster development by symlinking Python files
     # The --editable option issue has been fixed in colcon-core >= 0.8.3
-    if colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1 | tee build.log; then
+    colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1 | tee build.log
+    BUILD_RESULT=${PIPESTATUS[0]}  # Get colcon's exit code, not tee's
+    
+    if [ $BUILD_RESULT -eq 0 ]; then
         print_success "Build completed successfully"
         # Check for any build warnings
         if grep -q "warning:" build.log; then

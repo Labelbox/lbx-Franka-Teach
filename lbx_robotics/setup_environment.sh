@@ -43,24 +43,48 @@ fi
 # 1. Install System Build Tools & Essential Libraries
 echo_step "Installing system build tools and essential C++ libraries..."
 sudo apt update
+
+# Ensure a recent CMake (>=3.22) is installed and used
+echo_info "Checking and updating CMake version if necessary..."
+# Try to remove any existing cmake to ensure a clean slate for a newer version
+sudo apt-get remove --purge -y cmake cmake-data 2>/dev/null || echo_info "No old CMake to purge or purge failed (continuing)."
+# Add Kitware PPA for newer CMake versions
+sudo apt install -y software-properties-common lsb-release wget
+wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
+sudo apt update
+sudo apt install --reinstall --no-install-recommends -y cmake
+
+if command -v cmake && cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
+    echo_success "CMake version $(cmake --version | head -n1) is installed and sufficient."
+else
+    echo_error "Failed to install CMake >= 3.22. Current version: $(cmake --version | head -n1 || echo 'Not Found'). Pinocchio build may fail. Please install CMake 3.22+ manually."
+    # exit 1 # Optionally exit if CMake is critical and couldn't be updated
+fi
+
 REQUIRED_PKGS=(
-    build-essential cmake git pkg-config libboost-all-dev 
+    build-essential git pkg-config libboost-all-dev 
     libpcre3 libpcre3-dev libpoco-dev libeigen3-dev libssl-dev libcurl4-openssl-dev 
     libusb-1.0-0-dev libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev
 )
 FAILED_PKGS=()
 for pkg in "${REQUIRED_PKGS[@]}"; do
-    echo_info "Installing $pkg..."
-    if ! sudo apt install -y "$pkg"; then
-        echo_warn "Failed to install $pkg via apt."
-        FAILED_PKGS+=("$pkg")
+    echo_info "Installing $pkg (if not already covered by build-essential/cmake)..."
+    if ! dpkg -l "$pkg" > /dev/null 2>&1 || ! sudo apt install -y "$pkg"; then
+        # Check if already installed (especially for build-essential components)
+        if ! dpkg -l "$pkg" > /dev/null 2>&1; then 
+            echo_warn "Failed to install $pkg via apt."
+            FAILED_PKGS+=("$pkg")
+        else
+            echo_info "$pkg is already installed."
+        fi
     fi
 done
 if [ ${#FAILED_PKGS[@]} -ne 0 ]; then
     echo_error "Failed to install the following essential system packages: ${FAILED_PKGS[*]}. Aborting."
     exit 1
 fi
-echo_success "Essential system libraries and build tools installed."
+echo_success "Essential system libraries and build tools checked/installed."
 
 # 2. Install Pinocchio (from source, as it's often problematic with apt versions)
 echo_step "Installing Pinocchio from source (v2.6.20)..."
@@ -70,26 +94,15 @@ if ! dpkg -l | grep -q libpinocchio-dev || ! pkg-config --exists pinocchio 2>/de
     (
         cd "$TEMP_DIR_PINOCCHIO"
         sudo apt install -y liburdfdom-dev libconsole-bridge-dev libassimp-dev liboctomap-dev # Pinocchio deps
-        # Ensure a recent enough CMake is used for Pinocchio
-        if ! command -v cmake || ! cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
-            echo_info "System CMake is older than 3.22 or not found. Installing a recent CMake..."
-            sudo apt purge -y cmake # Remove old version first
-            sudo apt install -y cmake # Try to get a recent one from default repos
-            # If still not >= 3.22, could add logic to download/install specific version here
-            if ! command -v cmake || ! cmake --version | head -n1 | awk '{print $3}' | awk -F. '{exit !($1 > 3 || ($1 == 3 && $2 >= 22))}'; then
-                echo_error "Failed to get CMake >= 3.22. Pinocchio build might fail."
-            else
-                 echo_success "CMake version $(cmake --version | head -n1) is sufficient."
-            fi
-        else
-            echo_success "System CMake version $(cmake --version | head -n1) is sufficient for Pinocchio."
-        fi
+        
+        echo_info "Using CMake: $(which cmake) $(cmake --version | head -n1)"
 
         git clone --recursive https://github.com/stack-of-tasks/pinocchio.git
         cd pinocchio
         git checkout v2.6.20
         mkdir build && cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_COLLISION_SUPPORT=ON -DCMAKE_CXX_STANDARD=14
+        # Explicitly use the cmake in PATH
+        $(which cmake) .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_PYTHON_INTERFACE=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_COLLISION_SUPPORT=ON -DCMAKE_CXX_STANDARD=14
         make -j$(nproc)
         sudo make install
         sudo ldconfig

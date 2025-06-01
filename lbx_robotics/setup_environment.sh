@@ -134,13 +134,26 @@ fi
 source "/opt/ros/humble/setup.bash"
 echo_success "ROS 2 Humble sourced."
 
-# 4. Install Additional ROS 2 Tools & Control Packages
+# 4. Install Additional ROS 2 Tools & Control Packages - Updated to ensure latest colcon
 echo_step "Installing additional ROS 2 tools and control packages..."
-sudo apt install -y python3-vcstool python3-rosdep python3-colcon-common-extensions \
+
+# First, remove any existing colcon packages that might be outdated
+echo_info "Removing potentially outdated colcon packages..."
+sudo apt remove -y python3-colcon-* 2>/dev/null || true
+
+# Install ROS 2 packages without colcon
+sudo apt install -y python3-vcstool python3-rosdep \
     ros-humble-ros2-control ros-humble-ros2-controllers ros-humble-gripper-controllers \
     ros-humble-joint-state-broadcaster ros-humble-joint-trajectory-controller ros-humble-xacro \
     ros-humble-gazebo-ros ros-humble-gazebo-ros-pkgs ros-humble-gazebo-msgs ros-humble-gazebo-plugins
-echo_success "Additional ROS 2 tools and control packages installed."
+
+# Install latest colcon through pip to ensure we get the version that fixes the --editable issue
+echo_info "Installing latest colcon packages through pip..."
+sudo apt install -y python3-pip # Ensure pip is available
+python3 -m pip install --upgrade pip setuptools wheel
+
+# Install colcon packages from pip (will be installed from requirements.txt)
+echo_success "Additional ROS 2 tools and control packages installed (colcon will be installed via pip)."
 
 # 5. Install Pre-built Franka ROS 2 Packages (if available, to save build time)
 echo_step "Attempting to install pre-built Franka ROS 2 packages..."

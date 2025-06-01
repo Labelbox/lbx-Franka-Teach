@@ -277,8 +277,8 @@ perform_build() {
     # This section is now less critical as we are de-emphasizing conda for C++ builds.
     # However, we keep some basic path setup in case conda is active for Python parts.
     if [ ! -z "$CONDA_PREFIX" ]; then
-        print_warn "Conda environment ($CONDA_DEFAULT_ENV) is active."
-        print_warn "ROS 2 builds are more stable with system libraries. Ensure conda is deactivated or paths are correctly managed."
+        print_warning "Conda environment ($CONDA_DEFAULT_ENV) is active."
+        print_warning "ROS 2 builds are more stable with system libraries. Ensure conda is deactivated or paths are correctly managed."
         # Prepending conda paths can still be useful for Python scripts in the build
         export CMAKE_PREFIX_PATH="$CONDA_PREFIX/lib/cmake:$CONDA_PREFIX/share:$CMAKE_PREFIX_PATH"
         export PKG_CONFIG_PATH="$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
@@ -296,7 +296,7 @@ perform_build() {
     source "/opt/ros/$ROS_DISTRO/setup.bash"
     
     # Build the workspace using system-level libraries
-    print_info "Building workspace with colcon build --symlink-install -DCMAKE_BUILD_TYPE=Release..."
+    print_info "Building workspace with colcon build..."
     
     # Basic CMake arguments, relying on system/ROS paths
     CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
@@ -307,10 +307,22 @@ perform_build() {
 
     print_info "Final CMake arguments: $CMAKE_ARGS"
     
-    if colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1; then
+    # Use colcon build with proper arguments
+    # Note: --symlink-install allows for faster development by symlinking Python files
+    # The --editable option issue has been fixed in colcon-core >= 0.8.3
+    if colcon build --symlink-install --cmake-args $CMAKE_ARGS 2>&1 | tee build.log; then
         print_success "Build completed successfully"
+        # Check for any build warnings
+        if grep -q "warning:" build.log; then
+            print_warning "Build completed with warnings. Check build.log for details."
+        fi
+        rm -f build.log
     else
-        print_error "Build failed"
+        print_error "Build failed. Check the output above for errors."
+        print_info "Common issues:"
+        print_info "  - Missing dependencies: Run 'rosdep install --from-paths src --ignore-src -r -y'"
+        print_info "  - Outdated colcon: Run 'pip3 install --upgrade colcon-common-extensions'"
+        print_info "  - CMake issues: Check CMake version >= 3.22"
         return 1
     fi
     

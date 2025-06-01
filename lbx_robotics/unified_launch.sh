@@ -640,6 +640,18 @@ if [ ! -z "$VR_IP" ]; then
     LAUNCH_ARGS="$LAUNCH_ARGS vr_ip:=$VR_IP"
 fi
 
+# Set environment variables for the main system
+export ROBOT_IP="$ROBOT_IP"
+export USE_FAKE_HARDWARE="$USE_FAKE_HARDWARE"
+export ENABLE_RVIZ="$ENABLE_RVIZ"
+export ENABLE_CAMERAS="$ENABLE_CAMERAS"
+export ENABLE_RECORDING="$ENABLE_RECORDING"
+export USE_RIGHT_CONTROLLER="$USE_RIGHT_CONTROLLER"
+export VR_MODE="$VR_MODE"
+export HOT_RELOAD="$HOT_RELOAD"
+export LOG_LEVEL="$LOG_LEVEL"
+export VR_IP="$VR_IP"
+
 # Launch the system
 print_info "Starting LBX Robotics System..."
 print_info "Launch command: ros2 launch lbx_launch system_bringup.launch.py $LAUNCH_ARGS"

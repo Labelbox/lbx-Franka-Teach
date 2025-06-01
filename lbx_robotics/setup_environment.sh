@@ -145,6 +145,19 @@ echo_step "Installing system dependencies for libfranka and other packages..."
 
 # Install Poco libraries (required by libfranka)
 echo_info "Installing Poco C++ libraries..."
+# First install PCRE which is a dependency of Poco
+if sudo apt install -y libpcre3 libpcre3-dev; then
+    echo_success "PCRE libraries installed successfully."
+else
+    echo_warn "Failed to install PCRE libraries via apt."
+    # Try to install in conda environment
+    if conda run -n "$ENV_NAME" --no-capture-output --live-stream conda install -y -c conda-forge pcre; then
+        echo_success "PCRE installed in conda environment"
+    else
+        echo_warn "Could not install PCRE in conda environment"
+    fi
+fi
+
 if sudo apt install -y libpoco-dev; then
     echo_success "Poco libraries installed successfully."
     
@@ -330,4 +343,5 @@ echo_info "All packages are now in a single unified workspace at: $SCRIPT_DIR"
 echo ""
 echo_warn "Note: If you encounter CMake errors finding Poco libraries during build:"
 echo_warn "  The unified_launch.sh script will automatically set up paths"
-echo_warn "  OR manually export: CMAKE_PREFIX_PATH=\"/usr/lib/x86_64-linux-gnu/cmake:\$CMAKE_PREFIX_PATH\"" 
+echo_warn "  OR manually export: CMAKE_PREFIX_PATH=\"/usr/lib/x86_64-linux-gnu/cmake:\$CMAKE_PREFIX_PATH\""
+echo_warn "  OR use system cmake: conda deactivate && conda activate lbx_robotics_env --no-stack" 

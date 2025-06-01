@@ -276,13 +276,15 @@ perform_build() {
     # Fix paths for conda environment to find system libraries
     if [ ! -z "$CONDA_PREFIX" ]; then
         print_info "Detected conda environment, setting up paths for system libraries..."
-        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH"
+        export CMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH"
         export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
         export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/lib:$LD_LIBRARY_PATH"
         
-        # Specifically help find Poco
-        export Poco_DIR="/usr/lib/x86_64-linux-gnu/cmake/Poco"
-        export POCO_ROOT="/usr"
+        # If cmake issues persist, temporarily use system cmake
+        if command -v /usr/bin/cmake &> /dev/null; then
+            print_warning "Using system cmake to avoid conda library conflicts"
+            export PATH="/usr/bin:$PATH"
+        fi
     fi
     
     # Clean only if explicitly requested with --clean-build
@@ -297,7 +299,13 @@ perform_build() {
     
     # Build the workspace
     print_info "Building with: colcon build --symlink-install"
-    if colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:$CMAKE_PREFIX_PATH" 2>&1; then
+    if colcon build --symlink-install --cmake-args \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake:/usr/share/cmake:/usr/lib/cmake:/usr/local/lib/cmake:$CMAKE_PREFIX_PATH" \
+        -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH \
+        -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+        -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+        -DCMAKE_FIND_ROOT_PATH="$CONDA_PREFIX;/usr;/usr/local" 2>&1; then
         print_success "Build completed successfully"
     else
         print_error "Build failed"

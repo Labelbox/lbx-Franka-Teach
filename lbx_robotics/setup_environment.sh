@@ -21,8 +21,62 @@ echo_info() { echo -e "${BLUE}INFO:${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}${BOLD}WARNING:${NC}${YELLOW} $1${NC}"; }
 echo_step() { echo -e "${CYAN}${BOLD}STEP:${NC}${CYAN} $1${NC}"; }
 
+# Function to fix CMake version issues in dependencies
+fix_cmake_versions() {
+    echo_info "Fixing CMake version requirements in dependencies..."
+    
+    # Find all CMakeLists.txt files in src directory
+    find "$SCRIPT_DIR/src" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
+        # Check if file contains old cmake_minimum_required
+        if grep -q "cmake_minimum_required.*VERSION.*[0-2]\." "$cmake_file" || \
+           grep -q "cmake_minimum_required.*VERSION.*3\.[0-9])" "$cmake_file"; then
+            
+            # Get the relative path for display
+            if command -v realpath &> /dev/null; then
+                rel_path=$(realpath --relative-to="$SCRIPT_DIR" "$cmake_file" 2>/dev/null || echo "$cmake_file")
+            else
+                # macOS fallback
+                rel_path="${cmake_file#$SCRIPT_DIR/}"
+            fi
+            
+            # Backup original file
+            cp "$cmake_file" "${cmake_file}.bak"
+            
+            # Update cmake_minimum_required to version 3.11
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS sed requires -i with extension
+                sed -i.tmp 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                rm -f "${cmake_file}.tmp"
+            else
+                # Linux sed
+                sed -i 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+            fi
+            
+            if diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null 2>&1; then
+                # No changes made, remove backup
+                rm "${cmake_file}.bak"
+            else
+                echo_success "  ✓ Updated CMake version in $rel_path"
+                rm "${cmake_file}.bak"
+            fi
+        fi
+    done
+    
+    echo_success "CMake version fixes completed"
+}
+
 # --- Main Setup --- 
 echo_info "Starting system-level setup for lbx_robotics with ROS 2 Humble..."
+
+# Detect operating system
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo_warn "Detected macOS - This is a development environment only"
+    echo_info "ROS 2 is not natively supported on macOS"
+    echo_info "This script will set up the workspace for deployment on Ubuntu"
+    IS_MACOS=true
+else
+    IS_MACOS=false
+fi
 
 # 1. Install System Build Tools & Essential Libraries
 echo_step "Installing system build tools and essential C++ libraries..."
@@ -110,13 +164,17 @@ else
     echo_success "Pinocchio already found or installed."
 fi
 
-# 3. Install ROS 2 Humble
-echo_step "Installing/Verifying ROS 2 Humble Desktop..."
-if ! dpkg -l | grep -q "ros-humble-desktop"; then
-    sudo apt install -y ros-humble-desktop ros-dev-tools
+# 3. Install ROS 2 Humble (skip on macOS)
+if [ "$IS_MACOS" = false ]; then
+    echo_step "Installing/Verifying ROS 2 Humble Desktop..."
+    if ! dpkg -l | grep -q "ros-humble-desktop"; then
+        sudo apt install -y ros-humble-desktop ros-dev-tools
+    fi
+    source "/opt/ros/humble/setup.bash"
+    echo_success "ROS 2 Humble sourced."
+else
+    echo_warn "Skipping ROS 2 installation on macOS"
 fi
-source "/opt/ros/humble/setup.bash"
-echo_success "ROS 2 Humble sourced."
 
 # 4. Install Additional ROS 2 Tools & Control Packages - Updated to ensure latest colcon
 echo_step "Installing additional ROS 2 tools and control packages..."
@@ -266,28 +324,63 @@ if ! $ALL_FRANKA_APT_INSTALLED || [ ! -d "$SCRIPT_DIR/src/franka_ros2" ]; then
         cd "$SCRIPT_DIR"
     fi
     echo_info "Importing franka_ros2 dependencies into workspace..."
-    vcs import src < src/franka_ros2/franka.repos --recursive --skip-existing
-echo_success "franka_ros2 source integration complete (if needed)."
+    if command -v vcs &> /dev/null; then
+        vcs import src < src/franka_ros2/franka.repos --recursive --skip-existing
+    else
+        echo_warn "vcs not found, manually cloning dependencies..."
+        # Manual clone of dependencies from franka.repos
+        cd "$SCRIPT_DIR/src"
+        
+        # Clone franka_description if not exists
+        if [ ! -d "franka_description" ]; then
+            git clone https://github.com/frankaemika/franka_description.git
+            cd franka_description && git checkout 0.4.0 && cd ..
+        fi
+        
+        # Clone libfranka if not exists
+        if [ ! -d "libfranka" ]; then
+            git clone https://github.com/frankaemika/libfranka.git
+            cd libfranka && git checkout 0.15.0
+            # Initialize submodules for libfranka
+            git submodule update --init --recursive
+            cd ..
+        fi
+        
+        cd "$SCRIPT_DIR"
+    fi
+    
+    # Fix CMake versions after cloning
+    fix_cmake_versions
+    
+    echo_success "franka_ros2 source integration complete (if needed)."
 else
     echo_info "franka_ros2 seems to be fully installed via apt or already present. Skipping source integration."
 fi
 
-# 9. Install workspace dependencies with rosdep
-echo_step "Installing workspace dependencies with rosdep..."
-cd "$SCRIPT_DIR"
-rosdep install --from-paths src --ignore-src --rosdistro humble -y -r
-echo_success "Workspace dependencies resolved."
+# 9. Install workspace dependencies with rosdep (skip on macOS)
+if [ "$IS_MACOS" = false ]; then
+    echo_step "Installing workspace dependencies with rosdep..."
+    cd "$SCRIPT_DIR"
+    rosdep install --from-paths src --ignore-src --rosdistro humble -y -r
+    echo_success "Workspace dependencies resolved."
+else
+    echo_warn "Skipping rosdep on macOS - dependencies must be resolved on Ubuntu"
+fi
 
 # 10. Final verification
 echo_step "Verifying installation..."
 VERIFICATION_FAILED=false
 
-# Check ROS 2
-if command -v ros2 &> /dev/null; then
-    echo_success "✓ ROS 2 is installed"
+# Check ROS 2 (skip on macOS)
+if [ "$IS_MACOS" = false ]; then
+    if command -v ros2 &> /dev/null; then
+        echo_success "✓ ROS 2 is installed"
+    else
+        echo_error "✗ ROS 2 not found"
+        VERIFICATION_FAILED=true
+    fi
 else
-    echo_error "✗ ROS 2 not found"
-    VERIFICATION_FAILED=true
+    echo_info "✓ ROS 2 check skipped on macOS"
 fi
 
 # Check colcon

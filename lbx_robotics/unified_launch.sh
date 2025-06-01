@@ -51,32 +51,62 @@ fix_cmake_versions() {
     print_info "Fixing CMake version requirements in dependencies..."
     
     # Find all CMakeLists.txt files in src directory
-    find "$WORKSPACE_DIR/src" -name "CMakeLists.txt" -type f | while read -r cmake_file; do
+    find "$WORKSPACE_DIR/src" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
         # Check if file contains old cmake_minimum_required
-        if grep -q "cmake_minimum_required.*VERSION.*[0-2]\." "$cmake_file" || \
-           grep -q "cmake_minimum_required.*VERSION.*3\.[0-9])" "$cmake_file"; then
+        if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
             
             # Get the relative path for display
-            rel_path=$(realpath --relative-to="$WORKSPACE_DIR" "$cmake_file")
+            rel_path="${cmake_file#$WORKSPACE_DIR/}"
             
-            # Backup original file
+            # Create backup
             cp "$cmake_file" "${cmake_file}.bak"
             
             # Update cmake_minimum_required to version 3.11
-            sed -i.tmp 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-            
-            # Remove temporary file created by sed on macOS
-            rm -f "${cmake_file}.tmp"
-            
-            if diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null; then
-                # No changes made, remove backup
-                rm "${cmake_file}.bak"
+            # Use perl for better cross-platform compatibility
+            if command -v perl &> /dev/null; then
+                perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS sed with backup
+                sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
             else
-                print_success "  ✓ Updated CMake version in $rel_path"
-                rm "${cmake_file}.bak"
+                # Linux sed
+                sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
             fi
+            
+            # Check if changes were made
+            if ! diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null 2>&1; then
+                print_success "  ✓ Updated CMake version in $rel_path"
+            fi
+            
+            # Clean up backup
+            rm -f "${cmake_file}.bak"
         fi
     done
+    
+    # Also check for any nested CMakeLists.txt files in subdirectories like 'common'
+    # This is specifically for libfranka which has issues with submodules
+    if [ -d "$WORKSPACE_DIR/src/libfranka" ]; then
+        print_info "Checking libfranka submodules..."
+        
+        # Ensure submodules are initialized
+        (cd "$WORKSPACE_DIR/src/libfranka" && git submodule update --init --recursive 2>/dev/null || true)
+        
+        # Fix common/CMakeLists.txt specifically
+        if [ -f "$WORKSPACE_DIR/src/libfranka/common/CMakeLists.txt" ]; then
+            cmake_file="$WORKSPACE_DIR/src/libfranka/common/CMakeLists.txt"
+            if grep -E "cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
+                print_info "  Fixing libfranka/common/CMakeLists.txt..."
+                if command -v perl &> /dev/null; then
+                    perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+                elif [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                else
+                    sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                fi
+                print_success "  ✓ Fixed libfranka/common/CMakeLists.txt"
+            fi
+        fi
+    fi
     
     print_success "CMake version fixes completed"
 }

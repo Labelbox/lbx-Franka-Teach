@@ -50,8 +50,8 @@ print_error() {
 fix_cmake_versions() {
     print_info "Fixing CMake version requirements in dependencies..."
     
-    # Find all CMakeLists.txt files in src directory
-    find "$WORKSPACE_DIR/src" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
+    # Find all CMakeLists.txt and .in template files in src directory
+    find "$WORKSPACE_DIR/src" \( -name "CMakeLists.txt" -o -name "*.cmake" -o -name "*.cmake.in" -o -name "CMakeLists.txt.in" \) -type f 2>/dev/null | while read -r cmake_file; do
         # Check if file contains old cmake_minimum_required
         if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
             
@@ -105,6 +105,24 @@ fix_cmake_versions() {
                 fi
                 print_success "  ✓ Fixed libfranka/common/CMakeLists.txt"
             fi
+        fi
+        
+        # Also fix any other problematic files in build directory if they were already generated
+        if [ -d "$WORKSPACE_DIR/build" ]; then
+            print_info "  Checking for generated CMake files in build directory..."
+            find "$WORKSPACE_DIR/build" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
+                if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
+                    if command -v perl &> /dev/null; then
+                        perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+                    elif [[ "$OSTYPE" == "darwin"* ]]; then
+                        sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                    else
+                        sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                    fi
+                    rel_path="${cmake_file#$WORKSPACE_DIR/}"
+                    print_success "  ✓ Fixed generated file: $rel_path"
+                fi
+            done
         fi
     fi
     

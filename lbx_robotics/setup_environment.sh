@@ -25,42 +25,81 @@ echo_step() { echo -e "${CYAN}${BOLD}STEP:${NC}${CYAN} $1${NC}"; }
 fix_cmake_versions() {
     echo_info "Fixing CMake version requirements in dependencies..."
     
-    # Find all CMakeLists.txt files in src directory
-    find "$SCRIPT_DIR/src" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
+    # Find all CMakeLists.txt and .in template files in src directory
+    find "$SCRIPT_DIR/src" \( -name "CMakeLists.txt" -o -name "*.cmake" -o -name "*.cmake.in" -o -name "CMakeLists.txt.in" \) -type f 2>/dev/null | while read -r cmake_file; do
         # Check if file contains old cmake_minimum_required
-        if grep -q "cmake_minimum_required.*VERSION.*[0-2]\." "$cmake_file" || \
-           grep -q "cmake_minimum_required.*VERSION.*3\.[0-9])" "$cmake_file"; then
+        if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
             
             # Get the relative path for display
-            if command -v realpath &> /dev/null; then
-                rel_path=$(realpath --relative-to="$SCRIPT_DIR" "$cmake_file" 2>/dev/null || echo "$cmake_file")
-            else
-                # macOS fallback
-                rel_path="${cmake_file#$SCRIPT_DIR/}"
-            fi
+            rel_path="${cmake_file#$SCRIPT_DIR/}"
             
-            # Backup original file
+            # Create backup
             cp "$cmake_file" "${cmake_file}.bak"
             
             # Update cmake_minimum_required to version 3.11
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                # macOS sed requires -i with extension
-                sed -i.tmp 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
-                rm -f "${cmake_file}.tmp"
+            # Use perl for better cross-platform compatibility
+            if command -v perl &> /dev/null; then
+                perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+            elif [[ "$OSTYPE" == "darwin"* ]]; then
+                # macOS sed with backup
+                sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
             else
                 # Linux sed
-                sed -i 's/cmake_minimum_required.*VERSION.*[0-9]\+\.[0-9]\+\([^)]*\))/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
             fi
             
-            if diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null 2>&1; then
-                # No changes made, remove backup
-                rm "${cmake_file}.bak"
-            else
+            # Check if changes were made
+            if ! diff -q "$cmake_file" "${cmake_file}.bak" > /dev/null 2>&1; then
                 echo_success "  ✓ Updated CMake version in $rel_path"
-                rm "${cmake_file}.bak"
             fi
+            
+            # Clean up backup
+            rm -f "${cmake_file}.bak"
         fi
     done
+    
+    # Also check for any nested CMakeLists.txt files in subdirectories like 'common'
+    # This is specifically for libfranka which has issues with submodules
+    if [ -d "$SCRIPT_DIR/src/libfranka" ]; then
+        echo_info "Checking libfranka submodules..."
+        
+        # Ensure submodules are initialized
+        (cd "$SCRIPT_DIR/src/libfranka" && git submodule update --init --recursive 2>/dev/null || true)
+        
+        # Fix common/CMakeLists.txt specifically
+        if [ -f "$SCRIPT_DIR/src/libfranka/common/CMakeLists.txt" ]; then
+            cmake_file="$SCRIPT_DIR/src/libfranka/common/CMakeLists.txt"
+            if grep -E "cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
+                echo_info "  Fixing libfranka/common/CMakeLists.txt..."
+                if command -v perl &> /dev/null; then
+                    perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+                elif [[ "$OSTYPE" == "darwin"* ]]; then
+                    sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                else
+                    sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                fi
+                echo_success "  ✓ Fixed libfranka/common/CMakeLists.txt"
+            fi
+        fi
+        
+        # Also fix any other problematic files in build directory if they were already generated
+        if [ -d "$SCRIPT_DIR/build" ]; then
+            echo_info "  Checking for generated CMake files in build directory..."
+            find "$SCRIPT_DIR/build" -name "CMakeLists.txt" -type f 2>/dev/null | while read -r cmake_file; do
+                if grep -E "cmake_minimum_required.*VERSION.*[0-2]\.|cmake_minimum_required.*VERSION.*3\.[0-4]" "$cmake_file" > /dev/null 2>&1; then
+                    if command -v perl &> /dev/null; then
+                        perl -i -pe 's/cmake_minimum_required\s*\(\s*VERSION\s+[0-9]+\.[0-9]+(?:\.[0-9]+)?\s*\)/cmake_minimum_required(VERSION 3.11)/gi' "$cmake_file"
+                    elif [[ "$OSTYPE" == "darwin"* ]]; then
+                        sed -i '' -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                    else
+                        sed -i -E 's/cmake_minimum_required[[:space:]]*\([[:space:]]*VERSION[[:space:]]+[0-9]+\.[0-9]+(\.[0-9]+)?[[:space:]]*\)/cmake_minimum_required(VERSION 3.11)/g' "$cmake_file"
+                    fi
+                    rel_path="${cmake_file#$SCRIPT_DIR/}"
+                    echo_success "  ✓ Fixed generated file: $rel_path"
+                fi
+            done
+        fi
+    fi
     
     echo_success "CMake version fixes completed"
 }

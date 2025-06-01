@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lbx_input_oculus"
+version = "0.0.1"
+description = "ROS2 package to read and publish Oculus Quest controller data."
+license = "Proprietary - Labelbox Robotics Confidential"
+authors = [
+    {name = "User", email = "user@example.com"}
+]
+keywords = ["ros2", "oculus", "vr", "input"]
+
+dependencies = [
+    "setuptools",
+    "numpy",
+    "pure-python-adb",
+    "transformations", # Changed from tf-transformations
+    "diagnostic_updater"
+]
+
+[project.entry-points."console_scripts"]
+oculus_node = "lbx_input_oculus.oculus_node:main" 

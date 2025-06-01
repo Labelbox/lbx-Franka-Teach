@@ -7,7 +7,7 @@ name = "lbx_vision_camera"
 version = "0.0.1"
 description = "ROS2 package to manage and publish generic camera data (e.g., RealSense, ZED)."
 readme = "README.md" # Assuming you might add one later
-license = "Proprietary - Labelbox Robotics Confidential"
+license = {file = "LICENSE.md"}
 authors = [
     {name = "User", email = "user@example.com"} # Corresponds to maintainer
 ]

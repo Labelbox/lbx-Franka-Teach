@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lbx_data_recorder"
+version = "0.1.0"
+description = "High-performance data recording for VR teleoperation"
+license = {file = "LICENSE.md"}
+authors = [
+    {name = "Labelbox Robotics", email = "robotics@labelbox.com"}
+]
+keywords = ["ros2", "data recording", "mcap"]
+
+dependencies = [
+    "setuptools", # For setup.py itself
+    "rclpy",
+    "mcap-ros2-support", # From requirements.txt (mcap_ros2.writer)
+    "rosidl_default_generators", # Often needed for custom messages
+    "std_msgs",
+    "sensor_msgs",
+    "geometry_msgs",
+    "diagnostic_msgs",
+    "lbx_interfaces" # Local workspace package, colcon will handle dependency
+]
+
+[project.entry-points."console_scripts"]
+recorder_node = "lbx_data_recorder.recorder_node:main"
+mcap_recorder_node = "lbx_data_recorder.mcap_recorder_node:main" 

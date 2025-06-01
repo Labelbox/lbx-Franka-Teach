@@ -153,8 +153,8 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             'rviz_config',
+            default_value='',  # Empty string as default
             description='Path to the RViz configuration file.',
-            # Default will be set in launch_setup
         )
     )
 

@@ -89,7 +89,7 @@ lbx-Franka-Teach/ (Git Repository Root)
 │ │ └── fr3_franka_hand_snug.urdf
 │ │
 │ ├── docs/ (Centralized documentation directory)
-│ │ ├── README.md (Overall workspace: build, launch main components)
+│ │ ├── readme.md (Overall workspace: build, launch main components)
 │ │ ├── directory_structure.md (This file)
 │ │ ├── lbx_input_oculus.md (Package-specific docs)
 │ │ ├── lbx_vision_realsense.md

@@ -104,13 +104,13 @@ def generate_launch_description():
     ])
     
     # RViz configuration file
-    # Assuming franka_vr_control.rviz will be moved to lbx_launch/config/
-    # Ensure your setup.py for lbx_launch installs files from its config directory.
-    rviz_config_path = PathJoinSubstitution([
-        FindPackageShare('lbx_launch'), 
-        'config',
-        'franka_vr_control.rviz'
-    ])
+    # TODO: Create the RViz config file or use MoveIt's default
+    # Commenting out for now since the file doesn't exist
+    # rviz_config_path = PathJoinSubstitution([
+    #     FindPackageShare('lbx_launch'), 
+    #     'config',
+    #     'franka_vr_control.rviz'
+    # ])
     
     # MoveIt launch
     moveit_launch = IncludeLaunchDescription(
@@ -124,7 +124,7 @@ def generate_launch_description():
         launch_arguments={
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-            'enable_rviz': LaunchConfiguration('enable_rviz'),
+            'enable_rviz': LaunchConfiguration('enable_rviz'),  # Let MoveIt handle RViz
             'load_gripper': 'true',  # Always load gripper for VR control
         }.items()
     )
@@ -209,13 +209,14 @@ def generate_launch_description():
     )
     
     # System monitoring and visualization tools
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz',
-        arguments=['-d', rviz_config_path],
-        condition=IfCondition(LaunchConfiguration('enable_rviz'))
-    )
+    # TODO: Create RViz config and uncomment this section
+    # rviz_node = Node(
+    #     package='rviz2',
+    #     executable='rviz2',
+    #     name='rviz',
+    #     arguments=['-d', rviz_config_path],
+    #     condition=IfCondition(LaunchConfiguration('enable_rviz'))
+    # )
     
     # Status echo nodes for debugging
     status_echo_node = Node(
@@ -246,7 +247,6 @@ def generate_launch_description():
         system_manager_node,
         data_recorder_node,
         camera_namespace_group,
-        rviz_node,
         
         # Optional: Add system status monitoring
         # status_echo_node,

@@ -50,11 +50,24 @@ def generate_launch_description():
         )
     )
     
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            'rviz_config',
+            default_value=PathJoinSubstitution([
+                FindPackageShare('franka_fr3_moveit_config'),
+                'rviz',
+                'moveit.rviz'
+            ]),
+            description='Path to the RViz configuration file.'
+        )
+    )
+    
     # Get launch configurations
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
     enable_rviz = LaunchConfiguration('enable_rviz')
     load_gripper = LaunchConfiguration('load_gripper')
+    rviz_config = LaunchConfiguration('rviz_config')
     
     # Include the standard Franka MoveIt launch file
     moveit_launch = IncludeLaunchDescription(
@@ -70,6 +83,7 @@ def generate_launch_description():
             'use_fake_hardware': use_fake_hardware,
             'load_gripper': load_gripper,
             'use_rviz': enable_rviz,
+            'rviz_config': rviz_config,
         }.items()
     )
     

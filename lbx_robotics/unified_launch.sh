@@ -25,6 +25,13 @@ PERFORM_BUILD="false"
 CLEAN_BUILD="false"
 SKIP_BUILD="false"
 
+# Build optimization parameters
+BUILD_PARALLEL_WORKERS=""  # Auto-detect if not specified
+USE_CCACHE="true"
+BUILD_PACKAGES=""  # Specific packages to build
+BUILD_TESTS="false"
+MERGE_INSTALL="true"
+
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 WORKSPACE_DIR="$SCRIPT_DIR"  # Script is now inside lbx_robotics
@@ -58,6 +65,11 @@ show_help() {
     echo "  --build                   Perform colcon build"
     echo "  --clean-build             Clean workspace then build"
     echo "  --no-build                Skip build step"
+    echo "  --parallel-workers <N>    Number of parallel build jobs (default: auto)"
+    echo "  --packages <PKG1,PKG2>    Build only specific packages (comma-separated)"
+    echo "  --with-tests              Build and run tests"
+    echo "  --no-ccache               Disable ccache (enabled by default)"
+    echo "  --no-merge-install        Disable merge-install optimization"
     echo ""
     echo -e "${BLUE}Robot Options:${NC}"
     echo "  --robot-ip <IP>           Robot IP address (default: $ROBOT_IP)"
@@ -94,6 +106,12 @@ show_help() {
     echo "  $0 --cameras --no-recording          # Run with cameras, no recording"
     echo "  $0 --network-vr 192.168.1.50        # Network VR mode"
     echo "  $0 --no-build                        # Skip build, just run"
+    echo ""
+    echo -e "${CYAN}Build Optimization Examples:${NC}"
+    echo "  $0 --build --parallel-workers 8     # Build with 8 parallel jobs"
+    echo "  $0 --build --packages lbx_franka_control,lbx_input_oculus  # Build specific packages"
+    echo "  $0 --build --no-ccache              # Build without ccache"
+    echo "  $0 --build --with-tests             # Build including tests"
     echo ""
 }
 
@@ -183,6 +201,26 @@ while [[ $# -gt 0 ]]; do
         --help)
             show_help
             exit 0
+            ;;
+        --parallel-workers)
+            BUILD_PARALLEL_WORKERS="$2"
+            shift 2
+            ;;
+        --packages)
+            BUILD_PACKAGES="$2"
+            shift 2
+            ;;
+        --with-tests)
+            BUILD_TESTS="true"
+            shift
+            ;;
+        --no-ccache)
+            USE_CCACHE="false"
+            shift
+            ;;
+        --no-merge-install)
+            MERGE_INSTALL="false"
+            shift
             ;;
         *)
             print_error "Unknown option: $1"
@@ -305,6 +343,25 @@ perform_build() {
         rm -rf build/ install/ log/ 2>/dev/null || true
     fi
     
+    # Enable ccache if available and requested
+    if [ "$USE_CCACHE" = "true" ] && command -v ccache &> /dev/null; then
+        print_info "Enabling ccache for faster C++ compilation..."
+        export CC="ccache gcc"
+        export CXX="ccache g++"
+        # Show ccache stats
+        ccache -s | grep -E "cache hit rate|cache size" || true
+    elif [ "$USE_CCACHE" = "true" ]; then
+        print_warning "ccache requested but not found. Install with: sudo apt install ccache"
+    fi
+    
+    # Auto-detect parallel workers if not specified
+    if [ -z "$BUILD_PARALLEL_WORKERS" ]; then
+        # Use number of CPU cores minus 1 to keep system responsive
+        BUILD_PARALLEL_WORKERS=$(( $(nproc) - 1 ))
+        [ $BUILD_PARALLEL_WORKERS -lt 1 ] && BUILD_PARALLEL_WORKERS=1
+    fi
+    print_info "Using $BUILD_PARALLEL_WORKERS parallel build workers"
+    
     # Source ROS2 environment for build
     print_info "Sourcing ROS2 environment for build (source /opt/ros/$ROS_DISTRO/setup.bash)..."
     source "/opt/ros/$ROS_DISTRO/setup.bash"
@@ -318,18 +375,66 @@ perform_build() {
     # Add hints for system libraries if they were installed to /usr/local
     CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_PREFIX_PATH=/usr/local;/opt/ros/$ROS_DISTRO"
     CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_FIND_ROOT_PATH=/usr/local;/opt/ros/$ROS_DISTRO;/usr"
+    
+    # Disable tests unless explicitly requested
+    if [ "$BUILD_TESTS" != "true" ]; then
+        CMAKE_ARGS="$CMAKE_ARGS -DBUILD_TESTING=OFF"
+        print_info "Tests disabled for faster build (use --with-tests to enable)"
+    fi
 
     print_info "Final CMake arguments: $CMAKE_ARGS"
     
-    # Use colcon build with proper arguments
-    # Note: We don't use --symlink-install to avoid compatibility issues with older
-    # colcon-python-setup-py versions. This means Python files need rebuilding after
-    # changes, but the build process is simpler and more reliable across systems.
-    colcon build --cmake-args $CMAKE_ARGS 2>&1 | tee build.log
+    # Construct colcon build command
+    BUILD_CMD="colcon build"
+    
+    # Add parallel workers
+    BUILD_CMD="$BUILD_CMD --parallel-workers $BUILD_PARALLEL_WORKERS"
+    
+    # Add merge-install for faster installation
+    if [ "$MERGE_INSTALL" = "true" ]; then
+        BUILD_CMD="$BUILD_CMD --merge-install"
+    fi
+    
+    # Add specific packages if requested
+    if [ ! -z "$BUILD_PACKAGES" ]; then
+        # Convert comma-separated list to space-separated
+        PACKAGES_LIST=$(echo $BUILD_PACKAGES | tr ',' ' ')
+        BUILD_CMD="$BUILD_CMD --packages-up-to $PACKAGES_LIST"
+        print_info "Building only specified packages: $PACKAGES_LIST"
+    fi
+    
+    # Use better event handlers for cleaner output
+    BUILD_CMD="$BUILD_CMD --event-handlers console_direct+"
+    
+    # Add CMake arguments
+    BUILD_CMD="$BUILD_CMD --cmake-args $CMAKE_ARGS"
+    
+    # Show the final build command
+    print_info "Build command: $BUILD_CMD"
+    
+    # Track build time
+    BUILD_START=$(date +%s)
+    
+    # Execute build
+    $BUILD_CMD 2>&1 | tee build.log
     BUILD_RESULT=${PIPESTATUS[0]}  # Get colcon's exit code, not tee's
     
+    # Calculate build time
+    BUILD_END=$(date +%s)
+    BUILD_TIME=$((BUILD_END - BUILD_START))
+    BUILD_MINUTES=$((BUILD_TIME / 60))
+    BUILD_SECONDS=$((BUILD_TIME % 60))
+    
     if [ $BUILD_RESULT -eq 0 ]; then
-        print_success "Build completed successfully"
+        print_success "Build completed successfully in ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
+        
+        # Show ccache stats if enabled
+        if [ "$USE_CCACHE" = "true" ] && command -v ccache &> /dev/null; then
+            echo ""
+            print_info "Build cache statistics:"
+            ccache -s | grep -E "cache hit rate|cache size" || true
+        fi
+        
         # Check for any build warnings
         if grep -q "warning:" build.log; then
             print_warning "Build completed with warnings. Check build.log for details."

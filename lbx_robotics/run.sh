@@ -26,7 +26,7 @@ show_help() {
     echo "  --rviz / --no-rviz        Enable/Disable RViz (overrides config)"
     echo "  --log-level LEVEL         Set log level (DEBUG, INFO, WARN, ERROR)"
     echo "  --skip-build              Skip the colcon build step"
-    echo "  --clean-build             Perform a clean build (removes build, install, log)"
+    echo "  --clean-build             Perform a clean build (removes build, install, log) (Now default behavior)"
     echo "  --shutdown                Gracefully shutdown any running system (experimental)"
     echo "  --help                    Show this help message"
     echo ""
@@ -45,7 +45,6 @@ USE_FAKE_HARDWARE_ARG=""
 ENABLE_RVIZ_ARG=""
 LOG_LEVEL_ARG="$DEFAULT_LOG_LEVEL"
 SKIP_BUILD_ARG="false"
-CLEAN_BUILD_ARG="false"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -56,7 +55,6 @@ while [[ $# -gt 0 ]]; do
         --no-rviz) ENABLE_RVIZ_ARG="false"; shift ;;   
         --log-level) LOG_LEVEL_ARG="$2"; shift 2 ;;    
         --skip-build) SKIP_BUILD_ARG="true"; shift ;; 
-        --clean-build) CLEAN_BUILD_ARG="true"; shift ;; 
         --shutdown) echo -e "${BLUE}Graceful shutdown requested...${NC}"; pkill -f system_bringup.launch.py; exit 0 ;; # Simplified shutdown
         --help) show_help; exit 0 ;;                 
         *) echo -e "${RED}Unknown option: $1${NC}"; show_help; exit 1 ;;
@@ -95,10 +93,9 @@ perform_build() {
     echo -e "${YELLOW}Performing build...${NC}"
     cd "$WORKSPACE_DIR" # Navigate to the workspace root (lbx_robotics)
 
-    if [ "$CLEAN_BUILD_ARG" = "true" ]; then
-        echo "Cleaning old build files (build/, install/, log/)..."
-        rm -rf build/ install/ log/ 2>/dev/null || true
-    fi
+    # Always perform a clean build
+    echo "Cleaning old build files (build/, install/, log/)..."
+    rm -rf build/ install/ log/ 2>/dev/null || true
 
     echo "Sourcing ROS2 environment for build..."
     source "/opt/ros/$ROS_DISTRO/setup.bash" # Use the detected ROS_DISTRO
@@ -139,10 +136,10 @@ if [ -n "$ENABLE_RVIZ_ARG" ]; then LAUNCH_ARGS+=" enable_rviz:=$ENABLE_RVIZ_ARG"
 if [ -n "$LOG_LEVEL_ARG" ]; then LAUNCH_ARGS+=" log_level:=$LOG_LEVEL_ARG"; fi
 
 echo -e "${GREEN}Starting LBX Robotics System...${NC}"
-echo "Launch file: lbx_robotics system_bringup.launch.py"
+echo "Launch file: lbx_launch system_bringup.launch.py"
 echo "Arguments: $LAUNCH_ARGS"
 
-ros2 launch lbx_robotics system_bringup.launch.py $LAUNCH_ARGS
+ros2 launch lbx_launch system_bringup.launch.py $LAUNCH_ARGS
 
 LAUNCH_EC=$?
 if [ $LAUNCH_EC -ne 0 ]; then

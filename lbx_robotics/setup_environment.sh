@@ -139,6 +139,86 @@ else
     echo_warn "Some additional tools may not have installed correctly. Continuing anyway."
 fi
 
+# --- Install system dependencies for libfranka and other packages ---
+echo_step "Installing system dependencies for libfranka and other packages..."
+
+# Install Poco libraries (required by libfranka)
+echo_info "Installing Poco C++ libraries..."
+if sudo apt install -y \
+    libpoco-dev \
+    libpocofoundation70 \
+    libpoconet70 \
+    libpocoutil70 \
+    libpocoxml70 \
+    libpocojson70 \
+    libpocoredis70; then
+    echo_success "Poco libraries installed successfully."
+else
+    echo_error "Failed to install Poco libraries. These are required for libfranka."
+    exit 1
+fi
+
+# Install Eigen3 (required by libfranka)
+echo_info "Installing Eigen3..."
+if sudo apt install -y libeigen3-dev; then
+    echo_success "Eigen3 installed successfully."
+else
+    echo_warn "Failed to install Eigen3."
+fi
+
+# Install other build dependencies
+echo_info "Installing additional build dependencies..."
+if sudo apt install -y \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    libboost-all-dev \
+    libssl-dev \
+    libcurl4-openssl-dev; then
+    echo_success "Build dependencies installed successfully."
+else
+    echo_warn "Some build dependencies may not have installed correctly."
+fi
+
+# Install RealSense SDK dependencies
+echo_info "Installing RealSense camera dependencies..."
+if sudo apt install -y \
+    libusb-1.0-0-dev \
+    libglfw3-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev; then
+    echo_success "RealSense dependencies installed successfully."
+else
+    echo_warn "Some RealSense dependencies may not have installed correctly."
+fi
+
+# Install ROS2 control packages
+echo_info "Installing ROS2 control packages..."
+if sudo apt install -y \
+    ros-humble-ros2-control \
+    ros-humble-ros2-controllers \
+    ros-humble-gripper-controllers \
+    ros-humble-joint-state-broadcaster \
+    ros-humble-joint-trajectory-controller \
+    ros-humble-xacro; then
+    echo_success "ROS2 control packages installed successfully."
+else
+    echo_warn "Some ROS2 control packages may not have installed correctly."
+fi
+
+# Install Gazebo for simulation (optional but useful)
+echo_info "Installing Gazebo simulation packages..."
+if sudo apt install -y \
+    ros-humble-gazebo-ros \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-msgs \
+    ros-humble-gazebo-plugins; then
+    echo_success "Gazebo packages installed successfully."
+else
+    echo_warn "Gazebo packages installation failed. Simulation features may not work."
+fi
+
 # Initialize rosdep if not already done
 if [ ! -f "/etc/ros/rosdep/sources.list.d/20-default.list" ]; then
     echo_info "Initializing rosdep..."
@@ -216,6 +296,8 @@ echo -e "   ${CYAN}cd $SCRIPT_DIR${NC}"
 echo ""
 echo -e "${CYAN}${BOLD}4. Build the unified workspace:${NC}"
 echo -e "   ${CYAN}colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release${NC}"
+echo -e "   ${CYAN}# OR use the unified launch script:${NC}"
+echo -e "   ${CYAN}./unified_launch.sh --clean-build${NC}"
 echo ""
 echo -e "${CYAN}${BOLD}5. Source the built workspace:${NC}"
 echo -e "   ${CYAN}source install/setup.bash${NC}"
@@ -228,6 +310,9 @@ echo_info "  • ROS 2 Humble with development tools"
 echo_info "  • Intel RealSense camera support"
 echo_info "  • Oculus VR input capabilities"
 echo_info "  • MCAP data recording"
+echo_info "  • All system dependencies (Poco, Eigen3, etc.)"
+echo_info "  • ROS2 control packages for robot control"
+echo_info "  • Gazebo simulation support"
 echo ""
 echo -e "${GREEN}${BOLD}Test your setup:${NC}"
 echo -e "  • Test franka_ros2: ${CYAN}ros2 launch franka_fr3_moveit_config moveit.launch.py robot_ip:=dont-care use_fake_hardware:=true${NC}"

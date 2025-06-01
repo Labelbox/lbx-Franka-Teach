@@ -13,6 +13,13 @@ dependencies:
   - cmake # Cross-platform build system generator
   - pkg-config # Helper tool for finding installed libraries
 
+  # --- C++ Libraries for libfranka ---
+  # Note: System packages like Poco, Eigen3, and Boost are installed via apt
+  # in the setup_environment.sh script to ensure compatibility with ROS2
+  - poco # Poco C++ libraries (includes Net and Foundation)
+  - eigen # Linear algebra library (conda version for Python bindings)
+  - libboost-devel # Boost libraries
+
   # --- Core Processing & Numerics ---
   - numpy
   - scipy

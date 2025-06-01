@@ -3,7 +3,7 @@ numpy>=1.19.0,<2.0
 scipy
 pyzmq
 mcap
-mcap-ros2-support
+mcap-ros2-support==0.5.3
 opencv-python>=4.5.0
 pyrealsense2==2.55.1.6486
 pyyaml
@@ -77,3 +77,6 @@ flake8  # Linting
 
 # Added from the code block
 psutil
+
+# Add missing packages
+tf-transformations==0.1.0

@@ -36,7 +36,8 @@ from dataclasses import dataclass
 import copy
 
 # ROS 2 messages
-from std_msgs.msg import String, Bool, Empty
+from std_msgs.msg import String, Bool
+from std_srvs.srv import Empty  # Services use std_srvs.srv.Empty, not std_msgs.msg.Empty
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from sensor_msgs.msg import Joy, JointState
 from moveit_msgs.srv import GetPositionIK, GetPlanningScene, GetPositionFK

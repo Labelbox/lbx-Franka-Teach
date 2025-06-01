@@ -149,11 +149,11 @@ def generate_launch_description():
         ]
     )
     
-    # System Manager Node (main orchestrator)
-    system_manager_node = Node(
+    # Main System Node (full-featured orchestrator with UI)
+    main_system_node = Node(
         package='lbx_franka_control',
-        executable='system_manager',
-        name='system_manager',
+        executable='main_system',
+        name='main_system',
         parameters=[{
             'config_file': franka_control_config,
             'use_right_controller': LaunchConfiguration('use_right_controller'),
@@ -169,7 +169,15 @@ def generate_launch_description():
                 "' == 'true' else '/vr/left_controller_pose'"
             ])),
             ('/vr/controller_buttons', '/vr/buttons'),
-        ]
+        ],
+        # Set environment variables that main_system expects
+        additional_env={
+            'VR_IP': LaunchConfiguration('vr_ip'),
+            'ENABLE_CAMERAS': LaunchConfiguration('enable_cameras'),
+            'CAMERA_CONFIG': LaunchConfiguration('camera_config'),
+            'HOT_RELOAD': LaunchConfiguration('hot_reload'),
+            'VERIFY_DATA': PythonExpression(["'true' if '", LaunchConfiguration('enable_recording'), "' == 'true' else 'false'"]),
+        }
     )
     
     # Data Recorder Node (conditional)
@@ -244,7 +252,7 @@ def generate_launch_description():
         # Launch components
         moveit_launch,
         vr_namespace_group,
-        system_manager_node,
+        main_system_node,
         data_recorder_node,
         camera_namespace_group,
         

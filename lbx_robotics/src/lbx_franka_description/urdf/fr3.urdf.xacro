@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fr3">
+  
+  <!-- Import ros2_control xacro -->
+  <xacro:include filename="$(find lbx_franka_description)/urdf/fr3_ros2_control.xacro" />
+  
+  <!-- Parameters -->
+  <xacro:arg name="arm_id" default="fr3" />
+  <xacro:arg name="robot_ip" default="192.168.1.59" />
+  <xacro:arg name="use_fake_hardware" default="false" />
+  
+  <!-- Include the base robot URDF -->
+  <xacro:include filename="$(find lbx_franka_description)/urdf/fr3.urdf" />
+  
+  <!-- Add ros2_control -->
+  <xacro:fr3_ros2_control 
+    arm_id="$(arg arm_id)" 
+    robot_ip="$(arg robot_ip)"
+    use_fake_hardware="$(arg use_fake_hardware)" />
+  
+</robot> 

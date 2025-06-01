@@ -31,6 +31,7 @@ USE_CCACHE="true"
 BUILD_PACKAGES=""  # Specific packages to build
 BUILD_TESTS="false"
 MERGE_INSTALL="true"
+DEV_MODE="false"  # Development mode with symlink-install
 
 # Get the directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
@@ -70,6 +71,7 @@ show_help() {
     echo "  --with-tests              Build and run tests"
     echo "  --no-ccache               Disable ccache (enabled by default)"
     echo "  --no-merge-install        Disable merge-install optimization"
+    echo "  --dev-mode                Enable development mode (symlink-install for Python)"
     echo ""
     echo -e "${BLUE}Robot Options:${NC}"
     echo "  --robot-ip <IP>           Robot IP address (default: $ROBOT_IP)"
@@ -112,6 +114,7 @@ show_help() {
     echo "  $0 --build --packages lbx_franka_control,lbx_input_oculus  # Build specific packages"
     echo "  $0 --build --no-ccache              # Build without ccache"
     echo "  $0 --build --with-tests             # Build including tests"
+    echo "  $0 --build --dev-mode               # Development mode (Python changes without rebuild)"
     echo ""
 }
 
@@ -220,6 +223,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-merge-install)
             MERGE_INSTALL="false"
+            shift
+            ;;
+        --dev-mode)
+            DEV_MODE="true"
             shift
             ;;
         *)
@@ -393,6 +400,14 @@ perform_build() {
     # Add merge-install for faster installation
     if [ "$MERGE_INSTALL" = "true" ]; then
         BUILD_CMD="$BUILD_CMD --merge-install"
+    fi
+    
+    # Enable symlink-install in dev mode
+    if [ "$DEV_MODE" = "true" ]; then
+        BUILD_CMD="$BUILD_CMD --symlink-install"
+        print_info "Development mode enabled - Python changes will take effect immediately"
+        # Disable merge-install in dev mode as it conflicts with symlink-install
+        BUILD_CMD=$(echo "$BUILD_CMD" | sed 's/--merge-install//g')
     fi
     
     # Add specific packages if requested

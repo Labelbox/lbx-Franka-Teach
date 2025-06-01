@@ -3,9 +3,9 @@
 <package format="3">
   <name>lbx_input_oculus</name>
   <version>0.0.1</version>
-  <description>ROS2 package to read and publish Oculus Quest controller data.</description>
-  <maintainer email="user@example.com">User</maintainer>
-  <license>TODO: License declaration</license>
+  <description>ROS2 package to read and publish Meta Oculus Quest controller and tracking data.</description>
+  <maintainer email="robotics@labelbox.com">Labelbox Robotics</maintainer>
+  <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 

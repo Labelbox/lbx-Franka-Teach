@@ -13,7 +13,6 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'oculus_reader', 'APK'), glob(os.path.join('lbx_input_oculus', 'oculus_reader', 'APK', '*.apk'))),
     ],
     install_requires=[
         'setuptools',
@@ -23,10 +22,10 @@ setup(
         'diagnostic_updater',
     ],
     zip_safe=True,
-    maintainer='User',
-    maintainer_email='user@example.com',
-    description='ROS2 package to read and publish Oculus Quest controller data.',
-    license='TODO: License declaration',
+    maintainer='Labelbox Robotics',
+    maintainer_email='robotics@labelbox.com',
+    description='ROS2 package to read and publish Meta Oculus Quest controller and tracking data.',
+    license='MIT',
     entry_points={
         'console_scripts': [
             'oculus_node = lbx_input_oculus.oculus_node:main',

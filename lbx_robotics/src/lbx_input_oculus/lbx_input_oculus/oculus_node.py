@@ -89,12 +89,6 @@ class OculusInputNode(Node):
         self.print_oculus_fps = self.get_parameter('print_fps').get_parameter_value().bool_value
         queue_size = self.get_parameter('queue_size').get_parameter_value().integer_value
 
-        self.apk_path = os.path.join(
-            get_package_share_directory('lbx_input_oculus'),
-            'oculus_reader', 'APK', 'teleop-debug.apk'
-        )
-        self.get_logger().info(f"Expected APK path: {self.apk_path}")
-
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -122,13 +116,8 @@ class OculusInputNode(Node):
                 port=self.oculus_port,
                 print_FPS=self.print_oculus_fps,
                 run=True, # OculusReader starts its own logcat reading thread
-                apk_path_override=self.apk_path
             )
             self.oculus_connected = True # Assume connected if no exception
-        except FileNotFoundError as e:
-            self.get_logger().error(f"Oculus APK file not found: {e}. Node will not start.")
-            # rclpy.shutdown() # Avoid shutting down rclpy globally here. Let main handle.
-            return # Prevent further initialization
         except ConnectionError as e:
             self.get_logger().warn(f"Failed to connect to Oculus on init: {e}. Will keep trying if polling is active.")
             # self.oculus_connected remains False
@@ -347,7 +336,7 @@ class OculusConnectionTask(DiagnosticTask):
             stat.summary(DiagnosticStatus.WARN, "Oculus device connection issue or no data yet.")
             stat.add("Status", "Attempting to connect or waiting for data.")
         else: # No oculus_reader instance, major init failure
-            stat.summary(DiagnosticStatus.ERROR, "OculusReader not initialized. APK or device issue.")
+            stat.summary(DiagnosticStatus.ERROR, "OculusReader not initialized. Device connection issue.")
             stat.add("Status", "Initialization failed.")
         return stat
 

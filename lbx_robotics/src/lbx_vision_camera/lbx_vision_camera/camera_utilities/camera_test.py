@@ -85,10 +85,14 @@ def test_realsense_camera(serial_number: str, cam_specific_config: Dict, global_
         pipeline_started = True  # Mark that pipeline was successfully started
         result.connection_ok = True
         dev = profile.get_device(); logger.info(f"Connected RS: {dev.get_info(rs.camera_info.name)} SN: {dev.get_info(rs.camera_info.serial_number)}")
+        
+        # Give camera time to initialize properly
+        time.sleep(2.0)
+        
         fc, t_start = 0, time.time(); dur = global_config.get('test_duration_sec',2.0); min_depth_cov = global_config.get('min_depth_coverage_pct',30.)/100.
         for _ in range(int(fps*dur)):
             try:
-                frames = pipeline.wait_for_frames(50)
+                frames = pipeline.wait_for_frames(2000)  # Use 2000ms timeout for reliable frame capture
                 if not frames: continue
                 cf = frames.get_color_frame()
                 if cf: result.rgb_capture_ok=True; result.resolution=(cf.get_width(),cf.get_height())

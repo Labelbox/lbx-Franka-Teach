@@ -739,18 +739,6 @@ class SystemMonitor(Node):
         
         # Individual Camera Diagnostics Section
         if self.cameras_enabled or self.camera_diagnostics_from_node:
-            print(f"\n{Colors.BOLD}{Colors.BLUE}📹 INDIVIDUAL CAMERA DIAGNOSTICS{Colors.ENDC}")
-            print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-            
-            print(f"  🔍 {Colors.BOLD}Raw Camera Diagnostics Received (Keys):{Colors.ENDC}")
-            if self.camera_diagnostics_from_node:
-                for cam_name_key in self.camera_diagnostics_from_node.keys():
-                    print(f"    • '{Colors.CYAN}{cam_name_key}{Colors.ENDC}'")
-            else:
-                print(f"    {Colors.WARNING}• No camera diagnostics received from camera node.{Colors.ENDC}")
-            
-            print(f"  {Colors.CYAN}{'-' * 60}{Colors.ENDC}")
-            
             # Camera System Overview (using the cleaned key "Camera System Status")
             camera_system_overview = self.camera_diagnostics_from_node.get("Camera System Status")
             if camera_system_overview:
@@ -761,12 +749,12 @@ class SystemMonitor(Node):
                 overview_level_str = self._diagnostic_level_to_string(camera_system_overview.level)
                 overview_color = Colors.GREEN if overview_level_str == 'OK' else Colors.WARNING if overview_level_str == 'WARNING' else Colors.FAIL
                 
-                print(f"\n  🔧 {Colors.BOLD}CAMERA SYSTEM OVERVIEW:{Colors.ENDC}")
-                print(f"     Status: {overview_color}{overview_status_msg}{Colors.ENDC}")
-                print(f"     Configured: {cameras_configured} | Detected: {cameras_detected} | Active: {cameras_active}")
+                print(f"\n🔧 {Colors.BOLD}CAMERA SYSTEM OVERVIEW:{Colors.ENDC}")
+                print(f"   Status: {overview_color}{overview_status_msg}{Colors.ENDC}")
+                print(f"   Configured: {cameras_configured} | Detected: {cameras_detected} | Active: {cameras_active}")
             
-            print(f"\n  📊 {Colors.BOLD}INDIVIDUAL CAMERA PERFORMANCE:{Colors.ENDC}")
-            print(f"  {Colors.CYAN}{'-' * 60}{Colors.ENDC}")
+            print(f"\n📊 {Colors.BOLD}INDIVIDUAL CAMERA PERFORMANCE:{Colors.ENDC}")
+            print(f"{Colors.CYAN}{'-' * 60}{Colors.ENDC}")
             
             individual_cameras_found_and_displayed = False
             
@@ -781,9 +769,9 @@ class SystemMonitor(Node):
                     
                     status_color_val = Colors.GREEN if level_str_val == 'OK' else Colors.WARNING if level_str_val == 'WARNING' else Colors.FAIL
                     
-                    print(f"\n  📷 {Colors.BOLD}{Colors.BLUE}Camera: {cam_id_str}{Colors.ENDC}")
-                    print(f"     Serial Number: {Colors.CYAN}{serial_num}{Colors.ENDC}")
-                    print(f"     Status: {status_color_val}{level_str_val} - {status_msg_str}{Colors.ENDC}")
+                    print(f"\n📷 {Colors.BOLD}{Colors.BLUE}Camera: {cam_id_str}{Colors.ENDC}")
+                    print(f"   Serial Number: {Colors.CYAN}{serial_num}{Colors.ENDC}")
+                    print(f"   Status: {status_color_val}{level_str_val} - {status_msg_str}{Colors.ENDC}")
                     
                     rgb_target_fps = self._get_diagnostic_value(cam_status_obj, 'Target Color FPS')
                     rgb_actual_fps = self._get_diagnostic_value(cam_status_obj, 'Actual Color FPS')
@@ -800,12 +788,12 @@ class SystemMonitor(Node):
                                 try: eff_val = f"{float(rgb_efficiency):.1f}" 
                                 except: pass # Keep N/A if conversion fails
 
-                            print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC}")
-                            print(f"        • FPS: {fps_color}{rgb_actual_fps} Hz{Colors.ENDC} (Target: {rgb_target_fps} Hz)")
-                            print(f"        • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
-                            if rgb_frames != 'N/A': print(f"        • Frames Published: {Colors.CYAN}{rgb_frames}{Colors.ENDC}")
-                        except ValueError: print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.WARNING}Data format error (RGB){Colors.ENDC}")
-                    else: print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
+                            print(f"   📸 {Colors.BOLD}RGB Stream:{Colors.ENDC}")
+                            print(f"      • FPS: {fps_color}{rgb_actual_fps} Hz{Colors.ENDC} (Target: {rgb_target_fps} Hz)")
+                            print(f"      • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
+                            if rgb_frames != 'N/A': print(f"      • Frames Published: {Colors.CYAN}{rgb_frames}{Colors.ENDC}")
+                        except ValueError: print(f"   📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.WARNING}Data format error (RGB){Colors.ENDC}")
+                    else: print(f"   📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
                     
                     depth_target_fps = self._get_diagnostic_value(cam_status_obj, 'Target Depth FPS')
                     depth_actual_fps = self._get_diagnostic_value(cam_status_obj, 'Actual Depth FPS')
@@ -822,13 +810,13 @@ class SystemMonitor(Node):
                                 try: eff_val = f"{float(depth_efficiency):.1f}" 
                                 except: pass
 
-                            print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC}")
-                            print(f"        • FPS: {fps_color}{depth_actual_fps} Hz{Colors.ENDC} (Target: {depth_target_fps} Hz)")
-                            print(f"        • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
-                            if depth_frames != 'N/A': print(f"        • Frames Published: {Colors.CYAN}{depth_frames}{Colors.ENDC}")
-                        except ValueError: print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.WARNING}Data format error (Depth){Colors.ENDC}")
-                    else: print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
-                    print(f"     {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
+                            print(f"   🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC}")
+                            print(f"      • FPS: {fps_color}{depth_actual_fps} Hz{Colors.ENDC} (Target: {depth_target_fps} Hz)")
+                            print(f"      • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
+                            if depth_frames != 'N/A': print(f"      • Frames Published: {Colors.CYAN}{depth_frames}{Colors.ENDC}")
+                        except ValueError: print(f"   🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.WARNING}Data format error (Depth){Colors.ENDC}")
+                    else: print(f"   🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
+                    print(f"   {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
 
             # Process unavailable cameras: "Camera <ID> (Unavailable)" (exact match after cleaning)
             for diag_key_name, cam_status_obj in self.camera_diagnostics_from_node.items():
@@ -838,29 +826,27 @@ class SystemMonitor(Node):
                     configured_sn = self._get_diagnostic_value(cam_status_obj, 'Configured SN/Idx')
                     status_msg_str = cam_status_obj.message
                     
-                    print(f"\n  📷 {Colors.BOLD}{Colors.RED}Camera: {cam_id_str} (UNAVAILABLE){Colors.ENDC}")
-                    print(f"     Configured SN: {Colors.CYAN}{configured_sn}{Colors.ENDC}")
-                    print(f"     Status: {Colors.FAIL}{status_msg_str}{Colors.ENDC}")
-                    print(f"     📸 RGB Stream: {Colors.FAIL}Not available{Colors.ENDC}")
-                    print(f"     🔍 Depth Stream: {Colors.FAIL}Not available{Colors.ENDC}")
-                    print(f"     {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
+                    print(f"\n📷 {Colors.BOLD}{Colors.RED}Camera: {cam_id_str} (UNAVAILABLE){Colors.ENDC}")
+                    print(f"   Configured SN: {Colors.CYAN}{configured_sn}{Colors.ENDC}")
+                    print(f"   Status: {Colors.FAIL}{status_msg_str}{Colors.ENDC}")
+                    print(f"   📸 RGB Stream: {Colors.FAIL}Not available{Colors.ENDC}")
+                    print(f"   🔍 Depth Stream: {Colors.FAIL}Not available{Colors.ENDC}")
+                    print(f"   {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
             
             if not individual_cameras_found_and_displayed:
                 # Fallback for old-style keys or if new keys are somehow missed
                 legacy_or_unprocessed_keys = [k for k in self.camera_diagnostics_from_node.keys() if k != "Camera System Status"]
                 if legacy_or_unprocessed_keys:
-                    print(f"  {Colors.WARNING}Displaying other (possibly legacy or unprocessed) camera diagnostics:{Colors.ENDC}")
+                    print(f"{Colors.WARNING}Displaying other (possibly legacy or unprocessed) camera diagnostics:{Colors.ENDC}")
                     for key in legacy_or_unprocessed_keys:
                         status = self.camera_diagnostics_from_node[key]
                         level_str = self._diagnostic_level_to_string(status.level)
                         level_color = Colors.GREEN if level_str == 'OK' else Colors.WARNING if level_str == 'WARNING' else Colors.FAIL
-                        print(f"    • {Colors.BOLD}{key}{Colors.ENDC}: {level_color}{level_str}{Colors.ENDC} - {status.message}")
-                        for kv in status.values: print(f"        {kv.key}: {kv.value}")
+                        print(f"  • {Colors.BOLD}{key}{Colors.ENDC}: {level_color}{level_str}{Colors.ENDC} - {status.message}")
+                        for kv in status.values: print(f"      {kv.key}: {kv.value}")
                 else:
-                    print(f"  {Colors.WARNING}No individual camera performance data found.{Colors.ENDC}")
-                    print(f"  {Colors.CYAN}💡 Verify camera_node is publishing diagnostics with names like 'Camera <ID>'.{Colors.ENDC}")
-            
-            print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+                    print(f"{Colors.WARNING}No individual camera performance data found.{Colors.ENDC}")
+                    print(f"{Colors.CYAN}💡 Verify camera_node is publishing diagnostics with names like 'Camera <ID>'.{Colors.ENDC}")
         
         # System Resources
         try:
@@ -869,7 +855,7 @@ class SystemMonitor(Node):
             memory = resources['memory_percent']
             
             if cpu > 0 or memory > 0:
-                print(f"\n{Colors.BOLD}{Colors.BLUE}💻 SYSTEM RESOURCES{Colors.ENDC}")
+                print(f"\n💻 SYSTEM RESOURCES{Colors.ENDC}")
                 print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
                 
                 cpu_color = Colors.GREEN if cpu < 80 else Colors.WARNING if cpu < 90 else Colors.FAIL
@@ -881,7 +867,7 @@ class SystemMonitor(Node):
             pass
         
         # MoveIt Services Status
-        print(f"\n{Colors.BOLD}{Colors.BLUE}🔧 MOVEIT SERVICES STATUS{Colors.ENDC}")
+        print(f"\n🔧 MOVEIT SERVICES STATUS{Colors.ENDC}")
         print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
         
         if self.moveit_ready:
@@ -898,8 +884,7 @@ class SystemMonitor(Node):
         print(f"    └─ Scene Service (/get_planning_scene): {Colors.GREEN if scene_ready else Colors.WARNING}{'Ready' if scene_ready else 'Pending'}{Colors.ENDC}")
 
         # Footer with quick actions
-        print(f"\n{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{Colors.BLUE}🚀 QUICK ACTIONS{Colors.ENDC}")
+        print(f"\n🚀 QUICK ACTIONS{Colors.ENDC}")
         print(f"{Colors.CYAN}{'-' * 20}{Colors.ENDC}")
         print(f"• Live diagnostics: {Colors.YELLOW}ros2 topic echo /diagnostics{Colors.ENDC}")
         print(f"• Check camera topics: {Colors.YELLOW}ros2 topic list | grep cam{Colors.ENDC}")

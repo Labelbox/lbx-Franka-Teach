@@ -120,6 +120,10 @@ class RealsenseCamera:
             if depth_cfg.get('enabled', True) and global_settings.get('align_depth_to_color', True):
                 self.align = rs.align(rs.stream.color)
                 self.logger.info("RealSense depth-to-color alignment enabled.")
+            
+            # Give camera time to initialize properly before marking as running
+            time.sleep(2.0)
+            self.logger.info(f"RealSense camera {self.camera_id} initialization complete")
                             
             self.running = True
         except Exception as e:
@@ -132,7 +136,7 @@ class RealsenseCamera:
     def capture_frame(self) -> Optional[CameraFrame]:
         if not self.running or not self.pipeline: return None
         try:
-            frames = self.pipeline.wait_for_frames(timeout_ms=50) 
+            frames = self.pipeline.wait_for_frames(timeout_ms=2000)  # Increased to 2000ms for reliable frame capture
             if not frames: self.logger.warn(f"Timeout for {self.camera_id}"); return None
             if self.align and frames.get_depth_frame(): frames = self.align.process(frames)
             color_frame = frames.get_color_frame()

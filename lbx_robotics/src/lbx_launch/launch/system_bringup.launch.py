@@ -58,9 +58,13 @@ def generate_launch_description():
         description='Enable camera integration'
     )
     
+    # Get workspace path for camera config default
+    workspace_root = os.environ.get('COLCON_WS', os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    default_camera_config = os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors', 'realsense_cameras.yaml')
+    
     declare_camera_config = DeclareLaunchArgument(
         'camera_config',
-        default_value='',
+        default_value=default_camera_config,
         description='Path to camera configuration YAML file'
     )
     
@@ -209,7 +213,7 @@ def generate_launch_description():
                     ])
                 ]),
                 launch_arguments={
-                    'camera_config': LaunchConfiguration('camera_config'),
+                    'camera_config_file': LaunchConfiguration('camera_config'),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration('enable_cameras'))
             )

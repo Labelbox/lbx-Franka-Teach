@@ -40,7 +40,12 @@ def get_configs_sensors_dir():
         workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(lbx_vision_camera_share))))
         return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
     except:
-        # Last resort: hardcoded fallback
+        # Last resort: try current working directory structure
+        current_dir = os.getcwd()
+        configs_path = os.path.join(current_dir, 'lbx_robotics', 'configs', 'sensors')
+        if os.path.exists(configs_path):
+            return configs_path
+        # Final fallback
         return '/tmp/camera_configs'
 
 class CameraNode(Node):
@@ -93,7 +98,7 @@ class CameraNode(Node):
 
         self.cv_bridge = CvBridge()
         self.camera_manager = CameraManager(config_path=self.camera_config_path, node_logger=self.get_logger())
-        self.publishers = {}
+        self.camera_publishers = {}
         self.tf_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
         self._tf_dynamic_broadcaster = tf2_ros.TransformBroadcaster(self) 
         self._published_static_tfs = set()
@@ -185,20 +190,25 @@ class CameraNode(Node):
 
         for cam_id, cam_config in self.camera_configs_yaml.get('cameras', {}).items():
             if not cam_config.get('enabled', False): continue
-            self.publishers[cam_id] = {}
+            self.camera_publishers[cam_id] = {}
             topics_config = cam_config.get('topics', {})
             base_topic = topics_config.get('base', f"~/cam_{cam_id}")
             
-            self.publishers[cam_id]['color_image'] = self.create_publisher(Image, f"{base_topic}/color/image_raw", qos_sensor)
-            self.publishers[cam_id]['color_info'] = self.create_publisher(CameraInfo, f"{base_topic}/color/camera_info", qos_info)
+            # Use standard ROS camera topic structure:
+            # - base_topic/image_raw for main RGB stream
+            # - base_topic/camera_info for RGB camera info
+            # - base_topic/depth/image_raw for depth stream
+            # - base_topic/depth/camera_info for depth camera info
+            self.camera_publishers[cam_id]['color_image'] = self.create_publisher(Image, f"{base_topic}/image_raw", qos_sensor)
+            self.camera_publishers[cam_id]['color_info'] = self.create_publisher(CameraInfo, f"{base_topic}/camera_info", qos_info)
             
             depth_config = cam_config.get('depth', {})
             if depth_config.get('enabled', True): 
-                self.publishers[cam_id]['depth_image'] = self.create_publisher(Image, f"{base_topic}/depth/image_raw", qos_sensor)
-                self.publishers[cam_id]['depth_info'] = self.create_publisher(CameraInfo, f"{base_topic}/depth/camera_info", qos_info)
+                self.camera_publishers[cam_id]['depth_image'] = self.create_publisher(Image, f"{base_topic}/depth/image_raw", qos_sensor)
+                self.camera_publishers[cam_id]['depth_info'] = self.create_publisher(CameraInfo, f"{base_topic}/depth/camera_info", qos_info)
                 pointcloud_config = cam_config.get('pointcloud', {})
                 if self.enable_pointcloud and pointcloud_config.get('enabled', True):
-                     self.publishers[cam_id]['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/depth/color/points", qos_sensor)
+                     self.camera_publishers[cam_id]['pointcloud'] = self.create_publisher(PointCloud2, f"{base_topic}/depth/color/points", qos_sensor)
             self.get_logger().info(f"Publishers for {cam_id} on {base_topic}")
             self._publish_static_camera_tf(cam_id, cam_config.get('transforms', {}))
 
@@ -208,18 +218,47 @@ class CameraNode(Node):
         camera_link = transform_config.get('camera_frame', f"{cam_id}_link")
         optical_frame = transform_config.get('optical_frame', f"{cam_id}_optical_frame")
         stamp = self.get_clock().now().to_msg()
-        from tf_transformations import quaternion_from_euler
-        tpl = TransformStamped(); tpl.header.stamp = stamp; tpl.header.frame_id = parent; tpl.child_frame_id = camera_link
-        trans_pl = transform_config.get('translation', [0.,0.,0.]); rot_pl_deg = transform_config.get('rotation_deg', [0.,0.,0.])
-        q_pl = quaternion_from_euler(*np.deg2rad(rot_pl_deg))
-        tpl.transform.translation.x, tpl.transform.translation.y, tpl.transform.translation.z = float(trans_pl[0]), float(trans_pl[1]), float(trans_pl[2])
-        tpl.transform.rotation.x, tpl.transform.rotation.y, tpl.transform.rotation.z, tpl.transform.rotation.w = map(float, q_pl)
-        tlo = TransformStamped(); tlo.header.stamp = stamp; tlo.header.frame_id = link; tlo.child_frame_id = optical
-        q_lo = quaternion_from_euler(-np.pi/2, 0, -np.pi/2)
-        tlo.transform.rotation.x, tlo.transform.rotation.y, tlo.transform.rotation.z, tlo.transform.rotation.w = map(float, q_lo)
+        
+        # Create transform from parent to camera link
+        tpl = TransformStamped()
+        tpl.header.stamp = stamp
+        tpl.header.frame_id = parent
+        tpl.child_frame_id = camera_link
+        
+        trans_pl = transform_config.get('translation', [0.,0.,0.])
+        rot_pl_deg = transform_config.get('rotation_deg', [0.,0.,0.])
+        
+        # Convert Euler angles to quaternion using numpy
+        from scipy.spatial.transform import Rotation as R
+        q_pl = R.from_euler('xyz', np.deg2rad(rot_pl_deg)).as_quat()
+        
+        tpl.transform.translation.x = float(trans_pl[0])
+        tpl.transform.translation.y = float(trans_pl[1])
+        tpl.transform.translation.z = float(trans_pl[2])
+        tpl.transform.rotation.x = float(q_pl[0])
+        tpl.transform.rotation.y = float(q_pl[1])
+        tpl.transform.rotation.z = float(q_pl[2])
+        tpl.transform.rotation.w = float(q_pl[3])
+        
+        # Create transform from camera link to optical frame (standard camera convention)
+        tlo = TransformStamped()
+        tlo.header.stamp = stamp
+        tlo.header.frame_id = camera_link
+        tlo.child_frame_id = optical_frame
+        
+        # Standard camera optical frame transformation: -90° around X, then -90° around Z
+        q_lo = R.from_euler('xyz', [-np.pi/2, 0, -np.pi/2]).as_quat()
+        tlo.transform.translation.x = 0.0
+        tlo.transform.translation.y = 0.0
+        tlo.transform.translation.z = 0.0
+        tlo.transform.rotation.x = float(q_lo[0])
+        tlo.transform.rotation.y = float(q_lo[1])
+        tlo.transform.rotation.z = float(q_lo[2])
+        tlo.transform.rotation.w = float(q_lo[3])
+        
         self.tf_broadcaster.sendTransform([tpl, tlo])
         self._published_static_tfs.add(cam_id)
-        self.get_logger().info(f"Static TF for {cam_id}: {parent} -> {link} -> {optical}")
+        self.get_logger().info(f"Static TF for {cam_id}: {parent} -> {camera_link} -> {optical_frame}")
 
     def publish_dynamic_transforms(self): pass
 
@@ -243,31 +282,31 @@ class CameraNode(Node):
         all_frames = self.camera_manager.get_all_frames(timeout=0.005)
         now_msg_time = self.get_clock().now().to_msg()
         for cam_id, frame in all_frames.items():
-            if cam_id not in self.publishers: continue
+            if cam_id not in self.camera_publishers: continue
             cam_config = self.camera_configs_yaml['cameras'].get(cam_id, {})
             optical_frame_id = cam_config.get('transforms', {}).get('optical_frame', f"{cam_id}_optical_frame")
             frame_stamp = now_msg_time 
-            if frame.color_image is not None and 'color_image' in self.publishers[cam_id]:
+            if frame.color_image is not None and 'color_image' in self.camera_publishers[cam_id]:
                 try:
                     img_msg = self.cv_bridge.cv2_to_imgmsg(frame.color_image, encoding="bgr8")
                     img_msg.header.stamp = frame_stamp; img_msg.header.frame_id = optical_frame_id
-                    self.publishers[cam_id]['color_image'].publish(img_msg)
+                    self.camera_publishers[cam_id]['color_image'].publish(img_msg)
                     self.frames_published_count[cam_id]['color'] += 1
-                    if frame.intrinsics and 'color_info' in self.publishers[cam_id]:
-                        self.publishers[cam_id]['color_info'].publish(self._create_camera_info_msg(frame, frame_stamp, optical_frame_id))
+                    if frame.intrinsics and 'color_info' in self.camera_publishers[cam_id]:
+                        self.camera_publishers[cam_id]['color_info'].publish(self._create_camera_info_msg(frame, frame_stamp, optical_frame_id))
                 except Exception as e: self.get_logger().error(f"Pub color {cam_id} error: {e}")
             depth_config = cam_config.get('depth', {})
-            if frame.depth_image is not None and 'depth_image' in self.publishers[cam_id] and depth_config.get('enabled', True):
+            if frame.depth_image is not None and 'depth_image' in self.camera_publishers[cam_id] and depth_config.get('enabled', True):
                 try:
                     depth_msg = self.cv_bridge.cv2_to_imgmsg(frame.depth_image, encoding="16UC1")
                     depth_msg.header.stamp = frame_stamp; depth_msg.header.frame_id = optical_frame_id
-                    self.publishers[cam_id]['depth_image'].publish(depth_msg)
+                    self.camera_publishers[cam_id]['depth_image'].publish(depth_msg)
                     self.frames_published_count[cam_id]['depth'] += 1
-                    if frame.intrinsics and 'depth_info' in self.publishers[cam_id]:
+                    if frame.intrinsics and 'depth_info' in self.camera_publishers[cam_id]:
                         depth_intr = frame.intrinsics.get('depth_intrinsics', frame.intrinsics)
                         class TempDepthFrameData: pass
                         temp_depth_data = TempDepthFrameData(); temp_depth_data.intrinsics = depth_intr; temp_depth_data.camera_id = cam_id
-                        self.publishers[cam_id]['depth_info'].publish(self._create_camera_info_msg(temp_depth_data, frame_stamp, optical_frame_id))
+                        self.camera_publishers[cam_id]['depth_info'].publish(self._create_camera_info_msg(temp_depth_data, frame_stamp, optical_frame_id))
                 except Exception as e: self.get_logger().error(f"Pub depth {cam_id} error: {e}")
         current_time = time.monotonic()
         elapsed_interval = current_time - self._publish_interval_start_time
@@ -283,7 +322,6 @@ class CameraNode(Node):
         self.get_logger().info("Shutting down Camera Node...")
         if hasattr(self, 'publish_timer') and self.publish_timer: self.publish_timer.cancel()
         if hasattr(self, 'tf_timer') and self.tf_timer: self.tf_timer.cancel()
-        if hasattr(self, 'diagnostic_updater'): self.diagnostic_updater.destroy()
         if hasattr(self, 'camera_manager') and self.camera_manager: self.camera_manager.stop()
         super().destroy_node()
         self.get_logger().info("Camera Node shutdown complete.")
@@ -321,8 +359,7 @@ class CameraNodeStatusTask(DiagnosticTask):
         if self.node.run_startup_tests and self.node.camera_test_results:
             for i, test_res in enumerate(self.node.camera_test_results):
                 cam_conf = self.node.camera_configs_yaml.get('cameras',{}).get(test_res.camera_id, {})
-                expects_depth = cam_conf.get('depth',{}).get('enabled', True) if test_res.camera_type in ["realsense","zed"] else False
-                res_stat = "OK" if test_res.is_success(expects_depth=expects_depth) else "FAIL"
+                res_stat = "OK" if test_res.is_success() else "FAIL"
                 stat.add(f"Test {i} ID", test_res.camera_id); stat.add(f"Test {i} Result", res_stat)
                 if test_res.error_message: stat.add(f"Test {i} Error", test_res.error_message)
         return stat
@@ -344,7 +381,7 @@ def main(args=None):
     except KeyboardInterrupt:
         if node: node.get_logger().info('Keyboard interrupt, shutting down.')
     except Exception as e:
-        if node and hasattr(node, 'get_logger'): node.get_logger().error(f"Unhandled exception: {e}", exc_info=True)
+        if node and hasattr(node, 'get_logger'): node.get_logger().error(f"Unhandled exception: {e}")
         else: print(f"Unhandled exception: {e}", file=sys.stderr); import traceback; traceback.print_exc()
     finally:
         if node and rclpy.ok() and hasattr(node, 'destroy_node'): node.destroy_node()

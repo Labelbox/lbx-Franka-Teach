@@ -379,19 +379,33 @@ class LabelboxRoboticsSystem(Node):
         """Test camera connections"""
         results = {}
         
-        # Check for camera topics
-        camera_topics = [
-            '/cameras/wrist_camera/image_raw',
-            '/cameras/overhead_camera/image_raw',
-        ]
+        # Get available camera topics dynamically
+        available_topics = self.get_topic_names_and_types()
+        camera_topics = []
+        
+        for topic_name, topic_types in available_topics:
+            if '/cameras/' in topic_name and 'sensor_msgs/msg/Image' in topic_types:
+                if '/image_raw' in topic_name and '/depth/' not in topic_name:
+                    # Only test main color image topics, not depth
+                    camera_topics.append(topic_name)
+        
+        # If no topics found, try expected patterns
+        if not camera_topics:
+            camera_topics = [
+                '/cameras/wrist_camera/image_raw',
+                '/cameras/overhead_camera/image_raw',
+            ]
         
         for topic in camera_topics:
             try:
                 msg = await self.wait_for_message(topic, Image, timeout=1.0)
-                camera_name = topic.split('/')[2]
+                # Extract camera name from topic
+                parts = topic.split('/')
+                camera_name = parts[2] if len(parts) > 2 else 'unknown'
                 results[camera_name] = msg is not None
             except:
-                camera_name = topic.split('/')[2]
+                parts = topic.split('/')
+                camera_name = parts[2] if len(parts) > 2 else 'unknown'
                 results[camera_name] = False
         
         self.cameras_healthy = all(results.values()) if results else True
@@ -876,50 +890,65 @@ class LabelboxRoboticsSystem(Node):
                 print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
                 
                 if self.camera_fps_tracking:
+                    # Count only cameras that have received data (active cameras)
+                    active_cameras = [cam for cam, streams in self.camera_fps_tracking.items() 
+                                    if any(stream['msg_count'] > 0 for stream in streams.values())]
+                    
                     # Show active cameras from real-time tracking
                     print(f"  🔧 {Colors.BOLD}CAMERA CONFIGURATION:{Colors.ENDC}")
-                    print(f"    • Active Cameras: {Colors.CYAN}{len(self.camera_fps_tracking)}{Colors.ENDC}")
+                    print(f"    • Active Cameras: {Colors.CYAN}{len(active_cameras)}{Colors.ENDC}")
                     print(f"    • Monitoring: Real-time FPS tracking enabled")
                     
-                    # Individual camera details from direct monitoring
-                    print(f"  📷 {Colors.BOLD}CAMERA PERFORMANCE:{Colors.ENDC}")
-                    for camera_name, streams in self.camera_fps_tracking.items():
-                        print(f"\n    📹 {Colors.BOLD}{camera_name.upper()}{Colors.ENDC}")
-                        
-                        # Show camera info if available
-                        if camera_name in self.camera_info_data:
-                            color_info = self.camera_info_data[camera_name].get('color', {})
-                            if color_info:
-                                resolution = f"{color_info['width']}x{color_info['height']}"
-                                print(f"      └─ Resolution: {Colors.CYAN}{resolution}{Colors.ENDC}")
-                                print(f"      └─ Frame ID: {Colors.CYAN}{color_info.get('frame_id', 'N/A')}{Colors.ENDC}")
-                        
-                        # Stream performance from real-time tracking
-                        print(f"      📊 {Colors.BOLD}STREAM PERFORMANCE:{Colors.ENDC}")
-                        
-                        for stream_type, tracking_data in streams.items():
-                            current_fps = tracking_data['current_fps']
-                            msg_count = tracking_data['msg_count']
+                    if active_cameras:
+                        # Individual camera details from direct monitoring
+                        print(f"  📷 {Colors.BOLD}CAMERA PERFORMANCE:{Colors.ENDC}")
+                        for camera_name in active_cameras:
+                            streams = self.camera_fps_tracking[camera_name]
+                            print(f"\n    📹 {Colors.BOLD}{camera_name.upper()}{Colors.ENDC}")
                             
-                            # Determine performance color
-                            if current_fps >= 25:
-                                perf_color = Colors.GREEN
-                                perf_icon = "🟢"
-                            elif current_fps >= 15:
-                                perf_color = Colors.CYAN
-                                perf_icon = "🔵"
-                            elif current_fps > 0:
-                                perf_color = Colors.WARNING
-                                perf_icon = "🟡"
-                            else:
-                                perf_color = Colors.FAIL
-                                perf_icon = "🔴"
+                            # Show camera info if available
+                            if camera_name in self.camera_info_data:
+                                color_info = self.camera_info_data[camera_name].get('color', {})
+                                if color_info:
+                                    resolution = f"{color_info['width']}x{color_info['height']}"
+                                    print(f"      └─ Resolution: {Colors.CYAN}{resolution}{Colors.ENDC}")
+                                    print(f"      └─ Frame ID: {Colors.CYAN}{color_info.get('frame_id', 'N/A')}{Colors.ENDC}")
                             
-                            stream_display = "RGB" if stream_type == 'color' else "Depth"
-                            if current_fps > 0:
-                                print(f"        {perf_icon} {stream_display}: {perf_color}{current_fps:.1f} Hz{Colors.ENDC} ({msg_count} frames)")
-                            else:
-                                print(f"        {perf_icon} {stream_display}: {perf_color}No data{Colors.ENDC}")
+                            # Stream performance from real-time tracking
+                            print(f"      📊 {Colors.BOLD}STREAM PERFORMANCE:{Colors.ENDC}")
+                            
+                            for stream_type, tracking_data in streams.items():
+                                # Only show streams that have received data
+                                if tracking_data['msg_count'] == 0:
+                                    continue
+                                    
+                                current_fps = tracking_data['current_fps']
+                                msg_count = tracking_data['msg_count']
+                                
+                                # Determine performance color
+                                if current_fps >= 25:
+                                    perf_color = Colors.GREEN
+                                    perf_icon = "🟢"
+                                elif current_fps >= 15:
+                                    perf_color = Colors.CYAN
+                                    perf_icon = "🔵"
+                                elif current_fps > 0:
+                                    perf_color = Colors.WARNING
+                                    perf_icon = "🟡"
+                                else:
+                                    perf_color = Colors.FAIL
+                                    perf_icon = "🔴"
+                                
+                                stream_display = "RGB" if stream_type == 'color' else "Depth"
+                                if current_fps > 0:
+                                    print(f"        {perf_icon} {stream_display}: {perf_color}{current_fps:.1f} Hz{Colors.ENDC} ({msg_count} frames)")
+                                else:
+                                    print(f"        {perf_icon} {stream_display}: {perf_color}No data{Colors.ENDC}")
+                    else:
+                        # No active cameras found
+                        print(f"\n⚠️  {Colors.WARNING}No active cameras detected{Colors.ENDC}")
+                        print(f"   📍 Camera nodes may be starting up or no cameras connected")
+                        print(f"   💡 Check camera hardware connections and camera node status")
                 
                 else:
                     # No camera tracking data - cameras may not be publishing yet
@@ -996,26 +1025,72 @@ class LabelboxRoboticsSystem(Node):
                             if len(clean_key) > 40:
                                 clean_key = clean_key[:37] + "..."
                                 
-                                # Color code based on performance
-                                try:
-                                    numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
-                                    if numeric_value > 50:
-                                        color = Colors.GREEN
-                                        perf_icon = "🟢"
-                                    elif numeric_value > 20:
-                                        color = Colors.CYAN
-                                        perf_icon = "🔵"
-                                    elif numeric_value > 0:
-                                        color = Colors.WARNING
-                                        perf_icon = "🟡"
-                                    else:
-                                        color = Colors.FAIL
-                                        perf_icon = "🔴"
-                                except:
+                            # Color code based on performance
+                            try:
+                                numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
+                                if numeric_value > 50:
+                                    color = Colors.GREEN
+                                    perf_icon = "🟢"
+                                elif numeric_value > 20:
                                     color = Colors.CYAN
                                     perf_icon = "🔵"
+                                elif numeric_value > 0:
+                                    color = Colors.WARNING
+                                    perf_icon = "🟡"
+                                else:
+                                    color = Colors.FAIL
+                                    perf_icon = "🔴"
+                            except:
+                                color = Colors.CYAN
+                                perf_icon = "🔵"
                                 
-                                print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
+                            print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
+                    
+                    # Special handling for camera node - extract specific camera FPS data
+                    if 'vision_camera_node' in node_name or 'Camera System' in node_name:
+                        # Look for camera-specific FPS data in all diagnostics
+                        camera_fps_data = {}
+                        for key, value in diagnostics.items():
+                            # Pattern: "Cam [camera_id] Actual Color FPS" or "Cam [camera_id] Actual Depth FPS"
+                            if key.startswith('Cam [') and '] Actual' in key and 'FPS' in key:
+                                camera_fps_data[key] = value
+                        
+                        if camera_fps_data and not actual_rates:  # Only show if not already displayed
+                            print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
+                            for key, value in camera_fps_data.items():
+                                # Extract camera ID and stream type from key
+                                # Format: "Cam [camera_id] Actual Stream FPS"
+                                parts = key.split(']')
+                                if len(parts) >= 2:
+                                    cam_id = parts[0].replace('Cam [', '')
+                                    # Extract stream type (Color or Depth)
+                                    if 'Color' in key:
+                                        stream_type = 'Color'
+                                    elif 'Depth' in key:
+                                        stream_type = 'Depth'
+                                    else:
+                                        stream_type = 'Unknown'
+                                    
+                                    # Color code based on FPS
+                                    try:
+                                        fps_value = float(value)
+                                        if fps_value >= 25:
+                                            color = Colors.GREEN
+                                            perf_icon = "🟢"
+                                        elif fps_value >= 15:
+                                            color = Colors.CYAN
+                                            perf_icon = "🔵"
+                                        elif fps_value > 0:
+                                            color = Colors.WARNING
+                                            perf_icon = "🟡"
+                                        else:
+                                            color = Colors.FAIL
+                                            perf_icon = "🔴"
+                                    except:
+                                        color = Colors.CYAN
+                                        perf_icon = "🔵"
+                                    
+                                    print(f"    {perf_icon} Cam [{cam_id}] FPS ({stream_type}): {color}{value}{Colors.ENDC}")
                     
                     # Display other frequency metrics
                     if other_freq:
@@ -1114,20 +1189,38 @@ class LabelboxRoboticsSystem(Node):
 
     def setup_camera_monitoring(self):
         """Set up direct camera topic monitoring for real-time performance tracking"""
-        # Known camera topics based on our camera system setup
-        camera_topics = [
-            '/cameras/wrist_camera/image_raw',
-            '/cameras/overhead_camera/image_raw',
-            '/cameras/wrist_camera/depth/image_raw',
-            '/cameras/overhead_camera/depth/image_raw',
-        ]
+        # Get currently available camera topics dynamically
+        available_topics = self.get_topic_names_and_types()
+        camera_topics = []
+        camera_info_topics = []
         
-        camera_info_topics = [
-            '/cameras/wrist_camera/camera_info',
-            '/cameras/overhead_camera/camera_info',
-            '/cameras/wrist_camera/depth/camera_info',
-            '/cameras/overhead_camera/depth/camera_info',
-        ]
+        # Filter for camera-related topics - look for any camera topics under /cameras/
+        for topic_name, topic_types in available_topics:
+            if '/cameras/' in topic_name and 'sensor_msgs/msg/Image' in topic_types:
+                # Accept any image topic under /cameras/ namespace
+                if '/image_raw' in topic_name or '/image' in topic_name:
+                    camera_topics.append(topic_name)
+            elif '/cameras/' in topic_name and 'sensor_msgs/msg/CameraInfo' in topic_types:
+                camera_info_topics.append(topic_name)
+        
+        # If no topics found yet, wait a bit and try again (cameras may be starting up)
+        if not camera_topics:
+            self.get_logger().info("No camera topics found yet, will use expected patterns and monitor for availability")
+            # Use expected patterns but don't hardcode specific camera names
+            camera_topics = [
+                '/cameras/wrist_camera/image_raw',
+                '/cameras/overhead_camera/image_raw',
+                '/cameras/wrist_camera/depth/image_raw',
+                '/cameras/overhead_camera/depth/image_raw',
+            ]
+            camera_info_topics = [
+                '/cameras/wrist_camera/camera_info',
+                '/cameras/overhead_camera/camera_info',
+                '/cameras/wrist_camera/depth/camera_info',
+                '/cameras/overhead_camera/depth/camera_info',
+            ]
+        else:
+            self.get_logger().info(f"Found {len(camera_topics)} camera image topics for monitoring")
         
         # QoS for image topics (best effort like camera publishers typically use)
         image_qos = QoSProfile(
@@ -1146,9 +1239,13 @@ class LabelboxRoboticsSystem(Node):
         # Subscribe to image topics for FPS tracking
         for topic in camera_topics:
             camera_name = self.extract_camera_name(topic)
-            stream_type = 'depth' if 'depth' in topic else 'color'
+            # Fix stream type detection: image_raw (without depth) = 'color', depth/image_raw = 'depth'
+            if '/depth/' in topic:
+                stream_type = 'depth'
+            else:
+                stream_type = 'color'  # This will handle /cameras/wrist_camera/image_raw as RGB/color
             
-            # Initialize tracking data
+            # Initialize tracking data only for topics we're going to monitor
             if camera_name not in self.camera_fps_tracking:
                 self.camera_fps_tracking[camera_name] = {}
             self.camera_fps_tracking[camera_name][stream_type] = {
@@ -1166,12 +1263,12 @@ class LabelboxRoboticsSystem(Node):
                 image_qos
             )
             self.camera_subscriptions.append(subscription)
-            self.get_logger().info(f"Monitoring camera topic: {topic}")
+            self.get_logger().info(f"Monitoring camera topic: {topic} -> {camera_name}({stream_type})")
         
         # Subscribe to camera info topics for resolution and config data
         for topic in camera_info_topics:
             camera_name = self.extract_camera_name(topic)
-            stream_type = 'depth' if 'depth' in topic else 'color'
+            stream_type = 'depth' if '/depth/' in topic else 'color'
             
             # Initialize camera info storage
             if camera_name not in self.camera_info_data:

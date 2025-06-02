@@ -1,99 +1,79 @@
 # Intel RealSense Camera Configuration for lbx_robotics
 # ROS2-compatible configuration for Intel RealSense cameras
 
-cameras:
-  realsense_hand:
-    enabled: true
-    type: "realsense"
-    device_id: "hand_camera" # Unique identifier
-    serial_number: "" # Leave empty to auto-detect, or specify exact serial
-
-    # Camera resolution and frame rate
-    color:
-      width: 640
-      height: 480
-      fps: 30
-      format: "rgb8"
-
-    depth:
-      width: 640
-      height: 480
-      fps: 30
-      format: "z16"
-
-    # ROS topics
-    topics:
-      color_image: "/realsense_hand/color/image_raw"
-      color_info: "/realsense_hand/color/camera_info"
-      depth_image: "/realsense_hand/depth/image_raw"
-      depth_info: "/realsense_hand/depth/camera_info"
-      pointcloud: "/realsense_hand/depth/color/points"
-
-    # Camera mounting and transforms
-    transforms:
-      # Transform from robot hand/end-effector to camera optical frame
-      parent_frame: "fr3_hand_tcp"
-      camera_frame: "realsense_hand_camera_link"
-      optical_frame: "realsense_hand_camera_optical_frame"
-
-      # Camera mounting position relative to hand TCP
-      translation: [0.0, 0.0, 0.05] # 5cm forward from TCP
-      rotation: [0.0, 0.0, 0.0] # No rotation from TCP orientation
-
-    description: "Hand-mounted Intel RealSense camera for manipulation tasks"
-
-  realsense_side:
-    enabled: false # Disabled by default, enable as needed
-    type: "realsense"
-    device_id: "side_camera"
-    serial_number: ""
-
-    # Camera resolution and frame rate
-    color:
-      width: 640
-      height: 480
-      fps: 30
-      format: "rgb8"
-
-    depth:
-      width: 640
-      height: 480
-      fps: 30
-      format: "z16"
-
-    # ROS topics
-    topics:
-      color_image: "/realsense_side/color/image_raw"
-      color_info: "/realsense_side/color/camera_info"
-      depth_image: "/realsense_side/depth/image_raw"
-      depth_info: "/realsense_side/depth/camera_info"
-      pointcloud: "/realsense_side/depth/color/points"
-
-    # Camera mounting and transforms
-    transforms:
-      # Transform from world/base to camera
-      parent_frame: "base"
-      camera_frame: "realsense_side_camera_link"
-      optical_frame: "realsense_side_camera_optical_frame"
-
-      # Camera mounting position relative to robot base
-      translation: [1.0, 0.5, 1.5] # Side view position
-      rotation: [0.0, 0.0, -1.57] # Looking towards robot
-
-    description: "Side-view Intel RealSense camera for scene observation"
-
-# Global RealSense settings
 global_settings:
-  enable_sync: true
+  enable_sync: false
   align_depth_to_color: true
-  enable_pointcloud: true
-  pointcloud_texture_stream: "RS2_STREAM_COLOR"
+  test_settings:
+    test_duration_sec: 3.0
+    min_depth_coverage_pct: 20.0
+  performance_settings:
+    enable_auto_exposure: true
+    auto_exposure_priority: false
+    depth_processing_preset: 1
+    decimation_filter: 2
+    spatial_filter: true
+    temporal_filter: true
 
-  # Quality settings
-  enable_auto_exposure: true
-  enable_emitter: true # For depth sensing
-
-  # Advanced settings
-  depth_units: 0.001 # 1mm per unit
-  confidence_threshold: 2 # Higher = more confident depth
-  noise_filtering: 1 # 0=off, 6=max filtering
+cameras:
+  realsense_218622277093:
+    enabled: true
+    type: realsense
+    serial_number: '218622277093'
+    device_id: realsense_218622277093
+    color:
+      width: 640
+      height: 480
+      fps: 15
+      format: bgr8
+    depth:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 15
+    topics:
+      base: "/cameras/overhead_camera"
+    transforms:
+      parent_frame: base_link
+      camera_frame: realsense_218622277093_link
+      optical_frame: realsense_218622277093_optical_frame
+      translation:
+        - 0.1
+        - 0.0
+        - 0.5
+      rotation_deg:
+        - 0
+        - 0
+        - 0
+    description: Intel RealSense D405
+    
+  realsense_218622272999:
+    enabled: true
+    type: realsense
+    serial_number: '218622272999'
+    device_id: realsense_218622272999
+    color:
+      width: 640
+      height: 480
+      fps: 15
+      format: bgr8
+    depth:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 15
+    topics:
+      base: "/cameras/wrist_camera"
+    transforms:
+      parent_frame: base_link
+      camera_frame: realsense_218622272999_link
+      optical_frame: realsense_218622272999_optical_frame
+      translation:
+        - 0.1
+        - 0.0
+        - 0.5
+      rotation_deg:
+        - 0
+        - 0
+        - 0
+    description: Intel RealSense D405

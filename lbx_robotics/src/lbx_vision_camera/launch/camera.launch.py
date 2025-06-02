@@ -25,7 +25,12 @@ def generate_launch_description():
             workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(lbx_vision_camera_share))))
             return os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors')
         except:
-            # Last resort: hardcoded fallback
+            # Last resort: try current working directory structure
+            current_dir = os.getcwd()
+            configs_path = os.path.join(current_dir, 'lbx_robotics', 'configs', 'sensors')
+            if os.path.exists(configs_path):
+                return configs_path
+            # Final fallback
             return '/tmp/camera_configs'
 
     declared_arguments = []

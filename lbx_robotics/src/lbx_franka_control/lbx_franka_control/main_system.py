@@ -33,8 +33,8 @@ from .franka_controller import FrankaController
 
 # ROS2 messages
 from std_msgs.msg import String, Bool, Header
-from std_srvs.srv import Empty
-from sensor_msgs.msg import Joy, JointState, Image, CameraInfo
+from std_srvs.srv import Empty, Trigger
+from sensor_msgs.msg import Joy, JointState
 from geometry_msgs.msg import PoseStamped
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from lbx_interfaces.msg import SystemStatus, VRControllerState, RecordingStatus
@@ -58,62 +58,22 @@ class Colors:
 
 
 class SystemDiagnosticTask(DiagnosticTask):
-    """Simple, comprehensive system diagnostic task"""
+    """Simple diagnostic task that reports main_system display status"""
     
     def __init__(self, node):
-        super().__init__("LBX Robotics System Status")
+        super().__init__("LBX Robotics Display Node")
         self.node = node
     
     def run(self, stat):
         """Run diagnostic check and report status"""
-        # Overall system health
-        if self.node.vr_healthy and self.node.moveit_healthy and self.node.robot_healthy:
-            stat.summary(DiagnosticStatus.OK, "All systems operational")
-            mode = "Full Operation"
-        elif self.node.moveit_healthy and self.node.robot_healthy:
-            stat.summary(DiagnosticStatus.WARN, "VR graceful fallback active")
-            mode = "Robot Control (No VR)"
-        elif self.node.robot_healthy:
-            stat.summary(DiagnosticStatus.WARN, "Monitoring mode - MoveIt services pending")
-            mode = "Robot Monitoring"
-        else:
-            stat.summary(DiagnosticStatus.ERROR, "Robot connection required")
-            mode = "Basic Monitoring"
+        # This node is just a display, always healthy if running
+        stat.summary(DiagnosticStatus.OK, "Display node operational")
         
-        # Add detailed status
-        stat.add("Operation Mode", mode)
-        stat.add("VR Status", "Connected" if self.node.vr_healthy else "Graceful Fallback")
-        stat.add("MoveIt Status", "Ready" if self.node.moveit_healthy else "Pending")
-        stat.add("Robot Status", "Connected" if self.node.robot_healthy else "Disconnected")
-        stat.add("Fake Hardware", str(self.node._get_bool_param('use_fake_hardware', False)))
-        stat.add("Camera Status", "Healthy" if self.node.cameras_healthy else "Issues Detected")
-        
-        # System ready status
-        stat.add("System Ready", str(self.node.system_ready))
-        
-        # Configuration information
-        stat.add("Robot IP", self.node.config.get('robot', {}).get('robot_ip', 'Unknown'))
-        stat.add("Recording Enabled", str(self.node.config.get('recording', {}).get('enabled', False)))
-        
-        # System capabilities
-        capabilities = []
-        if self.node.launch_params.get('enable_cameras', False):
-            capabilities.append("Cameras")
-        if self.node.launch_params.get('enable_recording', False):
-            capabilities.append("Recording")
-        if self.node.launch_params.get('hot_reload', False):
-            capabilities.append("Hot Reload")
-        stat.add("Active Capabilities", ", ".join(capabilities) if capabilities else "Basic")
-        
-        # Update latest diagnostics for periodic summaries
-        self.node.latest_diagnostics = {
-            "Operation Mode": mode,
-            "VR Status": "Connected" if self.node.vr_healthy else "Graceful Fallback",
-            "MoveIt Status": "Ready" if self.node.moveit_healthy else "Pending",
-            "Robot Status": "Connected" if self.node.robot_healthy else "Disconnected",
-            "System Ready": str(self.node.system_ready),
-            "Active Capabilities": ", ".join(capabilities) if capabilities else "Basic"
-        }
+        # Add basic information
+        stat.add("Node Type", "Display/Monitor")
+        stat.add("Display Rate", f"{self.node.diagnostic_summary_interval}s")
+        stat.add("Cameras Enabled", str(self.node.launch_params.get('enable_cameras', False)))
+        stat.add("Recording Enabled", str(self.node.launch_params.get('enable_recording', False)))
         
         return stat
 
@@ -139,10 +99,46 @@ class LabelboxRoboticsSystem(Node):
         self.cameras_healthy = True  # Default true if not enabled
         self.robot_healthy = False
         
-        # Camera system tracking
-        self.camera_fps_tracking = {}
-        self.camera_info_data = {}
-        self.camera_subscriptions = []
+        # System control state
+        self.current_system_mode = "initializing"
+        self.teleoperation_enabled = False
+        self.recording_active = False
+        self.calibration_valid = False
+        
+        # Service clients for system control
+        self.callback_group = ReentrantCallbackGroup()
+        self.calibrate_client = self.create_client(
+            Trigger, '/system/start_calibration', callback_group=self.callback_group
+        )
+        self.start_teleop_client = self.create_client(
+            Trigger, '/system/start_teleoperation', callback_group=self.callback_group
+        )
+        self.stop_system_client = self.create_client(
+            Trigger, '/system/stop', callback_group=self.callback_group
+        )
+        
+        # Subscribe to system state
+        self.state_sub = self.create_subscription(
+            String,
+            '/system/state',
+            self.system_state_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+        )
+        
+        self.status_sub = self.create_subscription(
+            SystemStatus,
+            '/system/status',
+            self.system_status_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
+        )
+        
+        # Subscribe to VR controller state for real-time button monitoring
+        self.vr_state_sub = self.create_subscription(
+            VRControllerState,
+            '/vr/controller_state',
+            self.vr_controller_state_callback,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
+        )
         
         # Simple diagnostic system - ROS2 best practice
         self.diagnostic_updater = Updater(self)
@@ -177,11 +173,29 @@ class LabelboxRoboticsSystem(Node):
             self.diagnostics_callback,
             qos_profile
         )
-        
-        # Initialize camera monitoring if cameras are enabled
-        if self.launch_params.get('enable_cameras', False):
-            self.setup_camera_monitoring()
     
+    def system_state_callback(self, msg: String):
+        """Handle system state updates"""
+        self.current_system_mode = msg.data
+        self.get_logger().info(f"System mode changed to: {msg.data}")
+    
+    def system_status_callback(self, msg: SystemStatus):
+        """Handle detailed system status updates"""
+        self.teleoperation_enabled = msg.teleoperation_enabled
+        self.recording_active = msg.recording_active
+        self.calibration_valid = (msg.calibration_mode == "valid" or self.current_system_mode == "teleoperation")
+        self.latest_system_status = msg
+    
+    def vr_controller_state_callback(self, msg: VRControllerState):
+        """Handle VR controller state updates for button monitoring"""
+        self.latest_vr_state = msg
+        
+        # TODO: Add logic here to trigger actions based on VR button presses
+        # For example:
+        # - A/X button: Start/stop recording
+        # - B/Y button: Mark recording as successful
+        # - Menu button: Start calibration
+        
     def signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully"""
         self.get_logger().info("\n🛑 Shutdown signal received...")
@@ -263,268 +277,6 @@ class LabelboxRoboticsSystem(Node):
             return f"{Colors.GREEN}Enabled{Colors.ENDC}"
         return f"{Colors.WARNING}Disabled{Colors.ENDC}"
     
-    async def initialize_system(self):
-        """Initialize and test all system components"""
-        print(f"\n{Colors.BLUE}{Colors.BOLD}🚀 System Initialization{Colors.ENDC}")
-        print("─" * 50)
-        
-        # 1. Check VR Controller with enhanced feedback
-        print(f"\n{Colors.CYAN}1️⃣  Checking VR Controller...{Colors.ENDC}")
-        vr_status = await self.check_vr_controller()
-        if vr_status:
-            print(f"   ✅ VR Controller: {Colors.GREEN}Connected and responding{Colors.ENDC}")
-            self.vr_healthy = True
-        else:
-            print(f"   ❌ VR Controller: {Colors.FAIL}Not detected{Colors.ENDC}")
-            print(f"      {Colors.WARNING}System will continue with graceful fallback{Colors.ENDC}")
-            print(f"      • Robot control via other interfaces remains available")
-            print(f"      • All features except VR input will function normally")
-            print(f"      • See VR setup instructions in oculus_node logs")
-            self.vr_healthy = False
-        
-        # 2. Test Cameras (if enabled)
-        if self.launch_params.get('enable_cameras', False):
-            print(f"\n{Colors.CYAN}2️⃣  Testing Cameras...{Colors.ENDC}")
-            camera_results = await self.test_cameras()
-            for camera_name, status in camera_results.items():
-                if status:
-                    print(f"   ✅ {camera_name}: {Colors.GREEN}Operational{Colors.ENDC}")
-                else:
-                    print(f"   ⚠️  {camera_name}: {Colors.WARNING}Failed{Colors.ENDC}")
-        
-        # 3. Check MoveIt Services
-        print(f"\n{Colors.CYAN}3️⃣  Checking MoveIt Services...{Colors.ENDC}")
-        moveit_status = await self.check_moveit_services()
-        services = ['IK Solver', 'FK Solver', 'Planning Scene', 'Trajectory Controller', 'Gripper Controller']
-        for i, (service, status) in enumerate(moveit_status.items()):
-            if status:
-                print(f"   ✅ {services[i]}: {Colors.GREEN}Ready{Colors.ENDC}")
-            else:
-                print(f"   ❌ {services[i]}: {Colors.FAIL}Not available{Colors.ENDC}")
-        
-        # 4. Check Robot Connection
-        print(f"\n{Colors.CYAN}4️⃣  Checking Robot Connection...{Colors.ENDC}")
-        robot_status = await self.check_robot_connection()
-        if robot_status:
-            print(f"   ✅ Robot: {Colors.GREEN}Connected{Colors.ENDC}")
-            print(f"   📊 Joint states: Receiving at {Colors.BOLD}1000Hz{Colors.ENDC}")
-        else:
-            print(f"   ❌ Robot: {Colors.FAIL}Not connected{Colors.ENDC}")
-        
-        # Summary with graceful fallback logic
-        print(f"\n{Colors.BLUE}{'─' * 50}{Colors.ENDC}")
-        
-        # Essential systems: robot connection is most important
-        # MoveIt services are important but system can run in monitoring mode without them
-        essential_systems_healthy = robot_status
-        
-        # Determine system readiness with graceful degradation
-        if essential_systems_healthy:
-            if self.vr_healthy and all(moveit_status.values()):
-                print(f"{Colors.GREEN}{Colors.BOLD}✅ All systems fully operational!{Colors.ENDC}")
-                self.system_ready = True
-            elif all(moveit_status.values()):
-                print(f"{Colors.WARNING}{Colors.BOLD}⚠️  Core systems operational (VR graceful fallback active){Colors.ENDC}")
-                print(f"   {Colors.CYAN}Robot control and MoveIt ready - VR will reconnect automatically{Colors.ENDC}")
-                self.system_ready = True
-            else:
-                print(f"{Colors.WARNING}{Colors.BOLD}⚠️  Robot connected (MoveIt services pending){Colors.ENDC}")
-                print(f"   {Colors.CYAN}System monitoring active - services may become available{Colors.ENDC}")
-                self.system_ready = True  # Still allow monitoring mode
-        else:
-            print(f"{Colors.FAIL}{Colors.BOLD}❌ Robot connection required for system operation{Colors.ENDC}")
-            print(f"   {Colors.CYAN}Check robot power, network, and ros2_control configuration{Colors.ENDC}")
-            # For fake hardware mode, be more lenient 
-            fake_hardware = self._get_bool_param('use_fake_hardware', False)
-            if fake_hardware:
-                print(f"   {Colors.WARNING}Fake hardware mode: Continuing anyway for testing{Colors.ENDC}")
-                self.system_ready = True  # Allow testing without perfect robot connection
-                return True
-            else:
-                return False
-        
-        return True
-    
-    async def check_vr_controller(self):
-        """Check if VR controller is connected and responding with enhanced status reporting"""
-        # Wait for VR pose data with timeout
-        vr_pose_msg = None
-        try:
-            print(f"      Waiting for VR controller data...")
-            vr_pose_msg = await self.wait_for_message('/vr/controller_pose', PoseStamped, timeout=3.0)
-            
-            # Additional check for valid pose data
-            if vr_pose_msg:
-                pose = vr_pose_msg.pose
-                # Check if we're getting non-zero poses (actual VR input vs default/fallback data)
-                position_magnitude = (pose.position.x**2 + pose.position.y**2 + pose.position.z**2)**0.5
-                orientation_valid = abs(pose.orientation.w) > 0.1  # Valid quaternion
-                
-                if position_magnitude > 0.01 or not orientation_valid:  # Some actual movement or valid orientation
-                    print(f"      📍 VR pose data: Valid tracking detected")
-                    self.vr_healthy = True
-                else:
-                    print(f"      📍 VR pose data: Receiving default/fallback data")
-                    self.vr_healthy = False
-            else:
-                self.vr_healthy = False
-                
-        except Exception as e:
-            print(f"      ❌ VR check failed: {e}")
-            self.vr_healthy = False
-        
-        return self.vr_healthy
-    
-    async def test_cameras(self):
-        """Test camera connections"""
-        results = {}
-        
-        # Get available camera topics dynamically
-        available_topics = self.get_topic_names_and_types()
-        camera_topics = []
-        
-        for topic_name, topic_types in available_topics:
-            if '/cameras/' in topic_name and 'sensor_msgs/msg/Image' in topic_types:
-                if '/image_raw' in topic_name and '/depth/' not in topic_name:
-                    # Only test main color image topics, not depth
-                    camera_topics.append(topic_name)
-        
-        # If no topics found, try expected patterns
-        if not camera_topics:
-            camera_topics = [
-                '/cameras/wrist_camera/image_raw',
-                '/cameras/overhead_camera/image_raw',
-            ]
-        
-        for topic in camera_topics:
-            try:
-                msg = await self.wait_for_message(topic, Image, timeout=1.0)
-                # Extract camera name from topic
-                parts = topic.split('/')
-                camera_name = parts[2] if len(parts) > 2 else 'unknown'
-                results[camera_name] = msg is not None
-            except:
-                parts = topic.split('/')
-                camera_name = parts[2] if len(parts) > 2 else 'unknown'
-                results[camera_name] = False
-        
-        self.cameras_healthy = all(results.values()) if results else True
-        return results
-    
-    async def check_moveit_services(self):
-        """Check if MoveIt services are available with proper waiting"""
-        services_to_check = {
-            '/compute_ik': False,
-            '/compute_fk': False, 
-            '/get_planning_scene': False,
-            '/fr3_arm_controller/follow_joint_trajectory': False,
-            '/fr3_gripper/grasp': False
-        }
-        
-        print(f"      Waiting for MoveIt services to become available...")
-        
-        # Wait for each service with timeout
-        for service_name in services_to_check:
-            try:
-                print(f"      Checking {service_name}...")
-                
-                # Create a temporary client to wait for the service
-                if 'compute_ik' in service_name:
-                    from moveit_msgs.srv import GetPositionIK
-                    client = self.create_client(GetPositionIK, service_name)
-                elif 'compute_fk' in service_name:
-                    from moveit_msgs.srv import GetPositionFK
-                    client = self.create_client(GetPositionFK, service_name)
-                elif 'get_planning_scene' in service_name:
-                    from moveit_msgs.srv import GetPlanningScene
-                    client = self.create_client(GetPlanningScene, service_name)
-                elif 'follow_joint_trajectory' in service_name:
-                    from control_msgs.action import FollowJointTrajectory
-                    # For action servers, we check differently
-                    services_to_check[service_name] = True  # Assume available for now
-                    print(f"        ✓ {service_name} (action server)")
-                    continue
-                elif 'grasp' in service_name:
-                    from franka_msgs.action import Grasp
-                    # For action servers, we check differently  
-                    services_to_check[service_name] = True  # Assume available for now
-                    print(f"        ✓ {service_name} (action server)")
-                    continue
-                else:
-                    # Generic service check
-                    client = self.create_client(Empty, service_name)
-                
-                # Wait for service with timeout
-                service_available = client.wait_for_service(timeout_sec=5.0)
-                services_to_check[service_name] = service_available
-                
-                if service_available:
-                    print(f"        ✓ {service_name}")
-                else:
-                    print(f"        ✗ {service_name} (timeout)")
-                
-                # Clean up client
-                self.destroy_client(client)
-                
-            except Exception as e:
-                print(f"        ✗ {service_name} (error: {e})")
-                services_to_check[service_name] = False
-        
-        self.moveit_healthy = all(services_to_check.values())
-        return services_to_check
-    
-    async def check_robot_connection(self):
-        """Check robot connection via joint states with enhanced feedback"""
-        print(f"      Waiting for robot joint states...")
-        
-        # Check if we're using fake hardware - handle both string and boolean values
-        use_fake_hardware = self._get_bool_param('use_fake_hardware', False)
-        
-        if use_fake_hardware:
-            print(f"      Using fake hardware - joint states should be simulated")
-        else:
-            print(f"      Connecting to real robot at {self.config['robot']['robot_ip']}")
-        
-        try:
-            # Wait longer for joint states to become available (especially for fake hardware)
-            timeout = 10.0 if use_fake_hardware else 5.0
-            msg = await self.wait_for_message('/joint_states', JointState, timeout=timeout)
-            
-            if msg is not None and len(msg.position) >= 7:
-                joint_count = len(msg.position)
-                print(f"      📊 Receiving joint states: {joint_count} joints")
-                
-                # Check for reasonable joint values
-                if use_fake_hardware:
-                    print(f"      🤖 Fake hardware joint states active")
-                else:
-                    # For real hardware, check if joints are in reasonable ranges
-                    joint_ranges_ok = all(-3.0 <= pos <= 3.0 for pos in msg.position[:7])  # Rough FR3 joint limits
-                    if joint_ranges_ok:
-                        print(f"      🤖 Real robot joint states within normal ranges")
-                    else:
-                        print(f"      ⚠️  Joint positions may be outside normal ranges")
-                
-                self.robot_healthy = True
-                return True
-            else:
-                print(f"      ❌ Joint states missing or insufficient joints (got {len(msg.position) if msg else 0}, need ≥7)")
-                self.robot_healthy = False
-                return False
-                
-        except Exception as e:
-            print(f"      ❌ Robot connection check failed: {e}")
-            if use_fake_hardware:
-                print(f"      💡 Fake hardware mode: ensure ros2_control is running with fake hardware")
-                print(f"      🔄 Will continue in monitoring mode - joint states may become available later")
-                # In fake hardware mode, be more tolerant and allow monitoring mode
-                self.robot_healthy = False  # Mark as not healthy but don't fail completely
-                return False  # But still return False so system knows to use monitoring mode
-            else:
-                print(f"      💡 Real robot mode: check robot power, network, and FCI enable")
-                self.robot_healthy = False
-                return False
-    
     async def wait_for_message(self, topic, msg_type, timeout=2.0):
         """Wait for a single message on a topic"""
         received_msg = None
@@ -542,69 +294,17 @@ class LabelboxRoboticsSystem(Node):
         self.destroy_subscription(sub)
         return received_msg
     
-    def reset_robot_to_home(self):
-        """Reset robot to home position"""
-        print(f"\n{Colors.BLUE}{Colors.BOLD}🏠 Resetting Robot to Home Position{Colors.ENDC}")
-        print("─" * 50)
-        
-        # Try to call reset service if available
-        reset_client = self.create_client(Empty, '/reset_robot')
-        
-        # Wait longer for the service to be available (up to 10 seconds)
-        print("   🔄 Waiting for robot reset service...")
-        service_ready = reset_client.wait_for_service(timeout_sec=10.0)
-        
-        if service_ready:
-            print("   ✅ Reset service available")
-            print("   📤 Sending reset command...")
-            try:
-                # Create request
-                request = Empty.Request()
-                future = reset_client.call_async(request)
-                
-                # Wait for completion with timeout
-                start_time = time.time()
-                while not future.done() and (time.time() - start_time) < 10.0:
-                    time.sleep(0.1)
-                
-                if future.done():
-                    # Check if the call was successful
-                    try:
-                        result = future.result()
-                        print(f"   ✅ Robot reset command sent successfully")
-                        print(f"   ⏳ Waiting for robot to reach home position...")
-                        
-                        # Give the robot time to move to home position
-                        time.sleep(3.0)
-                        
-                        print(f"   ✅ Robot should now be at home position")
-                        print(f"   💡 Verify robot is at home position before proceeding")
-                    except Exception as e:
-                        print(f"   ⚠️  Reset service call failed: {e}")
-                        print(f"   💡 Robot may already be at home position")
-                else:
-                    print(f"   ⚠️  Reset command timeout - robot may still be moving")
-                    print(f"   💡 Check robot status and wait if necessary")
-            except Exception as e:
-                print(f"   ⚠️  Reset command error: {e}")
-                print(f"   💡 Manual intervention may be required")
-        else:
-            print(f"   ⚠️  Reset service not available after 10 seconds")
-            print(f"   📍 Possible reasons:")
-            print(f"      • Robot control node (system_manager) not running")
-            print(f"      • Robot control node still initializing")
-            print(f"      • Different ROS2 domain or namespace")
-            print(f"   💡 To manually reset robot:")
-            print(f"      • ros2 service call /reset_robot std_srvs/srv/Empty")
-            print(f"      • Or use the VR controller calibration to set home position")
-        
-        # Cleanup
-        self.destroy_client(reset_client)
-    
     def enter_calibration_mode(self):
         """Guide user through calibration"""
         print(f"\n{Colors.BLUE}{Colors.BOLD}🎯 Calibration Mode{Colors.ENDC}")
         print("─" * 50)
+        
+        # Call calibration service
+        if self.calibrate_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().info("Starting calibration sequence...")
+            future = self.calibrate_client.call_async(Trigger.Request())
+            # Don't block, let the system continue
+        
         print(f"\n{Colors.CYAN}Forward Direction Calibration:{Colors.ENDC}")
         print("   1. Hold the {Colors.BOLD}joystick button{Colors.ENDC} on your VR controller")
         print("   2. Move the controller in your desired {Colors.BOLD}forward direction{Colors.ENDC}")
@@ -620,12 +320,35 @@ class LabelboxRoboticsSystem(Node):
         print(f"\n{Colors.GREEN}{Colors.BOLD}🎮 Teleoperation Active!{Colors.ENDC}")
         print("─" * 50)
         
+        # Display current system mode
+        mode_color = Colors.GREEN if self.current_system_mode == "teleoperation" else Colors.YELLOW
+        print(f"\n{Colors.BOLD}System Mode:{Colors.ENDC} {mode_color}{self.current_system_mode.upper()}{Colors.ENDC}")
+        
         if self.vr_healthy:
-            print(f"\n{Colors.CYAN}VR Controls:{Colors.ENDC}")
+            print(f"\n{Colors.CYAN}VR Controller Commands:{Colors.ENDC}")
             print("   • {Colors.BOLD}Grip{Colors.ENDC}: Hold to enable robot movement")
             print("   • {Colors.BOLD}Trigger{Colors.ENDC}: Control gripper (pull to close)")
             print("   • {Colors.BOLD}A/X{Colors.ENDC}: Start/stop recording")
             print("   • {Colors.BOLD}B/Y{Colors.ENDC}: Mark recording as successful")
+            print("   • {Colors.BOLD}Menu{Colors.ENDC}: Start calibration sequence")
+            print("   • {Colors.BOLD}Joystick Press{Colors.ENDC}: Emergency stop")
+            
+            print(f"\n{Colors.CYAN}System Control:{Colors.ENDC}")
+            if self.current_system_mode == "idle":
+                print("   • System is idle - use Menu button to start calibration")
+            elif self.current_system_mode == "calibrating":
+                print(f"   • Hold {Colors.BOLD}JOYSTICK{Colors.ENDC} and move to set forward direction")
+                print(f"   • Press {Colors.BOLD}GRIP{Colors.ENDC} to set origin point")
+            elif self.current_system_mode == "teleoperation":
+                print(f"   • {Colors.BOLD}GRIP{Colors.ENDC}: Enable robot movement")
+                print(f"   • {Colors.BOLD}TRIGGER{Colors.ENDC}: Control gripper")
+                print(f"   • {Colors.BOLD}A/X{Colors.ENDC}: Start/stop recording")
+                print(f"   • {Colors.BOLD}B/Y{Colors.ENDC}: Mark recording successful")
+            
+            # Show recording status
+            if self.recording_active:
+                print(f"\n{Colors.RED}● RECORDING IN PROGRESS{Colors.ENDC}")
+            
         else:
             print(f"\n{Colors.WARNING}🎮 VR Graceful Fallback Mode:{Colors.ENDC}")
             print(f"   • VR controller not connected - using alternative control methods")
@@ -645,11 +368,6 @@ class LabelboxRoboticsSystem(Node):
         """Clean up resources"""
         print(f"\n\n{Colors.CYAN}Shutting down systems...{Colors.ENDC}")
         
-        # Clean up camera subscriptions
-        for subscription in self.camera_subscriptions:
-            self.destroy_subscription(subscription)
-        self.camera_subscriptions.clear()
-        
         # Cleanup will be handled by ROS2 shutdown
     
     def _get_bool_param(self, param_name: str, default: bool = False) -> bool:
@@ -661,131 +379,129 @@ class LabelboxRoboticsSystem(Node):
             return str(param_value).lower() in ('true', '1', 'yes', 'on')
     
     async def run(self):
-        """Main run loop with graceful degradation support"""
+        """Main run loop with passive monitoring approach"""
         try:
-            # Welcome message
+            # Welcome message - always show first
             self.print_welcome_message()
             
-            # Initialize system
-            if not await self.initialize_system():
-                print(f"\n{Colors.FAIL}Critical system initialization failed. Exiting.{Colors.ENDC}")
-                return
+            # Initial status message
+            print(f"\n{Colors.GREEN}{Colors.BOLD}🚀 System Starting Up{Colors.ENDC}")
+            print("─" * 50)
+            print(f"\n{Colors.CYAN}System components will initialize in sequence:{Colors.ENDC}")
+            print(f"   1️⃣  Cameras (if enabled) - initializing first")
+            print(f"   2️⃣  Robot control and MoveIt - starting after camera init")
+            print(f"   3️⃣  VR input and teleoperation nodes")
+            print(f"   4️⃣  Data recording (if enabled)")
+            print(f"\n{Colors.YELLOW}Components will appear as they become ready...{Colors.ENDC}")
             
-            # Reset robot (only if robot and MoveIt are healthy)
-            if self.robot_healthy and self.moveit_healthy:
-                self.reset_robot_to_home()
-            else:
-                print(f"\n{Colors.WARNING}⚠️  Skipping robot reset - running in monitoring mode{Colors.ENDC}")
-            
-            # Handle calibration based on system state
-            if self.vr_healthy and self.moveit_healthy:
-                # Full VR teleoperation mode
-                self.enter_calibration_mode()
-                
-                # Start full teleoperation
-                self.start_teleoperation()
-                
-            elif self.robot_healthy:
-                # Robot monitoring mode (no VR or degraded MoveIt)
-                print(f"\n{Colors.CYAN}{Colors.BOLD}🔍 System Monitoring Mode{Colors.ENDC}")
-                print("─" * 50)
-                print(f"\n{Colors.CYAN}Current Status:{Colors.ENDC}")
-                if not self.vr_healthy:
-                    print("   • 🎮 VR: Graceful fallback active (will auto-reconnect)")
-                if not self.moveit_healthy:
-                    print("   • 🔧 MoveIt: Services initializing (check progress below)")
-                print("   • 📊 System diagnostics: Active")
-                print("   • 🔄 Hot-plugging: VR and services supported")
-                print(f"\n{Colors.GREEN}Features available:{Colors.ENDC}")
-                print("   • Real-time system status monitoring")
-                print("   • Automatic VR reconnection detection")
-                print("   • Service availability monitoring")
-                print("   • Data recording (if enabled)")
-                print(f"\n{Colors.WARNING}System will automatically upgrade when components become available{Colors.ENDC}")
-                
-            else:
-                # Basic monitoring mode
-                print(f"\n{Colors.WARNING}{Colors.BOLD}⚠️  Basic Monitoring Mode{Colors.ENDC}")
-                print("─" * 50)
-                print("   • Limited functionality - monitoring system health")
-                print("   • Check robot connection and ros2_control status")
-            
-            # Simple diagnostic reporting
-            print(f"\n{Colors.CYAN}📊 System diagnostics active{Colors.ENDC}")
-            print(f"   View status: ros2 topic echo /diagnostics")
-            print(f"   Monitor system: ros2 run rqt_robot_monitor rqt_robot_monitor")
-            print(f"{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
+            # Start passive monitoring
+            print(f"\n{Colors.CYAN}📊 System monitoring active{Colors.ENDC}")
+            print(f"   • Components will be detected automatically")
+            print(f"   • Status updates every 5 seconds")
+            print(f"   • Detailed diagnostics: ros2 topic echo /diagnostics")
+            print(f"\n{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
             
             # Force flush output
             sys.stdout.flush()
             
-            # Update diagnostics and keep system running
+            # Initialize monitoring state
             self._last_health_check = time.time()
-            self.last_diagnostic_summary_time = time.time()  # Initialize summary timer
+            self.last_diagnostic_summary_time = time.time()
+            self._last_mode_display = ""
+            self._startup_phase = True
+            self._startup_start_time = time.time()
             
+            # Main monitoring loop
             while self.running:
                 try:
-                    # Update diagnostics more frequently
+                    # Update diagnostics
                     self.diagnostic_updater.update()
                     
-                    # Health checks every 30 seconds
-                    if time.time() - self._last_health_check > 30.0:
-                        await self._periodic_health_check()
+                    # During startup phase (first 30 seconds), check component availability more frequently
+                    if self._startup_phase and (time.time() - self._startup_start_time) < 30.0:
+                        # Quick component detection during startup
+                        await self._detect_components()
+                        
+                        # Exit startup phase once core components are ready
+                        if self.robot_healthy and self.moveit_healthy:
+                            self._startup_phase = False
+                            print(f"\n{Colors.GREEN}✅ Core system components initialized!{Colors.ENDC}\n")
+                    
+                    # Display mode change notifications
+                    if self.current_system_mode != self._last_mode_display:
+                        self._last_mode_display = self.current_system_mode
+                        
+                        # Clear and show mode change
+                        print(f"\n{Colors.BLUE}{'=' * 60}{Colors.ENDC}")
+                        print(f"🔄 {Colors.BOLD}SYSTEM MODE CHANGED: {Colors.GREEN}{self.current_system_mode.upper()}{Colors.ENDC}")
+                        print(f"{Colors.BLUE}{'=' * 60}{Colors.ENDC}\n")
+                        
+                        # Show mode-specific guidance
+                        if self.current_system_mode == "calibrating":
+                            self.enter_calibration_mode()
+                        elif self.current_system_mode == "teleoperation":
+                            self.start_teleoperation()
+                        elif self.current_system_mode == "idle":
+                            if self.vr_healthy:
+                                print(f"{Colors.CYAN}System is idle. Press MENU button on VR controller to start calibration.{Colors.ENDC}")
+                            else:
+                                print(f"{Colors.CYAN}System is idle. Waiting for VR controller connection...{Colors.ENDC}")
+                    
+                    # Periodic health checks (every 10 seconds after startup)
+                    if time.time() - self._last_health_check > 10.0:
+                        await self._detect_components()
                         self._last_health_check = time.time()
                     
-                    # Short sleep for responsive diagnostics
-                    await asyncio.sleep(2.0)  # Update every 2 seconds for better responsiveness
-                    
-                except Exception as e:
-                    self.get_logger().error(f"Error in main loop iteration: {e}")
-                    # Continue running even if there are errors
+                    # Short sleep for responsive monitoring
                     await asyncio.sleep(1.0)
                     
+                except Exception as e:
+                    self.get_logger().error(f"Error in main loop: {e}")
+                    await asyncio.sleep(1.0)
+                    
+        except KeyboardInterrupt:
+            print("\n\nKeyboard interrupt received")
         except Exception as e:
-            self.get_logger().error(f"Critical error in main system run: {e}")
+            self.get_logger().error(f"Critical error in main system: {e}")
             import traceback
             traceback.print_exc()
-            print(f"\n{Colors.FAIL}System encountered critical error: {e}{Colors.ENDC}")
-            print(f"Check logs for details. System will attempt to continue...")
-            # Don't exit immediately, allow cleanup
     
-    async def _periodic_health_check(self):
-        """Simple periodic health check for component reconnection"""
-        # Re-check VR if not healthy
-        if not self.vr_healthy:
-            try:
-                vr_status = await self.check_vr_controller()
-                if vr_status:
-                    self.get_logger().info("🎮 VR reconnected!")
+    async def _detect_components(self):
+        """Passively detect component availability without blocking"""
+        try:
+            # Check VR if not healthy
+            if not self.vr_healthy:
+                vr_msg = await self.wait_for_message('/vr/right_controller/pose', PoseStamped, timeout=0.5)
+                if vr_msg is None:
+                    vr_msg = await self.wait_for_message('/vr/left_controller/pose', PoseStamped, timeout=0.5)
+                if vr_msg:
                     self.vr_healthy = True
-            except Exception:
-                pass
-        
-        # Re-check MoveIt if not healthy
-        if not self.moveit_healthy:
-            try:
-                moveit_status = await self.check_moveit_services()
-                if all(moveit_status.values()):
-                    self.get_logger().info("🔧 MoveIt services available!")
-                    self.moveit_healthy = True
-            except Exception:
-                pass
-        
-        # Re-check robot if not healthy
-        if not self.robot_healthy:
-            try:
-                robot_status = await self.check_robot_connection()
-                if robot_status:
-                    self.get_logger().info("🤖 Robot connected!")
+                    self.get_logger().info("🎮 VR controller detected!")
+                    print(f"\n{Colors.GREEN}✅ VR Controller connected!{Colors.ENDC}")
+                    if self.current_system_mode == "idle":
+                        print(f"{Colors.CYAN}Press MENU button to start calibration{Colors.ENDC}\n")
+            
+            # Check robot connection if not healthy
+            if not self.robot_healthy:
+                joint_msg = await self.wait_for_message('/joint_states', JointState, timeout=0.5)
+                if joint_msg and len(joint_msg.position) >= 7:
                     self.robot_healthy = True
-            except Exception:
-                pass
-        
-        # Trigger a diagnostic summary if it's been a while
-        current_time = time.time()
-        if current_time - self.last_diagnostic_summary_time > self.diagnostic_summary_interval:
-            self.print_diagnostic_summary()
-            self.last_diagnostic_summary_time = current_time
+                    self.get_logger().info("🤖 Robot connected!")
+                    print(f"\n{Colors.GREEN}✅ Robot connection established!{Colors.ENDC}\n")
+            
+            # Check MoveIt services if not healthy
+            if not self.moveit_healthy:
+                # Just check one key service as indicator
+                ik_client = self.create_client(Trigger, '/compute_ik')  # Dummy service type
+                if ik_client.service_is_ready():
+                    self.moveit_healthy = True
+                    self.get_logger().info("🔧 MoveIt services ready!")
+                    print(f"\n{Colors.GREEN}✅ MoveIt services available!{Colors.ENDC}\n")
+                self.destroy_client(ik_client)
+                
+        except Exception as e:
+            # Silent failure - this is just detection, not critical
+            pass
 
     def diagnostics_callback(self, msg):
         """Callback for receiving diagnostics from all nodes"""
@@ -801,6 +517,33 @@ class LabelboxRoboticsSystem(Node):
             # Store individual key-value pairs
             for item in status.values:
                 self.node_diagnostics[node_name][item.key] = item.value
+            
+            # Extract system health from main_system diagnostics
+            if 'main_system' in node_name:
+                for item in status.values:
+                    if item.key == 'vr_connected':
+                        self.vr_healthy = (item.value == 'True')
+                    elif item.key == 'robot_connected':
+                        self.robot_healthy = (item.value == 'True')
+                    elif item.key == 'cameras_healthy':
+                        self.cameras_healthy = (item.value == 'True')
+                    elif item.key == 'system_state':
+                        self.current_system_mode = item.value
+                    elif item.key == 'recording_active':
+                        self.recording_active = (item.value == 'True')
+                    # Check if MoveIt is ready based on the 'moveit_ready' key from system_monitor
+                    elif item.key == 'moveit_ready': # Assuming system_monitor adds this key
+                        self.moveit_healthy = (item.value == 'True')
+
+                # Fallback for moveit_healthy based on message if 'moveit_ready' key is not present
+                # This part should ideally be less reliant on string parsing if a dedicated key is available
+                if not any(item.key == 'moveit_ready' for item in status.values):
+                    if 'fully operational' in status.message.lower() or \
+                       ('vr fallback' in status.message.lower() and self.robot_healthy): # VR fallback implies MoveIt is OK if robot is OK
+                        self.moveit_healthy = True
+                    elif 'moveit pending' in status.message.lower() or not self.robot_healthy:
+                        self.moveit_healthy = False
+                    # else, keep previous state or default to False if unsure
         
         # Check if it's time to print a diagnostic summary
         current_time = time.time()
@@ -819,7 +562,7 @@ class LabelboxRoboticsSystem(Node):
         return level_map.get(level, f"UNKNOWN({level})")
     
     def print_diagnostic_summary(self):
-        """Print a beautiful system health summary with frequency information"""
+        """Print a beautiful system health summary from diagnostics"""
         
         # Clear previous output for a clean look
         print("\n" * 1)
@@ -834,377 +577,307 @@ class LabelboxRoboticsSystem(Node):
         print(f"🕐 Time: {Colors.BOLD}{current_time}{Colors.ENDC}")
         print(f"{Colors.CYAN}{'-' * 80}{Colors.ENDC}")
         
-        # Overall system status
-        if self.vr_healthy and self.moveit_healthy and self.robot_healthy:
-            status_icon = "🟢"
-            status_text = f"{Colors.GREEN}ALL SYSTEMS FULLY OPERATIONAL{Colors.ENDC}"
-        elif self.moveit_healthy and self.robot_healthy:
-            status_icon = "🟡"
-            status_text = f"{Colors.WARNING}CORE SYSTEMS OPERATIONAL (VR FALLBACK){Colors.ENDC}"
-        elif self.robot_healthy:
-            status_icon = "🟠"
-            status_text = f"{Colors.WARNING}ROBOT CONNECTED (MOVEIT PENDING){Colors.ENDC}"
-        else:
-            status_icon = "🔴"
-            status_text = f"{Colors.FAIL}ROBOT CONNECTION REQUIRED{Colors.ENDC}"
+        # Extract information from diagnostics
+        system_diagnostics = {}
+        vr_performance = {}
+        control_performance = {}
+        camera_diagnostics_data = {} # Renamed to avoid conflict with the other camera_diagnostics
+        resource_info = {}
         
-        print(f"{status_icon} {Colors.BOLD}OVERALL STATUS:{Colors.ENDC} {status_text}")
-        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        
-        # System components overview
-        print(f"{Colors.BOLD}{Colors.BLUE}🔧 SYSTEM COMPONENTS{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
-        
-        # VR Component
-        vr_icon = "🎮✅" if self.vr_healthy else "🎮⚠️"
-        vr_status = f"{Colors.GREEN}Connected & Operational{Colors.ENDC}" if self.vr_healthy else f"{Colors.WARNING}Graceful Fallback{Colors.ENDC}"
-        print(f"  {vr_icon} VR Controller: {vr_status}")
-        
-        # Robot Component
-        robot_icon = "🤖✅" if self.robot_healthy else "🤖❌"
-        if self.robot_healthy:
-            hardware_type = "Fake Hardware" if self._get_bool_param('use_fake_hardware', False) else "Real Robot"
-            robot_status = f"{Colors.GREEN}Connected ({hardware_type}){Colors.ENDC}"
-        else:
-            robot_status = f"{Colors.FAIL}Disconnected{Colors.ENDC}"
-        print(f"  {robot_icon} Robot: {robot_status}")
-        
-        # MoveIt Component
-        moveit_icon = "🔧✅" if self.moveit_healthy else "🔧⚠️"
-        moveit_status = f"{Colors.GREEN}Services Ready{Colors.ENDC}" if self.moveit_healthy else f"{Colors.WARNING}Services Pending{Colors.ENDC}"
-        print(f"  {moveit_icon} MoveIt: {moveit_status}")
-        
-        # Camera Component
-        cameras_enabled = self.launch_params.get('enable_cameras', False)
-        if cameras_enabled:
-            camera_icon = "📹✅" if self.cameras_healthy else "📹⚠️"
-            camera_status = f"{Colors.GREEN}Operational{Colors.ENDC}" if self.cameras_healthy else f"{Colors.WARNING}Issues{Colors.ENDC}"
-        else:
-            camera_icon = "📹⭕"
-            camera_status = f"{Colors.CYAN}Disabled{Colors.ENDC}"
-        print(f"  {camera_icon} Cameras: {camera_status}")
-        
-        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        
-        # Detailed frequency information from all nodes
-        if self.node_diagnostics:
-            print(f"{Colors.BOLD}{Colors.BLUE}🔄 NODE FREQUENCY REPORT{Colors.ENDC}")
-            print(f"{Colors.CYAN}{'=' * 50}{Colors.ENDC}")
+        # Consolidate oculus_reader specific diagnostics for VR section
+        oculus_node_diagnostics = None
+
+        for node_name, diagnostics_content in self.node_diagnostics.items():
+            if 'main_system' in node_name: # Should be specific like self.get_name()
+                system_diagnostics = diagnostics_content
+                # System state updates are handled in diagnostics_callback directly
             
-            # Frequency-related keywords to look for
-            frequency_keywords = [
-                'Rate', 'Frequency', 'Hz', 'FPS', 'Poll Rate', 'Publish Rate', 'Control Rate',
-                'Update Rate', 'Sample Rate', 'Actual', 'Target', 'Expected'
-            ]
+            elif node_name == 'oculus_reader:vr_controller': # Specific key for VR performance
+                vr_performance = diagnostics_content # This now holds all KVs for this diagnostic source
+            elif node_name.startswith('oculus_reader') and not oculus_node_diagnostics: # General oculus_reader status
+                 oculus_node_diagnostics = diagnostics_content
+
+            elif node_name.startswith("Camera ") and " (Unavailable)" not in node_name: # Match active cameras by task name
+                # Extracts <camera_id> from "Camera <camera_id>"
+                cam_id_key = node_name.split("Camera ", 1)[1]
+                camera_diagnostics_data[cam_id_key] = diagnostics_content
+            elif node_name.startswith("Camera ") and " (Unavailable)" in node_name:
+                cam_id_key = node_name.split("Camera ", 1)[1].replace(" (Unavailable)", "")
+                # Optionally store unavailable camera diagnostics if needed for detailed display beyond status
+                # For now, the status is primary, handled by CameraNodeOverallStatusTask for summary
+                # and IndividualCameraDiagnosticTask for the specific 'unavailable' status message.
+                pass # Or store if you want to display more from it.
             
-            # Collect nodes with frequency data (excluding camera nodes now handled above)
-            frequency_nodes = []
-            other_nodes = []
+            elif 'control_loop' in node_name: # Matches 'robot_control_node:control_loop'
+                control_performance = diagnostics_content
+
+            elif 'resources' in node_name:
+                resource_info = diagnostics_content
+        
+        # System Mode - Most prominent display
+        mode_color = Colors.GREEN if self.current_system_mode == "teleoperation" else Colors.YELLOW
+        if self.current_system_mode == "error":
+            mode_color = Colors.FAIL
+        print(f"🤖 {Colors.BOLD}SYSTEM MODE:{Colors.ENDC} {mode_color}{Colors.BOLD}{self.current_system_mode.upper()}{Colors.ENDC}")
+        
+        # Recording Status - Prominent display
+        if self.recording_active:
+            print(f"🔴 {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.RED}{Colors.BOLD}● RECORDING ON{Colors.ENDC}")
+        else:
+            print(f"⚫ {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.CYAN}○ RECORDING OFF{Colors.ENDC}")
+        
+        # VR Controller Performance & Status
+        print(f"\n{Colors.BOLD}🎮 VR STATUS & PERFORMANCE:{Colors.ENDC}")
+        if self.vr_healthy:
+            # Try to get specific performance data from 'oculus_reader:vr_controller'
+            target_fps_vr = vr_performance.get('target_rate', 'N/A') 
+            actual_fps_vr = vr_performance.get('current_rate', 'N/A')
+            efficiency_vr = vr_performance.get('efficiency', 'N/A')
+            status_msg_vr = vr_performance.get('Summary', 'Connected')
+
+            print(f"   • Status: {Colors.GREEN}{status_msg_vr}{Colors.ENDC}")
+            print(f"   • Target FPS: {Colors.CYAN}{target_fps_vr} Hz{Colors.ENDC}")
             
-            for node_name in sorted(self.node_diagnostics.keys()):
-                diagnostics = self.node_diagnostics[node_name]
-                frequency_data = {}
+            try: actual_fps_float = float(actual_fps_vr)
+            except ValueError: actual_fps_float = 0.0
+            fps_color = Colors.GREEN if actual_fps_float >= 55 else Colors.WARNING if actual_fps_float >= 30 else Colors.FAIL
+            print(f"   • Actual FPS: {fps_color}{actual_fps_vr} Hz{Colors.ENDC}")
+            
+            if efficiency_vr != 'N/A': 
+                try: efficiency_float = float(efficiency_vr)
+                except ValueError: efficiency_float = 0.0
+                eff_color = Colors.GREEN if efficiency_float >= 90 else Colors.WARNING if efficiency_float >= 70 else Colors.FAIL
+                print(f"   • Efficiency: {eff_color}{efficiency_vr}%{Colors.ENDC}")
+        elif oculus_node_diagnostics: # General oculus_reader status if specific performance data not found but oculus_reader is publishing
+            oc_status_msg = oculus_node_diagnostics.get('Summary', 'Graceful Fallback')
+            oc_level = oculus_node_diagnostics.get('Level', 'WARNING')
+            oc_color = Colors.GREEN if oc_level == 'OK' else Colors.WARNING if oc_level == 'WARNING' else Colors.FAIL
+            print(f"   {oc_color}• {oc_status_msg}{Colors.ENDC}")
+            print(f"   {Colors.YELLOW}• Performance data not found under 'oculus_reader:vr_controller' diagnostics.{Colors.ENDC}")
+        else:
+            print(f"   {Colors.WARNING}• VR Controller not connected or no diagnostics received.{Colors.ENDC}")
+        
+        # Robot Control Loop Performance (only shown during teleoperation)
+        if self.current_system_mode == "teleoperation" and control_performance:
+            print(f"\n{Colors.BOLD}🤖 ROBOT CONTROL LOOP:{Colors.ENDC}")
+            target_rate = control_performance.get('target', 45.0)
+            actual_rate = control_performance.get('actual', 0.0)
+            efficiency = control_performance.get('efficiency', 0.0)
+            
+            if actual_rate > 0:
+                fps_color = Colors.GREEN if actual_rate >= 40 else Colors.WARNING if actual_rate >= 20 else Colors.FAIL
+                print(f"   • Target Rate: {Colors.CYAN}{target_rate:.0f} Hz{Colors.ENDC}")
+                print(f"   • Actual Rate: {fps_color}{actual_rate:.1f} Hz{Colors.ENDC}")
+                eff_color = Colors.GREEN if efficiency >= 90 else Colors.WARNING if efficiency >= 70 else Colors.FAIL
+                print(f"   • Efficiency: {eff_color}{efficiency:.1f}%{Colors.ENDC}")
+            else:
+                print(f"   {Colors.WARNING}• Control loop not active yet{Colors.ENDC}")
+        
+        # Camera System Performance
+        if self.cameras_healthy and camera_diagnostics_data:
+            print(f"\n{Colors.BOLD}{Colors.BLUE}📹 CAMERA SYSTEM PERFORMANCE{Colors.ENDC}")
+            print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
+            
+            # Load camera config to get expected cameras and their positions
+            expected_cameras_map = {}
+            camera_config_path = self.launch_params.get('camera_config', '')
+            # self.get_logger().info(f"Attempting to load expected_cameras from: {camera_config_path}") # Already logged earlier
+            if os.path.exists(camera_config_path):
+                try:
+                    with open(camera_config_path, 'r') as f:
+                        config_from_file = yaml.safe_load(f)
+                        if config_from_file and 'cameras' in config_from_file:
+                            for cam_id_yaml, cam_cfg_yaml in config_from_file.get('cameras', {}).items():
+                                if cam_cfg_yaml.get('enabled', False):
+                                    expected_cameras_map[cam_id_yaml] = {
+                                        'serial': cam_cfg_yaml.get('serial_number', 'N/A'),
+                                        'position': cam_cfg_yaml.get('metadata', {}).get('position', 'Unknown') # Get position from metadata
+                                    }
+                            # self.get_logger().info(f"Loaded {len(expected_cameras_map)} expected cameras with positions from config.")
+                except Exception as e:
+                    self.get_logger().error(f"Failed to load/parse camera config for positions in main_system: {camera_config_path} - {e}")
+            
+            main_cam_node_status = self.node_diagnostics.get('vision_camera_node:Camera System Status', {})
+            cam_node_summary = main_cam_node_status.get('Summary', 'Camera node status not directly available')
+            cam_node_level = main_cam_node_status.get('Level', 'OK')
+            cam_node_color = Colors.GREEN if cam_node_level == 'OK' else Colors.WARNING if cam_node_level == 'WARNING' else Colors.FAIL
+
+            print(f"  🔧 {Colors.BOLD}CAMERA NODE STATUS:{Colors.ENDC} {cam_node_color}{cam_node_summary}{Colors.ENDC}")
+            print(f"  📷 {Colors.BOLD}Discovered & Reporting Cameras:{Colors.ENDC} {Colors.CYAN}{len(camera_diagnostics_data)}{Colors.ENDC}")
+            
+            print(f"\n  📊 {Colors.BOLD}INDIVIDUAL CAMERA PERFORMANCE:{Colors.ENDC}")
+            print(f"  {'.' * 56}") # Dotted line
+            
+            # Iterate through camera_diagnostics_data which should now be keyed by camera_id
+            for cam_id_diag, cam_diag_content in camera_diagnostics_data.items():
+                # cam_id_diag is the camera_id from the diagnostic task name
+                # cam_diag_content is the dictionary of KVs for this specific camera
                 
-                for key, value in diagnostics.items():
-                    if any(keyword in key for keyword in frequency_keywords):
-                        frequency_data[key] = value
+                # Get configured position using cam_id_diag from expected_cameras_map
+                # serial = cam_diag_content.get('Actual SN', cam_diag_content.get('Configured SN/Idx', 'Unknown')) # Prioritize actual SN if available
+                # position = cam_config.get('metadata', {}).get('position', 'N/A')
+                serial = cam_diag_content.get('Actual SN', cam_diag_content.get('Configured SN/Idx', 'Unknown'))
+                position = expected_cameras_map.get(cam_id_diag, {}).get('position', 'Config Pos N/A')
+
+                status_summary = cam_diag_content.get('Summary', 'Status N/A')
+                level = cam_diag_content.get('Level', 'OK')
+
+                print(f"\n  📷 {Colors.BOLD}{cam_id_diag}{Colors.ENDC} (SN: {serial}, Pos: {position}):")
                 
-                if frequency_data:
-                    frequency_nodes.append((node_name, diagnostics, frequency_data))
+                if level == 'ERROR':
+                    print(f"     {Colors.FAIL}• Status: {status_summary}{Colors.ENDC}")
+                    continue
+                elif level == 'WARNING':
+                    print(f"     {Colors.WARNING}• Status: {status_summary}{Colors.ENDC}")
                 else:
-                    other_nodes.append((node_name, diagnostics))
-            
-            # Display camera system report first if cameras are enabled
-            cameras_enabled = self.launch_params.get('enable_cameras', False)
-            if cameras_enabled:
-                print(f"\n{Colors.BOLD}{Colors.BLUE}📹 CAMERA SYSTEM REPORT{Colors.ENDC}")
-                print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
+                    print(f"     {Colors.GREEN}• Status: {status_summary}{Colors.ENDC}")
+
+                # Color stream performance
+                color_target = cam_diag_content.get('Target Color FPS', 'N/A')
+                color_current = cam_diag_content.get('Actual Color FPS', 'N/A')
+                color_efficiency = cam_diag_content.get('Color Efficiency (%)', 'N/A')
+                color_frames = cam_diag_content.get('Color Frames Published', 'N/A')
                 
-                if self.camera_fps_tracking:
-                    # Count only cameras that have received data (active cameras)
-                    active_cameras = [cam for cam, streams in self.camera_fps_tracking.items() 
-                                    if any(stream['msg_count'] > 0 for stream in streams.values())]
-                    
-                    # Show active cameras from real-time tracking
-                    print(f"  🔧 {Colors.BOLD}CAMERA CONFIGURATION:{Colors.ENDC}")
-                    print(f"    • Active Cameras: {Colors.CYAN}{len(active_cameras)}{Colors.ENDC}")
-                    print(f"    • Monitoring: Real-time FPS tracking enabled")
-                    
-                    if active_cameras:
-                        # Individual camera details from direct monitoring
-                        print(f"  📷 {Colors.BOLD}CAMERA PERFORMANCE:{Colors.ENDC}")
-                        for camera_name in active_cameras:
-                            streams = self.camera_fps_tracking[camera_name]
-                            print(f"\n    📹 {Colors.BOLD}{camera_name.upper()}{Colors.ENDC}")
-                            
-                            # Show camera info if available
-                            if camera_name in self.camera_info_data:
-                                color_info = self.camera_info_data[camera_name].get('color', {})
-                                if color_info:
-                                    resolution = f"{color_info['width']}x{color_info['height']}"
-                                    print(f"      └─ Resolution: {Colors.CYAN}{resolution}{Colors.ENDC}")
-                                    print(f"      └─ Frame ID: {Colors.CYAN}{color_info.get('frame_id', 'N/A')}{Colors.ENDC}")
-                            
-                            # Stream performance from real-time tracking
-                            print(f"      📊 {Colors.BOLD}STREAM PERFORMANCE:{Colors.ENDC}")
-                            
-                            for stream_type, tracking_data in streams.items():
-                                # Only show streams that have received data
-                                if tracking_data['msg_count'] == 0:
-                                    continue
-                                    
-                                current_fps = tracking_data['current_fps']
-                                msg_count = tracking_data['msg_count']
-                                
-                                # Determine performance color
-                                if current_fps >= 25:
-                                    perf_color = Colors.GREEN
-                                    perf_icon = "🟢"
-                                elif current_fps >= 15:
-                                    perf_color = Colors.CYAN
-                                    perf_icon = "🔵"
-                                elif current_fps > 0:
-                                    perf_color = Colors.WARNING
-                                    perf_icon = "🟡"
-                                else:
-                                    perf_color = Colors.FAIL
-                                    perf_icon = "🔴"
-                                
-                                stream_display = "RGB" if stream_type == 'color' else "Depth"
-                                if current_fps > 0:
-                                    print(f"        {perf_icon} {stream_display}: {perf_color}{current_fps:.1f} Hz{Colors.ENDC} ({msg_count} frames)")
-                                else:
-                                    print(f"        {perf_icon} {stream_display}: {perf_color}No data{Colors.ENDC}")
-                    else:
-                        # No active cameras found
-                        print(f"\n⚠️  {Colors.WARNING}No active cameras detected{Colors.ENDC}")
-                        print(f"   📍 Camera nodes may be starting up or no cameras connected")
-                        print(f"   💡 Check camera hardware connections and camera node status")
+                if color_current != 'N/A':
+                    try: color_current_float = float(color_current)
+                    except ValueError: color_current_float = 0.0
+                    print(f"     • Color FPS (Target: {color_target}): ", end="")
+                    fps_color = Colors.GREEN if color_current_float >= (float(color_target)*0.9 if color_target !='N/A' else 25) else Colors.WARNING if color_current_float >= (float(color_target)*0.7 if color_target != 'N/A' else 15) else Colors.FAIL
+                    print(f"{fps_color}{color_current} Hz{Colors.ENDC} (Eff: {color_efficiency}%) ({color_frames})")
                 
-                else:
-                    # No camera tracking data - cameras may not be publishing yet
-                    print(f"\n⚠️  {Colors.WARNING}Camera monitoring active but no camera data received{Colors.ENDC}")
-                    print(f"   📍 Camera nodes may be starting up or no cameras connected")
-                    print(f"   💡 Check camera hardware connections and RealSense drivers")
-                    print(f"   🔍 Expected topics:")
-                    print(f"      • /cameras/wrist_camera/image_raw")
-                    print(f"      • /cameras/overhead_camera/image_raw")
-                    print(f"      • /cameras/*/depth/image_raw")
+                # Depth stream performance
+                depth_target = cam_diag_content.get('Target Depth FPS', 'N/A')
+                depth_current = cam_diag_content.get('Actual Depth FPS', 'N/A')
+                depth_efficiency = cam_diag_content.get('Depth Efficiency (%)', 'N/A')
+                depth_frames = cam_diag_content.get('Depth Frames Published', 'N/A')
                 
-                print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
+                # Check if depth is enabled for this camera from the config
+                depth_enabled_in_config = False
+                if cam_id_diag in expected_cameras_map: # Check if cam_id_diag is a valid key
+                    # This assumes expected_cameras_map stores the full config for the camera, 
+                    # or that camera_config_path needs to be parsed again to get specific depth enabled status
+                    # For simplicity, let's assume the camera_node only provides depth diagnostics if enabled.
+                    # A more robust way would be to check the original camera_config_file content.
+                    # The IndividualCameraDiagnosticTask already checks this from its own camera_config.
+                    # So if depth_current is not N/A, it implies it was enabled and measured.
+                    depth_enabled_in_config = True # Simpler: if depth_current is present, assume it was enabled
+
+                if depth_current != 'N/A' and depth_enabled_in_config:
+                    try: depth_current_float = float(depth_current)
+                    except ValueError: depth_current_float = 0.0
+                    print(f"     • Depth FPS (Target: {depth_target}): ", end="")
+                    fps_color = Colors.GREEN if depth_current_float >= (float(depth_target)*0.9 if depth_target !='N/A' else 25) else Colors.WARNING if depth_current_float >= (float(depth_target)*0.7 if depth_target != 'N/A' else 15) else Colors.FAIL
+                    print(f"{fps_color}{depth_current} Hz{Colors.ENDC} (Eff: {depth_efficiency}%) ({depth_frames})")
             
-            # Display other nodes with frequency information
-            if frequency_nodes:
-                for i, (node_name, diagnostics, frequency_data) in enumerate(frequency_nodes):
-                    # Node header
-                    level = diagnostics.get('Level', 'OK')
-                    if level == 'OK':
-                        level_color = Colors.GREEN
-                        level_icon = "🟢"
-                    elif level == 'WARNING':
-                        level_color = Colors.WARNING
-                        level_icon = "🟡"
-                    elif level == 'ERROR':
-                        level_color = Colors.FAIL
-                        level_icon = "🔴"
-                    else:
-                        level_color = Colors.CYAN
-                        level_icon = "🔵"
-                    
-                    # Create a nice node name display
-                    display_name = node_name.replace('oculus_reader: ', '').replace(':', ' -> ')
-                    if len(display_name) > 60:
-                        display_name = display_name[:57] + "..."
-                    
-                    print(f"\n{level_icon} {Colors.BOLD}{display_name}{Colors.ENDC} ({level_color}{level}{Colors.ENDC})")
-                    print(f"{Colors.CYAN}{'-' * 70}{Colors.ENDC}")
-                    
-                    # Show summary if available
-                    if 'Summary' in diagnostics:
-                        summary = diagnostics['Summary']
-                        if len(summary) > 75:
-                            summary = summary[:72] + "..."
-                        print(f"  📝 {summary}")
-                    
-                    # Show frequency information in organized sections
-                    target_rates = []
-                    actual_rates = []
-                    other_freq = []
-                    
-                    for key, value in frequency_data.items():
-                        if 'Target' in key or 'Expected' in key:
-                            target_rates.append((key, value))
-                        elif 'Actual' in key or 'Current' in key:
-                            actual_rates.append((key, value))
-                        else:
-                            other_freq.append((key, value))
-                    
-                    # Display target rates
-                    if target_rates:
-                        print(f"  🎯 {Colors.BOLD}TARGET RATES:{Colors.ENDC}")
-                        for key, value in target_rates:
-                            clean_key = key.replace('Target ', '').replace('Expected ', '')
-                            if len(clean_key) > 40:
-                                clean_key = clean_key[:37] + "..."
-                            print(f"    • {clean_key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                    
-                    # Display actual rates
-                    if actual_rates:
-                        print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
-                        for key, value in actual_rates:
-                            clean_key = key.replace('Actual ', '').replace('Current ', '')
-                            if len(clean_key) > 40:
-                                clean_key = clean_key[:37] + "..."
-                                
-                            # Color code based on performance
-                            try:
-                                numeric_value = float(str(value).replace('Hz', '').replace('%', '').strip())
-                                if numeric_value > 50:
-                                    color = Colors.GREEN
-                                    perf_icon = "🟢"
-                                elif numeric_value > 20:
-                                    color = Colors.CYAN
-                                    perf_icon = "🔵"
-                                elif numeric_value > 0:
-                                    color = Colors.WARNING
-                                    perf_icon = "🟡"
-                                else:
-                                    color = Colors.FAIL
-                                    perf_icon = "🔴"
-                            except:
-                                color = Colors.CYAN
-                                perf_icon = "🔵"
-                                
-                            print(f"    {perf_icon} {clean_key}: {color}{value}{Colors.ENDC}")
-                    
-                    # Special handling for camera node - extract specific camera FPS data
-                    if 'vision_camera_node' in node_name or 'Camera System' in node_name:
-                        # Look for camera-specific FPS data in all diagnostics
-                        camera_fps_data = {}
-                        for key, value in diagnostics.items():
-                            # Pattern: "Cam [camera_id] Actual Color FPS" or "Cam [camera_id] Actual Depth FPS"
-                            if key.startswith('Cam [') and '] Actual' in key and 'FPS' in key:
-                                camera_fps_data[key] = value
-                        
-                        if camera_fps_data and not actual_rates:  # Only show if not already displayed
-                            print(f"  📊 {Colors.BOLD}ACTUAL PERFORMANCE:{Colors.ENDC}")
-                            for key, value in camera_fps_data.items():
-                                # Extract camera ID and stream type from key
-                                # Format: "Cam [camera_id] Actual Stream FPS"
-                                parts = key.split(']')
-                                if len(parts) >= 2:
-                                    cam_id = parts[0].replace('Cam [', '')
-                                    # Extract stream type (Color or Depth)
-                                    if 'Color' in key:
-                                        stream_type = 'Color'
-                                    elif 'Depth' in key:
-                                        stream_type = 'Depth'
-                                    else:
-                                        stream_type = 'Unknown'
-                                    
-                                    # Color code based on FPS
-                                    try:
-                                        fps_value = float(value)
-                                        if fps_value >= 25:
-                                            color = Colors.GREEN
-                                            perf_icon = "🟢"
-                                        elif fps_value >= 15:
-                                            color = Colors.CYAN
-                                            perf_icon = "🔵"
-                                        elif fps_value > 0:
-                                            color = Colors.WARNING
-                                            perf_icon = "🟡"
-                                        else:
-                                            color = Colors.FAIL
-                                            perf_icon = "🔴"
-                                    except:
-                                        color = Colors.CYAN
-                                        perf_icon = "🔵"
-                                    
-                                    print(f"    {perf_icon} Cam [{cam_id}] FPS ({stream_type}): {color}{value}{Colors.ENDC}")
-                    
-                    # Display other frequency metrics
-                    if other_freq:
-                        print(f"  📈 {Colors.BOLD}OTHER METRICS:{Colors.ENDC}")
-                        for key, value in other_freq:
-                            if len(key) > 40:
-                                key = key[:37] + "..."
-                            print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                    
-                    # Show other important metrics for this node
-                    other_important_keys = [
-                        'Connection Status', 'VR Connected', 'Device IP', 'Recording Status',
-                        'Active Cameras', 'Queue Size', 'Data Queue Size', 'IK Success Rate',
-                        'Operation Mode', 'System Ready'
-                    ]
-                    
-                    important_metrics = []
-                    for key in other_important_keys:
-                        if key in diagnostics and key not in frequency_data:
-                            important_metrics.append((key, diagnostics[key]))
-                    
-                    if important_metrics:
-                        print(f"  ℹ️  {Colors.BOLD}STATUS INFO:{Colors.ENDC}")
-                        for key, value in important_metrics:
-                            if len(key) > 35:
-                                key = key[:32] + "..."
-                                
-                            if 'Success' in key and '%' in str(value):
-                                try:
-                                    success_rate = float(str(value).replace('%', ''))
-                                    if success_rate >= 95:
-                                        color = Colors.GREEN
-                                        icon = "✅"
-                                    elif success_rate >= 80:
-                                        color = Colors.CYAN
-                                        icon = "🔵"
-                                    else:
-                                        color = Colors.WARNING
-                                        icon = "⚠️"
-                                    print(f"    {icon} {key}: {color}{value}{Colors.ENDC}")
-                                except:
-                                    print(f"    ℹ️ {key}: {Colors.CYAN}{value}{Colors.ENDC}")
-                            elif 'Connected' in key or 'Ready' in key:
-                                if str(value).lower() in ['yes', 'true', 'connected', 'ready']:
-                                    print(f"    ✅ {key}: {Colors.GREEN}{value}{Colors.ENDC}")
-                                else:
-                                    print(f"    ❌ {key}: {Colors.WARNING}{value}{Colors.ENDC}")
-                            else:
-                                print(f"    • {key}: {Colors.CYAN}{value}{Colors.ENDC}")
+            # Summary
+            connected_count = sum(1 for cam_diag_content in camera_diagnostics_data.values() 
+                                if cam_diag_content.get('Level') != 'ERROR')
             
-            # Show nodes without frequency data in a compact format
-            if other_nodes:
-                print(f"\n{Colors.BOLD}{Colors.BLUE}📋 OTHER NODE STATUS{Colors.ENDC}")
+            print(f"\n  {'.' * 56}") # Dotted line
+            print(f"  📈 {Colors.BOLD}SUMMARY:{Colors.ENDC} {connected_count}/{len(expected_cameras_map)} configured cameras reported as operational by diagnostics.")
+            if connected_count < len(expected_cameras_map) and len(expected_cameras_map) > 0:
+                print(f"  💡 {Colors.CYAN}System may be operating with partial camera coverage or config mismatch.{Colors.ENDC}")
+            elif len(expected_cameras_map) == 0 and self.cameras_healthy:
+                print(f"  💡 {Colors.YELLOW}Cameras are enabled, but no cameras found in the loaded config file: {camera_config_path}{Colors.ENDC}")
+            
+            print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
+        
+        # System Resources
+        if resource_info:
+            cpu_val = resource_info.get('cpu_percent', '0.0') # These are KVs, so value is string
+            mem_val = resource_info.get('memory_percent', '0.0')
+            try:
+                cpu = float(cpu_val)
+                memory = float(mem_val)
+            except ValueError:
+                cpu = 0.0
+                memory = 0.0
+            
+            if cpu > 0 or memory > 0:
+                print(f"\n{Colors.BOLD}{Colors.BLUE}💻 SYSTEM RESOURCES{Colors.ENDC}")
                 print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
                 
-                for i, (node_name, diagnostics) in enumerate(other_nodes):
-                    level = diagnostics.get('Level', 'OK')
-                    if level == 'OK':
-                        level_color = Colors.GREEN
-                        level_icon = "🟢"
-                    elif level == 'WARNING':
-                        level_color = Colors.WARNING
-                        level_icon = "🟡"
-                    elif level == 'ERROR':
-                        level_color = Colors.FAIL
-                        level_icon = "🔴"
-                    else:
-                        level_color = Colors.CYAN
-                        level_icon = "🔵"
-                    
-                    display_name = node_name.replace(':', ' -> ')
-                    if len(display_name) > 40:
-                        display_name = display_name[:37] + "..."
-                    
-                    summary = diagnostics.get('Summary', 'No status')
-                    if len(summary) > 40:
-                        summary = summary[:37] + "..."
-                    
-                    print(f"  {level_icon} {Colors.BOLD}{display_name}{Colors.ENDC}: {summary}")
+                cpu_color = Colors.GREEN if cpu < 80 else Colors.WARNING if cpu < 90 else Colors.FAIL
+                mem_color = Colors.GREEN if memory < 80 else Colors.WARNING if memory < 90 else Colors.FAIL
                 
+                print(f"  • CPU Usage: {cpu_color}{cpu:.1f}%{Colors.ENDC}")
+                print(f"  • Memory Usage: {mem_color}{memory:.1f}%{Colors.ENDC}")
+        
+        # Detailed MoveIt Services Status
+        print(f"\n{Colors.BOLD}{Colors.BLUE}🔧 MOVEIT SERVICES STATUS{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
+        moveit_overall_ready = system_diagnostics.get('moveit_ready', 'False') == 'True'
+        
+        if moveit_overall_ready:
+            print(f"  {Colors.GREEN}✅ All core MoveIt services reported as ready.{Colors.ENDC}")
         else:
-            print(f"{Colors.WARNING}⏳ WAITING FOR DIAGNOSTIC REPORTS...{Colors.ENDC}")
-            print(f"   💡 Nodes may still be initializing")
+            print(f"  {Colors.WARNING}⚠️ Some MoveIt services may not be ready:{Colors.ENDC}")
+
+        ik_status = system_diagnostics.get('moveit_ik_service', 'Pending')
+        planner_status = system_diagnostics.get('moveit_planner_service', 'Pending')
+        scene_status = system_diagnostics.get('moveit_scene_service', 'Pending')
+
+        print(f"    ├─ IK Service (/compute_ik): {Colors.GREEN if ik_status == 'Ready' else Colors.WARNING}{ik_status}{Colors.ENDC}")
+        print(f"    ├─ Planner Service (/plan_kinematic_path): {Colors.GREEN if planner_status == 'Ready' else Colors.WARNING}{planner_status}{Colors.ENDC}")
+        print(f"    └─ Scene Service (/get_planning_scene): {Colors.GREEN if scene_status == 'Ready' else Colors.WARNING}{scene_status}{Colors.ENDC}")
+
+        # Other nodes status (filtered)
+        if self.node_diagnostics:
+            print(f"\n{Colors.BOLD}{Colors.BLUE}📋 OTHER NODE STATUS (Filtered){Colors.ENDC}")
+            print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
+            
+            # Filter out nodes we've already shown details for or are part of other sections
+            shown_nodes_prefixes = [
+                'main_system', 
+                'oculus_reader:vr_controller', 
+                # 'vision_camera_node:camera_', # Covered by new parsing
+                'Camera ', # Covers active and unavailable individual camera tasks
+                'Camera Node Status', # Covers the overall camera node status task
+                'resources', 
+                self.get_name()
+            ]
+            # Also filter specific camera node summary if we list cameras individually
+            # The camera_diagnostics keys are like 'realsense_D435_12345'
+            # The node names are like 'vision_camera_node:camera_realsense_D435_12345'
+
+            other_nodes_to_print = []
+            oculus_reader_summaries = set() # To avoid duplicate oculus_reader general messages
+
+            for node_name, diagnostics_content in sorted(self.node_diagnostics.items()):
+                is_shown_elsewhere = False
+                for prefix in shown_nodes_prefixes:
+                    if node_name.startswith(prefix):
+                        is_shown_elsewhere = True
+                        break
+                if is_shown_elsewhere:
+                    continue
+                
+                # Consolidate oculus_reader general messages
+                if node_name.startswith('oculus_reader'):
+                    summary_msg = diagnostics_content.get('Summary', 'No status')
+                    if summary_msg in oculus_reader_summaries:
+                        continue # Skip if this exact summary for oculus_reader was already added
+                    oculus_reader_summaries.add(summary_msg)
+
+                other_nodes_to_print.append((node_name, diagnostics_content))
+
+            for node_name, diagnostics in other_nodes_to_print[:7]:  # Limit to avoid clutter
+                level = diagnostics.get('Level', 'OK')
+                level_color = Colors.CYAN # Default
+                level_icon = "🔵"
+                if level == 'OK': level_color = Colors.GREEN; level_icon = "🟢"
+                elif level == 'WARNING': level_color = Colors.WARNING; level_icon = "🟡"
+                elif level == 'ERROR': level_color = Colors.FAIL; level_icon = "🔴"
+                
+                display_name = node_name.replace(':', ' -> ')
+                if len(display_name) > 35:
+                    display_name = display_name[:32] + "..."
+                
+                summary = diagnostics.get('Summary', 'No status')
+                if len(summary) > 40:
+                    summary = summary[:37] + "..."
+                
+                print(f"  {level_icon} {Colors.BOLD}{display_name:<35}{Colors.ENDC}: {level_color}{summary}{Colors.ENDC}")
         
         # Footer with quick actions
         print(f"\n{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
@@ -1217,141 +890,6 @@ class LabelboxRoboticsSystem(Node):
         
         # Force flush output
         sys.stdout.flush()
-
-    def setup_camera_monitoring(self):
-        """Set up direct camera topic monitoring for real-time performance tracking"""
-        # Get currently available camera topics dynamically
-        available_topics = self.get_topic_names_and_types()
-        camera_topics = []
-        camera_info_topics = []
-        
-        # Filter for camera-related topics - look for any camera topics under /cameras/
-        for topic_name, topic_types in available_topics:
-            if '/cameras/' in topic_name and 'sensor_msgs/msg/Image' in topic_types:
-                # Accept any image topic under /cameras/ namespace
-                if '/image_raw' in topic_name or '/image' in topic_name:
-                    camera_topics.append(topic_name)
-            elif '/cameras/' in topic_name and 'sensor_msgs/msg/CameraInfo' in topic_types:
-                camera_info_topics.append(topic_name)
-        
-        # If no topics found yet, wait a bit and try again (cameras may be starting up)
-        if not camera_topics:
-            self.get_logger().info("No camera topics found yet, will use expected patterns and monitor for availability")
-            # Use expected patterns but don't hardcode specific camera names
-            camera_topics = [
-                '/cameras/wrist_camera/image_raw',
-                '/cameras/overhead_camera/image_raw',
-                '/cameras/wrist_camera/depth/image_raw',
-                '/cameras/overhead_camera/depth/image_raw',
-            ]
-            camera_info_topics = [
-                '/cameras/wrist_camera/camera_info',
-                '/cameras/overhead_camera/camera_info',
-                '/cameras/wrist_camera/depth/camera_info',
-                '/cameras/overhead_camera/depth/camera_info',
-            ]
-        else:
-            self.get_logger().info(f"Found {len(camera_topics)} camera image topics for monitoring")
-        
-        # QoS for image topics (best effort like camera publishers typically use)
-        image_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
-        
-        # QoS for camera info (reliable for configuration data)
-        info_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
-        
-        # Subscribe to image topics for FPS tracking
-        for topic in camera_topics:
-            camera_name = self.extract_camera_name(topic)
-            # Fix stream type detection: image_raw (without depth) = 'color', depth/image_raw = 'depth'
-            if '/depth/' in topic:
-                stream_type = 'depth'
-            else:
-                stream_type = 'color'  # This will handle /cameras/wrist_camera/image_raw as RGB/color
-            
-            # Initialize tracking data only for topics we're going to monitor
-            if camera_name not in self.camera_fps_tracking:
-                self.camera_fps_tracking[camera_name] = {}
-            self.camera_fps_tracking[camera_name][stream_type] = {
-                'last_msg_time': None,
-                'msg_count': 0,
-                'fps_history': [],
-                'current_fps': 0.0
-            }
-            
-            # Create subscription
-            subscription = self.create_subscription(
-                Image,
-                topic,
-                lambda msg, cam=camera_name, stream=stream_type: self.camera_image_callback(msg, cam, stream),
-                image_qos
-            )
-            self.camera_subscriptions.append(subscription)
-            self.get_logger().info(f"Monitoring camera topic: {topic} -> {camera_name}({stream_type})")
-        
-        # Subscribe to camera info topics for resolution and config data
-        for topic in camera_info_topics:
-            camera_name = self.extract_camera_name(topic)
-            stream_type = 'depth' if '/depth/' in topic else 'color'
-            
-            # Initialize camera info storage
-            if camera_name not in self.camera_info_data:
-                self.camera_info_data[camera_name] = {}
-            
-            subscription = self.create_subscription(
-                CameraInfo,
-                topic,
-                lambda msg, cam=camera_name, stream=stream_type: self.camera_info_callback(msg, cam, stream),
-                info_qos
-            )
-            self.camera_subscriptions.append(subscription)
-            self.get_logger().info(f"Monitoring camera info: {topic}")
-    
-    def extract_camera_name(self, topic):
-        """Extract camera name from topic path"""
-        # Example: '/cameras/wrist_camera/image_raw' -> 'wrist_camera'
-        parts = topic.split('/')
-        if len(parts) >= 3 and parts[1] == 'cameras':
-            return parts[2]
-        return 'unknown_camera'
-    
-    def camera_image_callback(self, msg, camera_name, stream_type):
-        """Track camera image frequency for real-time FPS calculation"""
-        current_time = time.time()
-        tracking_data = self.camera_fps_tracking[camera_name][stream_type]
-        
-        if tracking_data['last_msg_time'] is not None:
-            # Calculate time since last message
-            time_diff = current_time - tracking_data['last_msg_time']
-            if time_diff > 0:
-                instant_fps = 1.0 / time_diff
-                
-                # Keep a rolling average of last 10 samples
-                tracking_data['fps_history'].append(instant_fps)
-                if len(tracking_data['fps_history']) > 10:
-                    tracking_data['fps_history'].pop(0)
-                
-                # Calculate average FPS
-                tracking_data['current_fps'] = sum(tracking_data['fps_history']) / len(tracking_data['fps_history'])
-        
-        tracking_data['last_msg_time'] = current_time
-        tracking_data['msg_count'] += 1
-    
-    def camera_info_callback(self, msg, camera_name, stream_type):
-        """Store camera configuration information"""
-        self.camera_info_data[camera_name][stream_type] = {
-            'width': msg.width,
-            'height': msg.height,
-            'distortion_model': msg.distortion_model,
-            'frame_id': msg.header.frame_id
-        }
 
 
 async def async_main():

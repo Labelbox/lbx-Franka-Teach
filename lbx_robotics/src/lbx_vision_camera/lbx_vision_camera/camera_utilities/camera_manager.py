@@ -261,14 +261,17 @@ class ZEDCamera:
 
 class CameraManager:
     """Camera Manager for Labelbox Robotics System"""
-    def __init__(self, config_path: str, node_logger=None):
+    def __init__(self, config_path: str, node_logger=None, discovered_realsense_sns=None, discovered_zed_sns=None):
         self.config_path = config_path
         self.config_data = self._load_config_data()
-        self.cameras: Dict[str, Any] = {}
+        self.cameras: Dict[str, Any] = {} # Stores active, running camera instances
+        self.unavailable_cameras: Dict[str, Dict] = {} # Stores configured but not detected/started cameras
         self.capture_threads: Dict[str, threading.Thread] = {}
         self.frame_queues: Dict[str, queue.Queue] = {}
         self.running = False
         self.logger = node_logger if node_logger else logging.getLogger("CameraManager")
+        self.discovered_realsense_sns = discovered_realsense_sns if discovered_realsense_sns is not None else []
+        self.discovered_zed_sns = discovered_zed_sns if discovered_zed_sns is not None else []
         
     def _load_config_data(self) -> Dict:
         try:
@@ -314,23 +317,67 @@ class CameraManager:
         global_settings = self.config_data.get('global_settings', {})
         buffer_size = global_settings.get('buffer_size', 5)
 
+        active_camera_count = 0
         for camera_id, cam_config_item in self.config_data.get('cameras', {}).items():
             if not cam_config_item.get('enabled', False):
                 self.logger.info(f"Skipping disabled camera: {camera_id}"); continue
+            
+            cam_type = cam_config_item.get('type', 'unknown').lower()
+            configured_sn = str(cam_config_item.get('serial_number', '')) # Ensure string for comparison
+            # For ZED, device_id might be used if serial_number isn't primary identifier in config
+            # configured_id = configured_sn if cam_type == 'realsense' else str(cam_config_item.get('device_id', configured_sn))
+
+            is_discovered = False
+            if cam_type == 'realsense':
+                if configured_sn and configured_sn in self.discovered_realsense_sns:
+                    is_discovered = True
+                elif not configured_sn and self.discovered_realsense_sns: # If no SN in config, but some RS cams are found
+                    # This case is tricky: which one to assign? For now, require SN match if SN is in config.
+                    # If SN is NOT in config, the RealsenseCamera class itself will try to pick the first available.
+                    # To make this logic robust, if config SN is empty, we might just assume one of the discovered ones
+                    # could be it, but the camera class init would need to handle it gracefully or be told which discovered one to use.
+                    # For now, if configured_sn is empty, we let _init_camera and RealsenseCamera.start() try to find one.
+                    # However, this makes pre-checking difficult if multiple are discovered but not specified.
+                    # Let's refine: if SN is empty in config, it's ambiguous. If SN is specified, it MUST be discovered.
+                    if not configured_sn: 
+                        self.logger.warn(f"RealSense camera {camera_id} has no serial number in config. Discovery check is ambiguous.")
+                        is_discovered = True # Tentatively allow, RealsenseCamera will try to pick one if available
+                    else: # Configured SN is present but not in discovered list
+                        is_discovered = False 
+            elif cam_type == 'zed':
+                # ZED uses integer serial numbers typically. Ensure comparison is robust.
+                if configured_sn and configured_sn in self.discovered_zed_sns:
+                    is_discovered = True
+                # Add similar logic if ZED can be started without SN (e.g., by device_id)
+                # and how that matches discovered_zed_sns (which currently stores stringified SNs/IDs)
+
+            if not is_discovered and configured_sn: # Only mark as not discovered if an SN was specified and not found
+                self.logger.warn(f"Camera {camera_id} (SN: {configured_sn}, Type: {cam_type}) is configured and enabled, but NOT DETECTED physically. Skipping SDK start.")
+                self.unavailable_cameras[camera_id] = {'config': cam_config_item, 'status': 'Not Detected'}
+                continue # Skip to next configured camera
+            elif not configured_sn and cam_type == 'realsense' and not self.discovered_realsense_sns:
+                self.logger.warn(f"RealSense camera {camera_id} has no serial in config and NO RealSense cameras were discovered. Skipping SDK start.")
+                self.unavailable_cameras[camera_id] = {'config': cam_config_item, 'status': 'Not Detected (No RS discovered)'}
+                continue
+            # Add similar for ZED if configured_sn is empty and no ZEDs discovered
+
             try:
                 camera_instance = self._init_camera(camera_id, cam_config_item)
-                if camera_instance: # Only proceed if camera was successfully initialized
-                    camera_instance.start()
+                if camera_instance: 
+                    camera_instance.start() # This will now only be called if a matching device is expected to be present or SN is ambiguous
                     self.cameras[camera_id] = camera_instance
                     self.frame_queues[camera_id] = queue.Queue(maxsize=buffer_size)
                     thread = threading.Thread(target=self._capture_worker, args=(camera_id,), daemon=True, name=f"CamCap-{camera_id}")
                     thread.start()
                     self.capture_threads[camera_id] = thread
+                    active_camera_count +=1
                 else:
-                    self.logger.warn(f"Could not initialize camera {camera_id} due to missing SDK or unsupported type.")
+                    self.logger.warn(f"Could not initialize instance for camera {camera_id}. SDK might be missing or type unsupported. Storing as unavailable.")
+                    self.unavailable_cameras[camera_id] = {'config': cam_config_item, 'status': 'Initialization Failed'}
             except Exception as e:
-                self.logger.error(f"Failed to start camera {camera_id}: {e}. Skipped.")
-        self.logger.info(f"CameraManager started with {len(self.cameras)} active camera(s).")
+                self.logger.error(f"Failed to start camera {camera_id} (SN: {configured_sn}): {e}. Marking as unavailable.")
+                self.unavailable_cameras[camera_id] = {'config': cam_config_item, 'status': f'Start Error: {e}'}
+        self.logger.info(f"CameraManager started with {active_camera_count} active camera(s). {len(self.unavailable_cameras)} configured cameras are unavailable.")
         
     def get_frame(self, camera_id: str, timeout: float = 0.01) -> Optional[CameraFrame]:
         if camera_id not in self.frame_queues: 

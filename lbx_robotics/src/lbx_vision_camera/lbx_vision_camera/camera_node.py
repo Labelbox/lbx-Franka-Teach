@@ -79,6 +79,8 @@ class CameraNode(Node):
         
         self.camera_config_path = ""
         self.camera_configs_yaml = None
+        self.discovered_realsense_sns = []
+        self.discovered_zed_sns = [] # Assuming ZED might have serial numbers or unique IDs
         self._determine_camera_config()
 
         if not self.camera_configs_yaml:
@@ -97,7 +99,12 @@ class CameraNode(Node):
         else: self.get_logger().info("Startup tests are disabled.")
 
         self.cv_bridge = CvBridge()
-        self.camera_manager = CameraManager(config_path=self.camera_config_path, node_logger=self.get_logger())
+        self.camera_manager = CameraManager(
+            config_path=self.camera_config_path, 
+            node_logger=self.get_logger(),
+            discovered_realsense_sns=self.discovered_realsense_sns,
+            discovered_zed_sns=self.discovered_zed_sns
+        )
         self.camera_publishers = {}
         self.tf_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
         self._tf_dynamic_broadcaster = tf2_ros.TransformBroadcaster(self) 
@@ -118,7 +125,22 @@ class CameraNode(Node):
 
         self.diagnostic_updater = Updater(self, period=(1.0/diagnostics_publish_rate) if diagnostics_publish_rate > 0 else 5.0)
         self.diagnostic_updater.setHardwareID("vision_cameras_lbx")
-        self.diagnostic_updater.add(CameraNodeStatusTask("Camera System Status", self))
+        self.diagnostic_updater.add(CameraNodeOverallStatusTask("Camera Node Status", self))
+
+        # Add individual diagnostic tasks for each active and unavailable camera
+        if self.camera_manager:
+            for cam_id, cam_obj in self.camera_manager.cameras.items():
+                if cam_cfg_data := self.camera_configs_yaml.get('cameras', {}).get(cam_id):
+                    task_name = f"Camera {cam_id}"
+                    self.diagnostic_updater.add(IndividualCameraDiagnosticTask(task_name, self, cam_id, cam_cfg_data, is_active=True))
+                    self.get_logger().info(f"Added IndividualCameraDiagnosticTask for active camera: {task_name}")
+            
+            for cam_id, unavailable_cam_info in self.camera_manager.unavailable_cameras.items():
+                if cam_cfg_data := unavailable_cam_info.get('config'):
+                    task_name = f"Camera {cam_id} (Unavailable)"
+                    self.diagnostic_updater.add(IndividualCameraDiagnosticTask(task_name, self, cam_id, cam_cfg_data, is_active=False, unavailable_status=unavailable_cam_info.get('status')))
+                    self.get_logger().info(f"Added IndividualCameraDiagnosticTask for unavailable camera: {task_name}")
+
         self.get_logger().info(f"Diagnostics publishing every {self.diagnostic_updater.period:.2f}s.")
 
     def _determine_camera_config(self):
@@ -131,9 +153,15 @@ class CameraNode(Node):
             else: # No path given
                  self.get_logger().info("No camera_config_file provided. Attempting auto-detection and loading default configs.")
 
-            discovered_cameras = discover_all_cameras(self.get_logger())
-            num_realsense = len(discovered_cameras.get('realsense', []))
-            num_zed = len(discovered_cameras.get('zed', []))
+            discovered_devices_info = discover_all_cameras(self.get_logger())
+            self.discovered_realsense_sns = [cam['serial'] for cam in discovered_devices_info.get('realsense', [])]
+            # For ZED, discover_all_cameras likely returns a list of dicts, extract serial or unique ID
+            # Example: self.discovered_zed_sns = [cam['serial_number'] for cam in discovered_devices_info.get('zed', [])]
+            # Adjust based on actual structure of discovered_devices_info for ZED
+            self.discovered_zed_sns = [str(cam.get('serial_number', cam.get('id', 'unknown_zed_id'))) for cam in discovered_devices_info.get('zed', [])]
+
+            num_realsense = len(self.discovered_realsense_sns)
+            num_zed = len(self.discovered_zed_sns)
 
             config_to_load = None
             if num_realsense > 0 and num_zed == 0:
@@ -155,10 +183,11 @@ class CameraNode(Node):
             elif config_to_load:
                 self.get_logger().warn(f"Auto-selected config '{config_to_load}' not found. Please ensure it exists or provide one.")
                 # As a last resort, we can try to generate one if discover_all_cameras found something
-                if discovered_cameras:
+                if discovered_devices_info:
                     from .camera_utilities import generate_camera_config # Local import
                     self.get_logger().info(f"Attempting to generate a default config in {self.auto_config_dir} based on discovered cameras.")
-                    generated_path = generate_camera_config(discovered_cameras, config_dir=self.auto_config_dir)
+                    # Pass the full discovered_devices_info to generate_camera_config
+                    generated_path = generate_camera_config(discovered_devices_info, config_dir=self.auto_config_dir)
                     if generated_path and os.path.exists(generated_path):
                         self.camera_config_path = generated_path
                         self.get_logger().info(f"Using newly generated camera config: {self.camera_config_path}")
@@ -326,42 +355,106 @@ class CameraNode(Node):
         super().destroy_node()
         self.get_logger().info("Camera Node shutdown complete.")
 
-class CameraNodeStatusTask(DiagnosticTask):
+class CameraNodeOverallStatusTask(DiagnosticTask):
     def __init__(self, name, node_instance):
         super().__init__(name)
         self.node = node_instance
     def run(self, stat: DiagnosticStatus):
         if not self.node.initialization_ok: stat.summary(DiagnosticStatus.ERROR, "Node initialization failed."); return stat
+        
         active_camera_count = len(self.node.camera_manager.cameras) if self.node.camera_manager else 0
-        if self.node.all_tests_passed and active_camera_count > 0:
-            stat.summary(DiagnosticStatus.OK, f"{active_camera_count} camera(s) active and passed tests.")
+        unavailable_camera_count = len(self.node.camera_manager.unavailable_cameras) if self.node.camera_manager else 0
+        configured_enabled_cameras = [cid for cid, cconf in self.node.camera_configs_yaml.get('cameras', {}).items() if cconf.get('enabled', False)]
+        total_configured_enabled = len(configured_enabled_cameras)
+
+        if active_camera_count == total_configured_enabled and total_configured_enabled > 0:
+            stat.summary(DiagnosticStatus.OK, f"{active_camera_count}/{total_configured_enabled} configured cameras active.")
         elif active_camera_count > 0:
-            stat.summary(DiagnosticStatus.WARN, f"{active_camera_count} camera(s) active; startup tests failed/skipped for some.")
-        elif self.node.run_startup_tests and not self.node.all_tests_passed:
-             stat.summary(DiagnosticStatus.ERROR, "Camera startup tests failed for configured/enabled cameras.")
-        else: stat.summary(DiagnosticStatus.WARN, "No active cameras or tests were not run.")
+            stat.summary(DiagnosticStatus.WARN, f"{active_camera_count}/{total_configured_enabled} configured cameras active. {unavailable_camera_count} unavailable.")
+        elif total_configured_enabled > 0:
+            stat.summary(DiagnosticStatus.ERROR, f"0/{total_configured_enabled} configured cameras active. All unavailable or failed.")
+        else:
+            stat.summary(DiagnosticStatus.WARN, "No cameras configured or enabled.")
+
         stat.add("Config File Used", str(self.node.camera_config_path) if self.node.camera_config_path else "None/Error")
         stat.add("Run Startup Tests", str(self.node.run_startup_tests))
-        stat.add("All Configured Tests Passed", str(self.node.all_tests_passed))
-        stat.add("Active Cameras (Mgr)", str(active_camera_count))
-        for cam_id_cfg, cam_cfg_data in self.node.camera_configs_yaml.get('cameras', {}).items():
-            if not cam_cfg_data.get('enabled', False): continue
-            cam_obj = self.node.camera_manager.cameras.get(cam_id_cfg)
-            stat.add(f"Cam [{cam_id_cfg}] Type", cam_cfg_data.get('type', "N/A"))
-            stat.add(f"Cam [{cam_id_cfg}] SN/Idx", str(cam_cfg_data.get('serial_number') or cam_cfg_data.get('device_id', "N/A")))
-            stat.add(f"Cam [{cam_id_cfg}] Status", "Running" if cam_obj and cam_obj.running else "Not Running/Error")
-            if cam_id_cfg in self.node.actual_publish_rates:
-                stat.add(f"Cam [{cam_id_cfg}] Target FPS (Color)", str(cam_cfg_data.get('color',{}).get('fps','N/A')))
-                stat.add(f"Cam [{cam_id_cfg}] Actual Color FPS", f"{self.node.actual_publish_rates[cam_id_cfg]['color']:.2f}")
-                if cam_cfg_data.get('depth',{}).get('enabled', True):
-                    stat.add(f"Cam [{cam_id_cfg}] Target FPS (Depth)", str(cam_cfg_data.get('depth',{}).get('fps','N/A')))
-                    stat.add(f"Cam [{cam_id_cfg}] Actual Depth FPS", f"{self.node.actual_publish_rates[cam_id_cfg]['depth']:.2f}")
-        if self.node.run_startup_tests and self.node.camera_test_results:
-            for i, test_res in enumerate(self.node.camera_test_results):
-                cam_conf = self.node.camera_configs_yaml.get('cameras',{}).get(test_res.camera_id, {})
-                res_stat = "OK" if test_res.is_success() else "FAIL"
-                stat.add(f"Test {i} ID", test_res.camera_id); stat.add(f"Test {i} Result", res_stat)
-                if test_res.error_message: stat.add(f"Test {i} Error", test_res.error_message)
+        stat.add("Active Cameras Count", str(active_camera_count))
+        stat.add("Unavailable Configured Cameras Count", str(unavailable_camera_count))
+        
+        # Brief summary of test results if run
+        if self.node.run_startup_tests:
+            passed_tests = sum(1 for res in self.node.camera_test_results if res.is_success())
+            total_tests = len(self.node.camera_test_results)
+            if total_tests > 0:
+                 stat.add("Startup Test Results", f"{passed_tests}/{total_tests} passed")
+        return stat
+
+class IndividualCameraDiagnosticTask(DiagnosticTask):
+    def __init__(self, name: str, node_instance: CameraNode, camera_id: str, camera_config: Dict, is_active: bool, unavailable_status: Optional[str] = None):
+        super().__init__(name) # Name will be like "Camera realsense_123"
+        self.node = node_instance
+        self.camera_id = camera_id
+        self.camera_config = camera_config # This is the specific config for this camera
+        self.is_active = is_active
+        self.unavailable_status = unavailable_status
+
+    def run(self, stat: DiagnosticStatus):
+        # Hardware ID for this specific camera, e.g., "camera_realsense_123"
+        stat.hardware_id = f"camera_{self.camera_id}"
+        
+        cam_type = self.camera_config.get('type', "N/A")
+        configured_sn = str(self.camera_config.get('serial_number') or self.camera_config.get('device_id', "N/A"))
+        position = self.camera_config.get('metadata', {}).get('position', 'Unknown')
+
+        stat.add("Camera ID", self.camera_id)
+        stat.add("Type", cam_type)
+        stat.add("Configured SN/Idx", configured_sn)
+        stat.add("Position", position)
+
+        if self.is_active:
+            cam_obj = self.node.camera_manager.cameras.get(self.camera_id)
+            actual_sn = cam_obj.serial_number if cam_obj and hasattr(cam_obj, 'serial_number') else "Unknown"
+            
+            stat.summary(DiagnosticStatus.OK, f"Running. SN: {actual_sn}")
+            stat.add("Status", "Running")
+            stat.add("Actual SN", actual_sn)
+
+            if self.camera_id in self.node.actual_publish_rates:
+                color_cfg = self.camera_config.get('color',{})
+                depth_cfg = self.camera_config.get('depth',{})
+
+                target_color_fps = str(color_cfg.get('fps','N/A'))
+                actual_color_fps_val = self.node.actual_publish_rates[self.camera_id]['color']
+                stat.add("Target Color FPS", target_color_fps)
+                stat.add("Actual Color FPS", f"{actual_color_fps_val:.2f}")
+                
+                # Calculate color efficiency
+                if target_color_fps != 'N/A':
+                    try:
+                        eff = (actual_color_fps_val / float(target_color_fps)) * 100 if float(target_color_fps) > 0 else 0
+                        stat.add("Color Efficiency (%)", f"{eff:.1f}")
+                    except ValueError: pass
+
+                if depth_cfg.get('enabled', True):
+                    target_depth_fps = str(depth_cfg.get('fps','N/A'))
+                    actual_depth_fps_val = self.node.actual_publish_rates[self.camera_id]['depth']
+                    stat.add("Target Depth FPS", target_depth_fps)
+                    stat.add("Actual Depth FPS", f"{actual_depth_fps_val:.2f}")
+                    if target_depth_fps != 'N/A':
+                        try:
+                            eff = (actual_depth_fps_val / float(target_depth_fps)) * 100 if float(target_depth_fps) > 0 else 0
+                            stat.add("Depth Efficiency (%)", f"{eff:.1f}")
+                        except ValueError: pass
+                stat.add("Color Frames Published", str(self.node.frames_published_count[self.camera_id]['color'])) # Will be reset, better to get from manager if possible
+                stat.add("Depth Frames Published", str(self.node.frames_published_count[self.camera_id]['depth']))
+            else:
+                stat.add("Actual Color FPS", "N/A")
+                if self.camera_config.get('depth',{}).get('enabled', True):
+                    stat.add("Actual Depth FPS", "N/A")
+        else:
+            status_msg = self.unavailable_status if self.unavailable_status else "Not Active"
+            stat.summary(DiagnosticStatus.WARN if "Not Detected" in status_msg else DiagnosticStatus.ERROR, status_msg)
+            stat.add("Status", status_msg)
         return stat
 
 def main(args=None):

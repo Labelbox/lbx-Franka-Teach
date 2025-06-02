@@ -79,36 +79,36 @@ SCHEMA_VR_CONTROLLER_STR = json.dumps({
 })
 
 # Fix MCAP WellKnownSchema compatibility issue
-try:
-    SCHEMA_COMPRESSED_IMAGE_STR = json.dumps(mcap.WellKnownSchema.foxglove_CompressedImage.json_schema)
-    SCHEMA_CAMERA_CALIBRATION_STR = json.dumps(mcap.WellKnownSchema.foxglove_CameraCalibration.json_schema)
-except AttributeError:
-    # Fallback for older mcap versions without WellKnownSchema
-    SCHEMA_COMPRESSED_IMAGE_STR = json.dumps({
-        "type": "object",
-        "properties": {
-            "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
-            "frame_id": {"type": "string"},
-            "data": {"type": "string", "description": "Base64 encoded image data"},
-            "format": {"type": "string", "description": "Image format (e.g., jpeg, png)"}
-        },
-        "required": ["timestamp", "frame_id", "data", "format"]
-    })
-    SCHEMA_CAMERA_CALIBRATION_STR = json.dumps({
-        "type": "object", 
-        "properties": {
-            "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
-            "frame_id": {"type": "string"},
-            "width": {"type": "integer"},
-            "height": {"type": "integer"},
-            "distortion_model": {"type": "string"},
-            "D": {"type": "array", "items": {"type": "number"}},
-            "K": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
-            "R": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
-            "P": {"type": "array", "items": {"type": "number"}, "minItems": 12, "maxItems": 12}
-        },
-        "required": ["timestamp", "frame_id", "width", "height"]
-    })
+# try:
+#     SCHEMA_COMPRESSED_IMAGE_STR = json.dumps(mcap.WellKnownSchema.foxglove_CompressedImage.json_schema)
+#     SCHEMA_CAMERA_CALIBRATION_STR = json.dumps(mcap.WellKnownSchema.foxglove_CameraCalibration.json_schema)
+# except AttributeError:
+# Fallback for older mcap versions without WellKnownSchema or to bypass potential WellKnownSchema issues
+SCHEMA_COMPRESSED_IMAGE_STR = json.dumps({
+    "type": "object",
+    "properties": {
+        "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
+        "frame_id": {"type": "string"},
+        "data": {"type": "string", "description": "Base64 encoded image data"},
+        "format": {"type": "string", "description": "Image format (e.g., jpeg, png)"}
+    },
+    "required": ["timestamp", "frame_id", "data", "format"]
+})
+SCHEMA_CAMERA_CALIBRATION_STR = json.dumps({
+    "type": "object", 
+    "properties": {
+        "timestamp": {"type": "object", "properties": {"sec": {"type": "integer"}, "nanosec": {"type": "integer"}}},
+        "frame_id": {"type": "string"},
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "distortion_model": {"type": "string"},
+        "D": {"type": "array", "items": {"type": "number"}},
+        "K": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
+        "R": {"type": "array", "items": {"type": "number"}, "minItems": 9, "maxItems": 9},
+        "P": {"type": "array", "items": {"type": "number"}, "minItems": 12, "maxItems": 12}
+    },
+    "required": ["timestamp", "frame_id", "width", "height"]
+})
 
 # These will be handled by McapRos2NativeWriter using .msg definitions
 # SCHEMA_TF_MESSAGE_STR = json.dumps(mcap.WellKnownSchema.ros2_tf2_msgs_TFMessage.json_schema)

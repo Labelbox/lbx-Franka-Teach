@@ -515,90 +515,101 @@ class FrankaController:
         
         return True
     
-    def execute_trajectory(self, positions, duration=None):
-        """Execute a trajectory to move joints to target positions and WAIT for completion"""
-        if duration is None:
-            duration = self.config['moveit']['trajectory_duration_reset']
+    def execute_trajectory(self, joint_positions: List[float], duration: float = 5.0) -> bool:
+        """Execute trajectory to target joint positions with comprehensive error handling"""
+        if not self.trajectory_client:
+            self.node.get_logger().error("Trajectory action server not initialized")
+            return False
         
-        self.node.get_logger().info(f"🎯 Executing trajectory to target positions (duration: {duration}s)...")
+        if not self.trajectory_client.wait_for_server(timeout_sec=5.0):
+            self.node.get_logger().error("Trajectory action server not available")
+            return False
         
-        # Create trajectory
-        trajectory = JointTrajectory()
-        trajectory.joint_names = self.config['robot']['joint_names']
+        # Create trajectory goal
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = self.config['robot']['joint_names']
         
-        # Add single point
+        # Single point trajectory
         point = JointTrajectoryPoint()
-        point.positions = positions
+        point.positions = joint_positions
         point.time_from_start.sec = int(duration)
         point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
         
-        # Add zero velocities and accelerations for smooth stop at target
-        point.velocities = [0.0] * len(self.config['robot']['joint_names'])
-        point.accelerations = [0.0] * len(self.config['robot']['joint_names'])
+        goal.trajectory.points = [point]
+        goal.trajectory.header.stamp = self.node.get_clock().now().to_msg()
         
-        trajectory.points.append(point)
+        self.node.get_logger().info(f"🎯 Executing trajectory to target positions (duration: {duration}s)...")
         
-        # Create goal
-        goal = FollowJointTrajectory.Goal()
-        goal.trajectory = trajectory
-        
-        # Goal tolerances from config
-        goal.goal_tolerance = [
-            JointTolerance(
-                name=name,
-                position=self.config['moveit']['goal_tolerance_position'],
-                velocity=self.config['moveit']['goal_tolerance_velocity'],
-                acceleration=self.config['moveit']['goal_tolerance_acceleration']
-            )
-            for name in self.config['robot']['joint_names']
-        ]
-        
-        # Send goal and WAIT for completion
-        self.node.get_logger().info("📤 Sending trajectory goal...")
-        send_goal_future = self.trajectory_client.send_goal_async(goal)
-        
-        # Wait for goal to be accepted
-        rclpy.spin_until_future_complete(self.node, send_goal_future, timeout_sec=2.0)
-        
-        if not send_goal_future.done():
-            self.node.get_logger().error("❌ Failed to send goal (timeout)")
-            return False
-        
-        goal_handle = send_goal_future.result()
-        
-        if not goal_handle.accepted:
-            self.node.get_logger().error("❌ Goal was rejected")
-            return False
-        
-        self.node.get_logger().info("✅ Goal accepted, waiting for completion...")
-        
-        # Wait for execution to complete
-        result_future = goal_handle.get_result_async()
-        
-        # Monitor progress
-        start_time = time.time()
-        last_update = 0
-        
-        while not result_future.done():
-            elapsed = time.time() - start_time
-            if elapsed - last_update >= 2.0:  # Update every 2 seconds
-                self.node.get_logger().info(f"   ⏱️  Executing... {elapsed:.1f}s elapsed")
-                last_update = elapsed
+        try:
+            # Send goal
+            self.node.get_logger().info("📤 Sending trajectory goal...")
+            send_goal_future = self.trajectory_client.send_goal_async(goal)
             
-            rclpy.spin_once(self.node, timeout_sec=0.1)
+            # Wait for goal acceptance with timeout
+            rclpy.spin_until_future_complete(self.node, send_goal_future, timeout_sec=2.0)
             
-            if elapsed > duration + 10.0:  # Give extra time for completion
-                self.node.get_logger().error("❌ Trajectory execution timeout")
+            if not send_goal_future.done():
+                self.node.get_logger().error("Trajectory goal acceptance timeout")
                 return False
-        
-        # Get final result
-        result = result_future.result()
-        
-        if result.result.error_code == 0:  # SUCCESS
-            self.node.get_logger().info("✅ Trajectory execution completed successfully!")
-            return True
-        else:
-            self.node.get_logger().error(f"❌ Trajectory execution failed with error code: {result.result.error_code}")
+            
+            goal_handle = send_goal_future.result()
+            if not goal_handle.accepted:
+                self.node.get_logger().error("Trajectory goal rejected by controller")
+                return False
+            
+            self.node.get_logger().info("✅ Trajectory goal accepted")
+            
+            # Wait for result
+            result_future = goal_handle.get_result_async()
+            
+            # Use a shorter timeout to catch errors quickly
+            start_time = time.time()
+            timeout = duration + 2.0  # Give some extra time
+            
+            while not result_future.done() and (time.time() - start_time) < timeout:
+                # Check for errors periodically
+                try:
+                    rclpy.spin_once(self.node, timeout_sec=0.1)
+                except Exception as e:
+                    self.node.get_logger().error(f"Error during trajectory execution: {e}")
+                    # Try to cancel the goal
+                    try:
+                        cancel_future = goal_handle.cancel_goal_async()
+                        rclpy.spin_until_future_complete(self.node, cancel_future, timeout_sec=1.0)
+                    except:
+                        pass
+                    return False
+            
+            if not result_future.done():
+                self.node.get_logger().error(f"Trajectory execution timeout after {timeout}s")
+                # Try to cancel
+                try:
+                    cancel_future = goal_handle.cancel_goal_async()
+                    rclpy.spin_until_future_complete(self.node, cancel_future, timeout_sec=1.0)
+                except:
+                    pass
+                return False
+            
+            result = result_future.result()
+            
+            if result.result.error_code == FollowJointTrajectory.Result.SUCCESSFUL:
+                self.node.get_logger().info("✅ Trajectory executed successfully")
+                return True
+            else:
+                self.node.get_logger().error(f"Trajectory execution failed with error code: {result.result.error_code}")
+                self.node.get_logger().error(f"Error string: {result.result.error_string}")
+                return False
+            
+        except Exception as e:
+            self.node.get_logger().error(f"Exception during trajectory execution: {e}")
+            # Log more details about the error
+            if "communication_constraints_violation" in str(e):
+                self.node.get_logger().error("Communication constraints violated - robot may be in an unsafe state")
+                self.node.get_logger().error("Possible causes:")
+                self.node.get_logger().error("  - Robot is in reflex/error state (check robot lights)")
+                self.node.get_logger().error("  - Joint limits or velocity limits exceeded")
+                self.node.get_logger().error("  - Network communication issues")
+                self.node.get_logger().error("  - Robot needs to be unlocked via desk")
             return False
     
     def _should_send_gripper_command(self, desired_state):

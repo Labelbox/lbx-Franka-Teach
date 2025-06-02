@@ -140,16 +140,19 @@ class RobotControlNode(Node):
         
         # Timers
         self.create_timer(1.0, self.publish_status)
-        self.create_timer(5.0, self.update_diagnostics)  # Update diagnostics every 5 seconds
+        self.create_timer(1.0, self.publish_ready_status)  # Publish ready status
+        
+        # Initialize state tracking
+        self.has_valid_joint_states = False
         
         # Check if controller is ready
         if self.controller.is_fully_operational():
             self.robot_ready = True
             self.get_logger().info("✅ Robot control node ready with FrankaController")
             
-            # Auto-reset to home on startup
-            self.get_logger().info("Auto-resetting to home position...")
-            self.reset_to_home()
+            # Don't auto-reset to home on startup - let system orchestrator handle it
+            # This prevents conflicts and robot crashes
+            self.get_logger().info("Waiting for reset command from system orchestrator...")
         else:
             self.get_logger().warn("⚠️  Robot control node started but some services not ready")
     
@@ -250,6 +253,9 @@ class RobotControlNode(Node):
             
             # Update gripper state
             self.robot_state.gripper = self.controller.get_current_gripper_state(msg)
+            
+            # Mark that we have valid joint states
+            self.has_valid_joint_states = True
     
     def velocity_command_callback(self, msg: VelocityCommand):
         """Handle velocity commands"""
@@ -282,9 +288,14 @@ class RobotControlNode(Node):
         msg.data = self.robot_ready
         self.ready_pub.publish(msg)
     
-    def update_diagnostics(self):
-        """Update controller diagnostics"""
-        self.controller.update_diagnostics()
+    def publish_ready_status(self):
+        """Publish robot ready status"""
+        # Update readiness based on controller status
+        self.robot_ready = self.controller.is_fully_operational()
+        
+        msg = Bool()
+        msg.data = self.robot_ready
+        self.ready_pub.publish(msg)
     
     # Service callbacks
     def reset_to_home_callback(self, request, response):

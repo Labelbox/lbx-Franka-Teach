@@ -69,6 +69,7 @@ def test_realsense_camera(serial_number: str, cam_specific_config: Dict, global_
     result = CameraTestResult(f"realsense_{serial_number}", "realsense", cam_specific_config)
     if not REALSENSE_AVAILABLE: result.error_message = "RealSense SDK missing"; return result
     pipeline = None
+    pipeline_started = False  # Track if pipeline was successfully started
     try:
         pipeline = rs.pipeline(); rs_conf = rs.config()
         if serial_number: rs_conf.enable_device(serial_number)
@@ -80,7 +81,9 @@ def test_realsense_camera(serial_number: str, cam_specific_config: Dict, global_
         if expects_depth:
             dw, dh,dfps = depth_cfg.get('width',w), depth_cfg.get('height',h), depth_cfg.get('fps',fps)
             rs_conf.enable_stream(rs.stream.depth, dw, dh, getattr(rs.format, depth_cfg.get('format','z16').lower(), rs.format.z16), dfps)
-        profile = pipeline.start(rs_conf); result.connection_ok = True
+        profile = pipeline.start(rs_conf)
+        pipeline_started = True  # Mark that pipeline was successfully started
+        result.connection_ok = True
         dev = profile.get_device(); logger.info(f"Connected RS: {dev.get_info(rs.camera_info.name)} SN: {dev.get_info(rs.camera_info.serial_number)}")
         fc, t_start = 0, time.time(); dur = global_config.get('test_duration_sec',2.0); min_depth_cov = global_config.get('min_depth_coverage_pct',30.)/100.
         for _ in range(int(fps*dur)):
@@ -103,7 +106,11 @@ def test_realsense_camera(serial_number: str, cam_specific_config: Dict, global_
         if result.fps_achieved < fps*global_config.get('fps_tolerance_factor',0.8): result.warnings.append(f"Low FPS: {result.fps_achieved:.1f}")
     except Exception as e: result.error_message=str(e); logger.error(f"RS test {serial_number} error: {e}")
     finally: 
-        if pipeline: pipeline.stop()
+        if pipeline and pipeline_started:  # Only stop if pipeline was started
+            try:
+                pipeline.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping pipeline: {e}")
     return result
 
 def test_zed_camera(serial_number: str, cam_specific_config: Dict, global_config: Dict, logger_instance=None) -> CameraTestResult:

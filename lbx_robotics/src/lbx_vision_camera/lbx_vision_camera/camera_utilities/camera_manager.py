@@ -115,7 +115,6 @@ class RealsenseCamera:
                  self.logger.info(f"Auto-detected RealSense SN: {self.serial_number}")
 
             self.logger.info(f"Started {self.camera_id}: {device.get_info(rs.camera_info.name)} (SN: {self.serial_number})")
-            time.sleep(0.5) # Allow sensor to settle
             
             global_settings = self.config.get('global_settings', {})
             if depth_cfg.get('enabled', True) and global_settings.get('align_depth_to_color', True):
@@ -133,7 +132,7 @@ class RealsenseCamera:
     def capture_frame(self) -> Optional[CameraFrame]:
         if not self.running or not self.pipeline: return None
         try:
-            frames = self.pipeline.wait_for_frames(timeout_ms=1000) 
+            frames = self.pipeline.wait_for_frames(timeout_ms=50) 
             if not frames: self.logger.warn(f"Timeout for {self.camera_id}"); return None
             if self.align and frames.get_depth_frame(): frames = self.align.process(frames)
             color_frame = frames.get_color_frame()
@@ -308,7 +307,6 @@ class CameraManager:
                         except queue.Full: self.logger.warn(f"Queue full for {camera_id}, frame dropped.")
             except Exception as e:
                 self.logger.error(f"Error in capture for {camera_id}: {e}")
-                time.sleep(0.1) # Brief pause on error
         self.logger.info(f"Capture thread stopped for {camera_id}")
         
     def start(self):
@@ -379,14 +377,14 @@ class CameraManager:
                 self.unavailable_cameras[camera_id] = {'config': cam_config_item, 'status': f'Start Error: {e}'}
         self.logger.info(f"CameraManager started with {active_camera_count} active camera(s). {len(self.unavailable_cameras)} configured cameras are unavailable.")
         
-    def get_frame(self, camera_id: str, timeout: float = 0.01) -> Optional[CameraFrame]:
+    def get_frame(self, camera_id: str, timeout: float = 0.001) -> Optional[CameraFrame]:
         if camera_id not in self.frame_queues: 
             # self.logger.warn(f"No queue for camera {camera_id}") # Can be too verbose
             return None
         try: return self.frame_queues[camera_id].get(timeout=timeout)
         except queue.Empty: return None
             
-    def get_all_frames(self, timeout: float = 0.01) -> Dict[str, CameraFrame]:
+    def get_all_frames(self, timeout: float = 0.001) -> Dict[str, CameraFrame]:
         frames = {}
         for camera_id in list(self.frame_queues.keys()):
             if camera_id in self.cameras and hasattr(self.cameras[camera_id], 'running') and self.cameras[camera_id].running:

@@ -8,6 +8,7 @@ Centralized monitoring for the VR teleoperation system:
 - Monitors robot control loop rates (target: 45Hz)
 - Monitors system health and resource usage
 - Publishes comprehensive diagnostics for display
+- Enhanced display with actual FPS monitoring
 """
 
 import rclpy
@@ -24,10 +25,26 @@ import numpy as np
 import os
 import yaml
 import json
+import sys
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 # Import MoveIt services
 from moveit_msgs.srv import GetPositionIK, GetMotionPlan, GetPlanningScene
+
+# ANSI color codes for pretty printing
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    YELLOW = '\033[93m'
+    FAIL = '\033[91m'
+    RED = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 
 
 class PerformanceTracker:
@@ -128,6 +145,28 @@ class SystemMonitor(Node):
             10
         )
         
+        # Subscribe to diagnostics to read camera node status
+        self.diagnostics_sub = self.create_subscription(
+            DiagnosticArray,
+            '/diagnostics',
+            self.read_diagnostics_callback,
+            QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        )
+        
+        # Store camera diagnostics from camera node
+        self.camera_diagnostics_from_node = {}
+        
+        # Store VR diagnostics from oculus node
+        self.vr_diagnostics_from_node = {}
+        
+        # Display control and system state tracking
+        self.last_display_time = time.time()
+        self.display_interval = 5.0  # Display every 5 seconds
+        self.current_system_mode = "initializing"
+        self.recording_active = False
+        self.teleoperation_enabled = False
+        self.calibration_mode = "uncalibrated"
+        
         # Timer for publishing diagnostics
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_diagnostics)
         
@@ -202,14 +241,44 @@ class SystemMonitor(Node):
     
     def setup_camera_monitoring(self):
         """Set up camera performance monitoring based on config"""
-        if not self.camera_config_path or not os.path.exists(self.camera_config_path):
-            self.get_logger().warn(f"Camera config not found: {self.camera_config_path}")
+        if not self.camera_config_path:
+            self.get_logger().warn("No camera config path provided, skipping camera monitoring")
+            return
+            
+        # Try multiple possible paths for the camera config
+        possible_paths = [
+            self.camera_config_path,  # Use provided path first
+        ]
+        
+        # If the provided path doesn't exist, try alternative locations
+        if not os.path.exists(self.camera_config_path):
+            workspace_root = os.environ.get('COLCON_WS', os.getcwd())
+            possible_paths.extend([
+                os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors', 'realsense_cameras.yaml'),
+                os.path.join(workspace_root, 'configs', 'sensors', 'realsense_cameras.yaml'),
+                os.path.join(os.path.dirname(workspace_root), 'lbx_robotics', 'configs', 'sensors', 'realsense_cameras.yaml'),
+            ])
+        
+        config_found = False
+        camera_config = None
+        
+        for config_path in possible_paths:
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r') as f:
+                        camera_config = yaml.safe_load(f)
+                    self.get_logger().info(f"Using camera config: {config_path}")
+                    config_found = True
+                    break
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to load camera config {config_path}: {e}")
+                    continue
+        
+        if not config_found:
+            self.get_logger().warn("No valid camera config found, camera monitoring disabled")
             return
         
         try:
-            with open(self.camera_config_path, 'r') as f:
-                camera_config = yaml.safe_load(f)
-            
             # QoS for camera topics
             image_qos = QoSProfile(
                 reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -221,6 +290,10 @@ class SystemMonitor(Node):
             for cam_id, cam_cfg in camera_config.get('cameras', {}).items():
                 if not cam_cfg.get('enabled', False):
                     continue
+                
+                # Get the base topic from camera config
+                topics_config = cam_cfg.get('topics', {})
+                base_topic = topics_config.get('base', f"/cameras/cam_{cam_id}")
                 
                 serial = cam_cfg.get('serial_number', '')
                 target_fps = cam_cfg.get('color', {}).get('fps', 30)
@@ -238,24 +311,26 @@ class SystemMonitor(Node):
                     tracker.camera_id = cam_id
                     tracker.serial = serial
                     tracker.camera_type = cam_cfg.get('type', 'unknown')
+                    tracker.base_topic = base_topic
                 
-                # Subscribe to camera topics (using the pattern camera node uses)
-                if serial:
-                    # Color stream
-                    color_topic = f"/cameras/cam_realsense_{serial}/image_raw"
-                    try:
-                        self.create_subscription(
-                            Image,
-                            color_topic,
-                            lambda msg, t=color_tracker_name: self.camera_image_callback(msg, t),
-                            image_qos
-                        )
-                        self.get_logger().info(f"Monitoring camera: {cam_id} color @ {color_topic}")
-                    except Exception as e:
-                        self.get_logger().warn(f"Failed to subscribe to {color_topic}: {e}")
-                    
-                    # Depth stream
-                    depth_topic = f"/cameras/cam_realsense_{serial}/depth/image_raw"
+                # Subscribe to camera topics using the base topic from config
+                # Color stream: {base_topic}/image_raw
+                color_topic = f"{base_topic}/image_raw"
+                try:
+                    self.create_subscription(
+                        Image,
+                        color_topic,
+                        lambda msg, t=color_tracker_name: self.camera_image_callback(msg, t),
+                        image_qos
+                    )
+                    self.get_logger().info(f"Monitoring camera: {cam_id} color @ {color_topic}")
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to subscribe to {color_topic}: {e}")
+                
+                # Depth stream: {base_topic}/depth/image_raw (if depth enabled)
+                depth_config = cam_cfg.get('depth', {})
+                if depth_config.get('enabled', True):
+                    depth_topic = f"{base_topic}/depth/image_raw"
                     try:
                         self.create_subscription(
                             Image,
@@ -272,7 +347,7 @@ class SystemMonitor(Node):
     
     def system_state_callback(self, msg: String):
         """Track system state changes"""
-        self.system_state = msg.data
+        self.current_system_mode = msg.data
     
     def system_status_callback(self, msg: SystemStatus):
         """Track detailed system status"""
@@ -409,31 +484,108 @@ class SystemMonitor(Node):
         ]
         diag_array.status.append(system_status)
         
-        # VR Controller Performance
+        # VR Controller Performance - Enhanced to show actual status from oculus node
         vr_status = DiagnosticStatus()
-        vr_status.name = "oculus_reader:vr_controller"
-        vr_status.hardware_id = "oculus_quest"
+        vr_status.name = "system_monitor:vr_system_overview"
+        vr_status.hardware_id = "vr_system"
         
-        if self.vr_connected:
-            vr_perf = self.vr_tracker.get_status()
-            if vr_perf['efficiency'] >= 90:
-                vr_status.level = DiagnosticStatus.OK
-            elif vr_perf['efficiency'] >= 70:
-                vr_status.level = DiagnosticStatus.WARN
+        # Get VR diagnostics from oculus node
+        vr_connection_diag = self.vr_diagnostics_from_node.get("vr_controller") or \
+                            self.vr_diagnostics_from_node.get("Oculus Connection")
+        vr_data_rates_diag = self.vr_diagnostics_from_node.get("Oculus Data Rates")
+        
+        if vr_connection_diag or vr_data_rates_diag:
+            # Use actual VR diagnostics
+            vr_connected = False
+            connection_status = "Unknown"
+            
+            # Parse connection status
+            if vr_connection_diag:
+                connection_status = vr_connection_diag.message
+                vr_connected = vr_connection_diag.level == DiagnosticStatus.OK
+            
+            # Parse performance data
+            target_poll_rate = "N/A"
+            actual_poll_rate = "N/A"
+            target_publish_rate = "N/A"
+            actual_publish_rate = "N/A"
+            queue_size = "N/A"
+            efficiency = 0.0
+            
+            if vr_data_rates_diag:
+                for kv in vr_data_rates_diag.values:
+                    if kv.key == "Target Poll Rate (Hz)":
+                        target_poll_rate = kv.value
+                    elif kv.key == "Actual Poll Rate (Hz)":
+                        actual_poll_rate = kv.value
+                    elif kv.key == "Target Publish Rate (Hz)":
+                        target_publish_rate = kv.value
+                    elif kv.key == "Actual Publish Rate (Hz)":
+                        actual_publish_rate = kv.value
+                    elif kv.key == "Data Queue Size":
+                        queue_size = kv.value
+                    elif kv.key == "VR Connected":
+                        vr_connected = vr_connected or (kv.value == "Yes")
+            
+            # Calculate efficiency if we have numeric data
+            try:
+                if target_publish_rate != "N/A" and actual_publish_rate != "N/A":
+                    target_val = float(target_publish_rate)
+                    actual_val = float(actual_publish_rate)
+                    if target_val > 0:
+                        efficiency = (actual_val / target_val) * 100
+            except ValueError:
+                efficiency = 0.0
+            
+            # Set status level based on connection and performance
+            if vr_connected:
+                if efficiency >= 90:
+                    vr_status.level = DiagnosticStatus.OK
+                elif efficiency >= 70:
+                    vr_status.level = DiagnosticStatus.WARN
+                else:
+                    vr_status.level = DiagnosticStatus.ERROR
+                vr_status.message = f"VR Connected - Poll:{actual_poll_rate}Hz, Pub:{actual_publish_rate}Hz ({efficiency:.1f}%)"
             else:
                 vr_status.level = DiagnosticStatus.ERROR
+                vr_status.message = f"VR Disconnected - {connection_status}"
             
-            vr_status.message = f"VR Controller @ {vr_perf['current_rate']:.1f} Hz ({vr_perf['efficiency']:.1f}% efficiency)"
+            vr_status.values = [
+                KeyValue(key="vr_connected", value="Yes" if vr_connected else "No"),
+                KeyValue(key="connection_status", value=connection_status),
+                KeyValue(key="target_poll_rate_hz", value=target_poll_rate),
+                KeyValue(key="actual_poll_rate_hz", value=actual_poll_rate),
+                KeyValue(key="target_publish_rate_hz", value=target_publish_rate),
+                KeyValue(key="actual_publish_rate_hz", value=actual_publish_rate),
+                KeyValue(key="efficiency_percent", value=f"{efficiency:.1f}"),
+                KeyValue(key="data_queue_size", value=queue_size),
+            ]
         else:
-            vr_status.level = DiagnosticStatus.ERROR
-            vr_status.message = "VR Controller not connected"
+            # Fallback to pose tracking if no VR diagnostics available
+            if self.vr_connected:
+                vr_perf = self.vr_tracker.get_status()
+                if vr_perf['efficiency'] >= 90:
+                    vr_status.level = DiagnosticStatus.OK
+                elif vr_perf['efficiency'] >= 70:
+                    vr_status.level = DiagnosticStatus.WARN
+                else:
+                    vr_status.level = DiagnosticStatus.ERROR
+                
+                vr_status.message = f"VR Controller @ {vr_perf['current_rate']:.1f} Hz ({vr_perf['efficiency']:.1f}% efficiency)"
+                vr_status.values = [
+                    KeyValue(key="target_rate", value=f"{self.vr_tracker.target_rate}"),
+                    KeyValue(key="current_rate", value=f"{self.vr_tracker.current_rate:.1f}"),
+                    KeyValue(key="efficiency", value=f"{self.vr_tracker.get_efficiency():.1f}"),
+                    KeyValue(key="msg_count", value=str(self.vr_tracker.msg_count)),
+                ]
+            else:
+                vr_status.level = DiagnosticStatus.ERROR
+                vr_status.message = "VR Controller not connected"
+                vr_status.values = [
+                    KeyValue(key="vr_connected", value="No"),
+                    KeyValue(key="diagnostics_available", value="No"),
+                ]
         
-        vr_status.values = [
-            KeyValue(key="target_rate", value=f"{self.vr_tracker.target_rate}"),
-            KeyValue(key="current_rate", value=f"{self.vr_tracker.current_rate:.1f}"),
-            KeyValue(key="efficiency", value=f"{self.vr_tracker.get_efficiency():.1f}"),
-            KeyValue(key="msg_count", value=str(self.vr_tracker.msg_count)),
-        ]
         diag_array.status.append(vr_status)
         
         # Robot Control Performance
@@ -464,74 +616,6 @@ class SystemMonitor(Node):
             ]
             diag_array.status.append(control_status)
         
-        # Camera Performance
-        if self.cameras_enabled and self.camera_trackers:
-            # Group cameras by ID
-            camera_groups = {}
-            for tracker_name, tracker in self.camera_trackers.items():
-                cam_id = getattr(tracker, 'camera_id', 'unknown')
-                if cam_id not in camera_groups:
-                    camera_groups[cam_id] = {}
-                
-                stream_type = 'color' if 'color' in tracker_name else 'depth'
-                camera_groups[cam_id][stream_type] = tracker
-            
-            # Create diagnostic for each camera
-            for cam_id, streams in camera_groups.items():
-                cam_status = DiagnosticStatus()
-                cam_status.name = f"vision_camera_node:camera_{cam_id}"
-                cam_status.hardware_id = f"camera_{cam_id}"
-                
-                # Check if any stream is working
-                color_tracker = streams.get('color')
-                depth_tracker = streams.get('depth')
-                
-                working_streams = []
-                total_efficiency = 0
-                stream_count = 0
-                
-                for stream_type, tracker in streams.items():
-                    if tracker and tracker.current_rate > 0:
-                        working_streams.append(f"{stream_type}:{tracker.current_rate:.1f}Hz")
-                        total_efficiency += tracker.get_efficiency()
-                        stream_count += 1
-                
-                if working_streams:
-                    avg_efficiency = total_efficiency / stream_count if stream_count > 0 else 0
-                    if avg_efficiency >= 90:
-                        cam_status.level = DiagnosticStatus.OK
-                    elif avg_efficiency >= 70:
-                        cam_status.level = DiagnosticStatus.WARN
-                    else:
-                        cam_status.level = DiagnosticStatus.ERROR
-                    
-                    cam_status.message = f"Camera active: {', '.join(working_streams)}"
-                else:
-                    cam_status.level = DiagnosticStatus.ERROR
-                    cam_status.message = "Camera not publishing"
-                
-                # Add detailed values
-                if color_tracker:
-                    cam_status.values.extend([
-                        KeyValue(key="color_target_fps", value=str(color_tracker.target_rate)),
-                        KeyValue(key="color_current_fps", value=f"{color_tracker.current_rate:.1f}"),
-                        KeyValue(key="color_efficiency", value=f"{color_tracker.get_efficiency():.1f}"),
-                        KeyValue(key="color_msg_count", value=str(color_tracker.msg_count)),
-                    ])
-                
-                if depth_tracker:
-                    cam_status.values.extend([
-                        KeyValue(key="depth_target_fps", value=str(depth_tracker.target_rate)),
-                        KeyValue(key="depth_current_fps", value=f"{depth_tracker.current_rate:.1f}"),
-                        KeyValue(key="depth_efficiency", value=f"{depth_tracker.get_efficiency():.1f}"),
-                        KeyValue(key="depth_msg_count", value=str(depth_tracker.msg_count)),
-                    ])
-                
-                if hasattr(color_tracker or depth_tracker, 'serial'):
-                    cam_status.values.append(KeyValue(key="serial_number", value=getattr(color_tracker or depth_tracker, 'serial', '')))
-                
-                diag_array.status.append(cam_status)
-        
         # System Resources
         if time.time() - self.last_resource_check > self.resource_check_interval:
             self.last_resource_check = time.time()
@@ -561,6 +645,306 @@ class SystemMonitor(Node):
         
         # Publish diagnostics
         self.diagnostics_pub.publish(diag_array)
+        
+        # Check if it's time to display diagnostic summary
+        current_time = time.time()
+        if current_time - self.last_display_time > self.display_interval:
+            self.last_display_time = current_time
+            self.print_enhanced_diagnostic_summary()
+
+    def print_enhanced_diagnostic_summary(self):
+        """Print comprehensive system health summary with individual camera FPS data"""
+        
+        # Clear previous output for a clean look
+        print("\n" * 1)
+        
+        # Main header with simple line splitters
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.GREEN}                     📊 SYSTEM HEALTH DIAGNOSTICS 📊{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        
+        # Timestamp
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"🕐 Time: {Colors.BOLD}{current_time}{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 80}{Colors.ENDC}")
+        
+        # System Mode - Most prominent display
+        mode_color = Colors.GREEN if self.current_system_mode == "teleoperation" else Colors.YELLOW
+        if self.current_system_mode == "error":
+            mode_color = Colors.FAIL
+        print(f"🤖 {Colors.BOLD}SYSTEM MODE:{Colors.ENDC} {mode_color}{Colors.BOLD}{self.current_system_mode.upper()}{Colors.ENDC}")
+        
+        # Recording Status - Prominent display
+        if self.recording_active:
+            print(f"🔴 {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.RED}{Colors.BOLD}● RECORDING ON{Colors.ENDC}")
+        else:
+            print(f"⚫ {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.CYAN}○ RECORDING OFF{Colors.ENDC}")
+        
+        # VR Controller Performance & Status - Enhanced
+        print(f"\n{Colors.BOLD}🎮 VR STATUS & PERFORMANCE:{Colors.ENDC}")
+        
+        # Get VR diagnostics from oculus node (using the exact cleaned keys)
+        vr_connection_diag = self.vr_diagnostics_from_node.get("Oculus Connection")
+        vr_data_rates_diag = self.vr_diagnostics_from_node.get("Oculus Data Rates")
+        
+        if vr_connection_diag and vr_data_rates_diag:
+            vr_connected = vr_connection_diag.level == DiagnosticStatus.OK
+            connection_status = vr_connection_diag.message
+            
+            target_poll_rate = self._get_diagnostic_value(vr_data_rates_diag, 'Target Poll Rate (Hz)')
+            actual_poll_rate = self._get_diagnostic_value(vr_data_rates_diag, 'Actual Poll Rate (Hz)')
+            target_publish_rate = self._get_diagnostic_value(vr_data_rates_diag, 'Target Publish Rate (Hz)')
+            actual_publish_rate = self._get_diagnostic_value(vr_data_rates_diag, 'Actual Publish Rate (Hz)')
+            queue_size = self._get_diagnostic_value(vr_data_rates_diag, 'Data Queue Size')
+            
+            print(f"   • Connection: {Colors.GREEN if vr_connected else Colors.FAIL}{connection_status}{Colors.ENDC}")
+            
+            if vr_connected and actual_publish_rate != 'N/A':
+                try:
+                    actual_publish_float = float(actual_publish_rate)
+                    efficiency_float = 0.0
+                    if target_publish_rate != 'N/A':
+                        target_pub = float(target_publish_rate)
+                        if target_pub > 0:
+                            efficiency_float = (actual_publish_float / target_pub) * 100
+                except ValueError:
+                    actual_publish_float = 0.0
+                    efficiency_float = 0.0
+                
+                if actual_poll_rate != 'N/A':
+                    try:
+                        poll_rate_float = float(actual_poll_rate)
+                        poll_color = Colors.GREEN if poll_rate_float >= 55 else Colors.WARNING if poll_rate_float >= 30 else Colors.FAIL
+                        print(f"   • Poll Rate: {poll_color}{actual_poll_rate} Hz{Colors.ENDC} (Target: {target_poll_rate} Hz)")
+                    except ValueError: pass
+                
+                fps_color = Colors.GREEN if actual_publish_float >= 55 else Colors.WARNING if actual_publish_float >= 30 else Colors.FAIL
+                print(f"   • Publish Rate: {fps_color}{actual_publish_rate} Hz{Colors.ENDC} (Target: {target_publish_rate} Hz)")
+                
+                eff_color = Colors.GREEN if efficiency_float >= 90 else Colors.WARNING if efficiency_float >= 70 else Colors.FAIL
+                print(f"   • Efficiency: {eff_color}{efficiency_float:.1f}%{Colors.ENDC}")
+                
+                if queue_size != 'N/A':
+                    try:
+                        queue_int = int(queue_size)
+                        queue_color = Colors.GREEN if queue_int < 5 else Colors.WARNING if queue_int < 10 else Colors.FAIL
+                        print(f"   • Queue Size: {queue_color}{queue_size}{Colors.ENDC}")
+                    except ValueError: pass
+            elif vr_connected: # Connected but no rate data
+                 print(f"   {Colors.YELLOW}• Performance data pending...{Colors.ENDC}")
+            else: # Not connected
+                print(f"   {Colors.FAIL}• VR Controller disconnected or no data available{Colors.ENDC}")
+        else:
+            print(f"   {Colors.WARNING}• VR diagnostics not yet received from oculus_reader.{Colors.ENDC}")
+        
+        # Individual Camera Diagnostics Section
+        if self.cameras_enabled or self.camera_diagnostics_from_node:
+            print(f"\n{Colors.BOLD}{Colors.BLUE}📹 INDIVIDUAL CAMERA DIAGNOSTICS{Colors.ENDC}")
+            print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+            
+            print(f"  🔍 {Colors.BOLD}Raw Camera Diagnostics Received (Keys):{Colors.ENDC}")
+            if self.camera_diagnostics_from_node:
+                for cam_name_key in self.camera_diagnostics_from_node.keys():
+                    print(f"    • '{Colors.CYAN}{cam_name_key}{Colors.ENDC}'")
+            else:
+                print(f"    {Colors.WARNING}• No camera diagnostics received from camera node.{Colors.ENDC}")
+            
+            print(f"  {Colors.CYAN}{'-' * 60}{Colors.ENDC}")
+            
+            # Camera System Overview (using the cleaned key "Camera System Status")
+            camera_system_overview = self.camera_diagnostics_from_node.get("Camera System Status")
+            if camera_system_overview:
+                cameras_detected = self._get_diagnostic_value(camera_system_overview, 'cameras_detected')
+                cameras_active = self._get_diagnostic_value(camera_system_overview, 'cameras_active')
+                cameras_configured = self._get_diagnostic_value(camera_system_overview, 'cameras_configured')
+                overview_status_msg = camera_system_overview.message
+                overview_level_str = self._diagnostic_level_to_string(camera_system_overview.level)
+                overview_color = Colors.GREEN if overview_level_str == 'OK' else Colors.WARNING if overview_level_str == 'WARNING' else Colors.FAIL
+                
+                print(f"\n  🔧 {Colors.BOLD}CAMERA SYSTEM OVERVIEW:{Colors.ENDC}")
+                print(f"     Status: {overview_color}{overview_status_msg}{Colors.ENDC}")
+                print(f"     Configured: {cameras_configured} | Detected: {cameras_detected} | Active: {cameras_active}")
+            
+            print(f"\n  📊 {Colors.BOLD}INDIVIDUAL CAMERA PERFORMANCE:{Colors.ENDC}")
+            print(f"  {Colors.CYAN}{'-' * 60}{Colors.ENDC}")
+            
+            individual_cameras_found_and_displayed = False
+            
+            for diag_key_name, cam_status_obj in self.camera_diagnostics_from_node.items():
+                # Process active individual cameras: "Camera <ID>" (exact match after cleaning)
+                if diag_key_name.startswith("Camera ") and "(Unavailable)" not in diag_key_name and diag_key_name != "Camera System Status":
+                    individual_cameras_found_and_displayed = True
+                    cam_id_str = diag_key_name.replace("Camera ", "").strip()
+                    serial_num = self._get_diagnostic_value(cam_status_obj, 'Actual SN') or self._get_diagnostic_value(cam_status_obj, 'serial_number') # Ensure this matches camera_node.py
+                    status_msg_str = cam_status_obj.message
+                    level_str_val = self._diagnostic_level_to_string(cam_status_obj.level)
+                    
+                    status_color_val = Colors.GREEN if level_str_val == 'OK' else Colors.WARNING if level_str_val == 'WARNING' else Colors.FAIL
+                    
+                    print(f"\n  📷 {Colors.BOLD}{Colors.BLUE}Camera: {cam_id_str}{Colors.ENDC}")
+                    print(f"     Serial Number: {Colors.CYAN}{serial_num}{Colors.ENDC}")
+                    print(f"     Status: {status_color_val}{level_str_val} - {status_msg_str}{Colors.ENDC}")
+                    
+                    rgb_target_fps = self._get_diagnostic_value(cam_status_obj, 'Target Color FPS')
+                    rgb_actual_fps = self._get_diagnostic_value(cam_status_obj, 'Actual Color FPS')
+                    rgb_efficiency = self._get_diagnostic_value(cam_status_obj, 'Color Efficiency (%)')
+                    rgb_frames = self._get_diagnostic_value(cam_status_obj, 'Color Frames Published')
+                    
+                    if rgb_actual_fps != 'N/A' and rgb_target_fps != 'N/A': # Ensure we have data to process
+                        try:
+                            rgb_actual_float = float(rgb_actual_fps)
+                            rgb_target_float = float(rgb_target_fps)
+                            fps_color = Colors.GREEN if rgb_actual_float >= (rgb_target_float * 0.9) else Colors.WARNING if rgb_actual_float >= (rgb_target_float * 0.7) else Colors.FAIL
+                            eff_val = "N/A"
+                            if rgb_efficiency != 'N/A': 
+                                try: eff_val = f"{float(rgb_efficiency):.1f}" 
+                                except: pass # Keep N/A if conversion fails
+
+                            print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC}")
+                            print(f"        • FPS: {fps_color}{rgb_actual_fps} Hz{Colors.ENDC} (Target: {rgb_target_fps} Hz)")
+                            print(f"        • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
+                            if rgb_frames != 'N/A': print(f"        • Frames Published: {Colors.CYAN}{rgb_frames}{Colors.ENDC}")
+                        except ValueError: print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.WARNING}Data format error (RGB){Colors.ENDC}")
+                    else: print(f"     📸 {Colors.BOLD}RGB Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
+                    
+                    depth_target_fps = self._get_diagnostic_value(cam_status_obj, 'Target Depth FPS')
+                    depth_actual_fps = self._get_diagnostic_value(cam_status_obj, 'Actual Depth FPS')
+                    depth_efficiency = self._get_diagnostic_value(cam_status_obj, 'Depth Efficiency (%)')
+                    depth_frames = self._get_diagnostic_value(cam_status_obj, 'Depth Frames Published')
+                    
+                    if depth_actual_fps != 'N/A' and depth_target_fps != 'N/A': # Ensure we have data
+                        try:
+                            depth_actual_float = float(depth_actual_fps)
+                            depth_target_float = float(depth_target_fps)
+                            fps_color = Colors.GREEN if depth_actual_float >= (depth_target_float * 0.9) else Colors.WARNING if depth_actual_float >= (depth_target_float * 0.7) else Colors.FAIL
+                            eff_val = "N/A"
+                            if depth_efficiency != 'N/A': 
+                                try: eff_val = f"{float(depth_efficiency):.1f}" 
+                                except: pass
+
+                            print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC}")
+                            print(f"        • FPS: {fps_color}{depth_actual_fps} Hz{Colors.ENDC} (Target: {depth_target_fps} Hz)")
+                            print(f"        • Efficiency: {fps_color}{eff_val}%{Colors.ENDC}")
+                            if depth_frames != 'N/A': print(f"        • Frames Published: {Colors.CYAN}{depth_frames}{Colors.ENDC}")
+                        except ValueError: print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.WARNING}Data format error (Depth){Colors.ENDC}")
+                    else: print(f"     🔍 {Colors.BOLD}Depth Stream:{Colors.ENDC} {Colors.FAIL}No FPS data{Colors.ENDC}")
+                    print(f"     {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
+
+            # Process unavailable cameras: "Camera <ID> (Unavailable)" (exact match after cleaning)
+            for diag_key_name, cam_status_obj in self.camera_diagnostics_from_node.items():
+                if diag_key_name.startswith("Camera ") and "(Unavailable)" in diag_key_name:
+                    individual_cameras_found_and_displayed = True
+                    cam_id_str = diag_key_name.replace("Camera ", "").replace(" (Unavailable)", "").strip()
+                    configured_sn = self._get_diagnostic_value(cam_status_obj, 'Configured SN/Idx')
+                    status_msg_str = cam_status_obj.message
+                    
+                    print(f"\n  📷 {Colors.BOLD}{Colors.RED}Camera: {cam_id_str} (UNAVAILABLE){Colors.ENDC}")
+                    print(f"     Configured SN: {Colors.CYAN}{configured_sn}{Colors.ENDC}")
+                    print(f"     Status: {Colors.FAIL}{status_msg_str}{Colors.ENDC}")
+                    print(f"     📸 RGB Stream: {Colors.FAIL}Not available{Colors.ENDC}")
+                    print(f"     🔍 Depth Stream: {Colors.FAIL}Not available{Colors.ENDC}")
+                    print(f"     {Colors.CYAN}{'.' * 40}{Colors.ENDC}")
+            
+            if not individual_cameras_found_and_displayed:
+                # Fallback for old-style keys or if new keys are somehow missed
+                legacy_or_unprocessed_keys = [k for k in self.camera_diagnostics_from_node.keys() if k != "Camera System Status"]
+                if legacy_or_unprocessed_keys:
+                    print(f"  {Colors.WARNING}Displaying other (possibly legacy or unprocessed) camera diagnostics:{Colors.ENDC}")
+                    for key in legacy_or_unprocessed_keys:
+                        status = self.camera_diagnostics_from_node[key]
+                        level_str = self._diagnostic_level_to_string(status.level)
+                        level_color = Colors.GREEN if level_str == 'OK' else Colors.WARNING if level_str == 'WARNING' else Colors.FAIL
+                        print(f"    • {Colors.BOLD}{key}{Colors.ENDC}: {level_color}{level_str}{Colors.ENDC} - {status.message}")
+                        for kv in status.values: print(f"        {kv.key}: {kv.value}")
+                else:
+                    print(f"  {Colors.WARNING}No individual camera performance data found.{Colors.ENDC}")
+                    print(f"  {Colors.CYAN}💡 Verify camera_node is publishing diagnostics with names like 'Camera <ID>'.{Colors.ENDC}")
+            
+            print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        
+        # System Resources
+        try:
+            resources = self.get_system_resources()
+            cpu = resources['cpu_percent']
+            memory = resources['memory_percent']
+            
+            if cpu > 0 or memory > 0:
+                print(f"\n{Colors.BOLD}{Colors.BLUE}💻 SYSTEM RESOURCES{Colors.ENDC}")
+                print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
+                
+                cpu_color = Colors.GREEN if cpu < 80 else Colors.WARNING if cpu < 90 else Colors.FAIL
+                mem_color = Colors.GREEN if memory < 80 else Colors.WARNING if memory < 90 else Colors.FAIL
+                
+                print(f"  • CPU Usage: {cpu_color}{cpu:.1f}%{Colors.ENDC}")
+                print(f"  • Memory Usage: {mem_color}{memory:.1f}%{Colors.ENDC}")
+        except Exception:
+            pass
+        
+        # MoveIt Services Status
+        print(f"\n{Colors.BOLD}{Colors.BLUE}🔧 MOVEIT SERVICES STATUS{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
+        
+        if self.moveit_ready:
+            print(f"  {Colors.GREEN}✅ All core MoveIt services reported as ready.{Colors.ENDC}")
+        else:
+            print(f"  {Colors.WARNING}⚠️ Some MoveIt services may not be ready{Colors.ENDC}")
+
+        ik_ready = self.compute_ik_client.service_is_ready()
+        planner_ready = self.plan_kinematic_path_client.service_is_ready()
+        scene_ready = self.get_planning_scene_client.service_is_ready()
+
+        print(f"    ├─ IK Service (/compute_ik): {Colors.GREEN if ik_ready else Colors.WARNING}{'Ready' if ik_ready else 'Pending'}{Colors.ENDC}")
+        print(f"    ├─ Planner Service (/plan_kinematic_path): {Colors.GREEN if planner_ready else Colors.WARNING}{'Ready' if planner_ready else 'Pending'}{Colors.ENDC}")
+        print(f"    └─ Scene Service (/get_planning_scene): {Colors.GREEN if scene_ready else Colors.WARNING}{'Ready' if scene_ready else 'Pending'}{Colors.ENDC}")
+
+        # Footer with quick actions
+        print(f"\n{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        print(f"{Colors.BOLD}{Colors.BLUE}🚀 QUICK ACTIONS{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'-' * 20}{Colors.ENDC}")
+        print(f"• Live diagnostics: {Colors.YELLOW}ros2 topic echo /diagnostics{Colors.ENDC}")
+        print(f"• Check camera topics: {Colors.YELLOW}ros2 topic list | grep cam{Colors.ENDC}")
+        print(f"• Check camera FPS: {Colors.YELLOW}ros2 topic hz /cameras/cam_<SERIAL>/image_raw{Colors.ENDC}")
+        print(f"• Emergency stop: {Colors.RED}Ctrl+C{Colors.ENDC}")
+        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
+        
+        # Force flush output
+        sys.stdout.flush()
+
+    def _get_diagnostic_value(self, status: DiagnosticStatus, key: str) -> str:
+        """Helper to extract value from diagnostic status by key"""
+        for kv in status.values:
+            if kv.key == key:
+                return kv.value
+        return 'N/A'
+    
+    def _diagnostic_level_to_string(self, level: int) -> str:
+        """Convert diagnostic level to human-readable string"""
+        level_map = {
+            DiagnosticStatus.OK: "OK",
+            DiagnosticStatus.WARN: "WARNING", 
+            DiagnosticStatus.ERROR: "ERROR",
+            DiagnosticStatus.STALE: "STALE"
+        }
+        return level_map.get(level, f"UNKNOWN({level})")
+
+    def read_diagnostics_callback(self, msg: DiagnosticArray):
+        """Read camera and VR node status from diagnostics"""
+        for status in msg.status:
+            # Capture camera diagnostics
+            if status.name.startswith("vision_camera_node:"):
+                # Remove prefix and strip leading/trailing whitespace for clean keys
+                cam_diag_name = status.name.replace("vision_camera_node:", "").strip()
+                self.camera_diagnostics_from_node[cam_diag_name] = status
+            
+            # Capture VR diagnostics from oculus node - handle multiple diagnostic types
+            elif status.name.startswith("oculus_reader:"):
+                # Store VR diagnostics by their specific name (remove prefix and strip)
+                vr_diag_name = status.name.replace("oculus_reader:", "").strip()
+                self.vr_diagnostics_from_node[vr_diag_name] = status
+            # Keep this for backward compatibility or other oculus diagnostics an old node might publish
+            elif "Oculus" in status.name and status.name.startswith("oculus_reader: "): 
+                vr_diag_name = status.name.replace("oculus_reader: ", "").strip()
+                self.vr_diagnostics_from_node[vr_diag_name] = status
 
 
 def main(args=None):

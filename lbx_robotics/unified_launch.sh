@@ -55,6 +55,60 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Debug workspace paths
+print_info "Script location: $SCRIPT_DIR"
+print_info "Workspace directory: $WORKSPACE_DIR"
+print_info "Root workspace: $ROOT_WORKSPACE_DIR"
+
+# Function to check and display running processes
+check_running_processes() {
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}                    Process Status Check                        ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    
+    # Define critical process patterns to check
+    declare -A process_categories=(
+        ["VR and Teleoperation"]="oculus_node|oculus_reader|lbx_input_oculus|vr_teleop_node|oculus_vr_server"
+        ["Robot Control"]="robot_control_node|system_manager|main_system|system_orchestrator|system_monitor"
+        ["MoveIt"]="move_group|moveit"
+        ["Franka Hardware"]="franka_hardware|franka_gripper|franka_control|controller_manager"
+        ["Cameras"]="camera_node|vision_camera_node|realsense"
+        ["Data Recording"]="mcap_recorder_node|data_recorder"
+        ["Visualization"]="rviz2|foxglove"
+        ["ROS2 Processes"]="ros2 run|ros2 launch"
+        ["LBX Packages"]="lbx_franka_control|lbx_franka_moveit|lbx_vision_camera|lbx_data_recorder"
+    )
+    
+    total_found=0
+    
+    for category in "${!process_categories[@]}"; do
+        pattern="${process_categories[$category]}"
+        processes=$(pgrep -af "$pattern" 2>/dev/null || true)
+        count=$(echo "$processes" | grep -v '^$' | wc -l)
+        
+        if [ "$count" -gt 0 ]; then
+            echo -e "\n${YELLOW}$category ($count processes):${NC}"
+            echo "$processes" | while read -r line; do
+                if [ ! -z "$line" ]; then
+                    echo "  • $line"
+                fi
+            done
+            total_found=$((total_found + count))
+        else
+            echo -e "\n${GREEN}$category: No processes found${NC}"
+        fi
+    done
+    
+    echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+    if [ "$total_found" -gt 0 ]; then
+        echo -e "${YELLOW}Total processes found: $total_found${NC}"
+        echo -e "${YELLOW}Use '--emergency-stop' to force kill all processes${NC}"
+    else
+        echo -e "${GREEN}✅ No LBX/ROS processes detected - system is clean${NC}"
+    fi
+    echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
+}
+
 # Help function
 show_help() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
@@ -100,6 +154,7 @@ show_help() {
     echo -e "${BLUE}System Control:${NC}"
     echo "  --shutdown                Gracefully shutdown running system"
     echo "  --emergency-stop          Emergency stop all processes"
+    echo "  --check-processes         Check what LBX/ROS processes are currently running"
     echo "  --help                    Show this help message"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
@@ -108,6 +163,9 @@ show_help() {
     echo "  $0 --cameras --no-recording          # Run with cameras, no recording"
     echo "  $0 --network-vr 192.168.1.50        # Network VR mode"
     echo "  $0 --no-build                        # Skip build, just run"
+    echo "  $0 --check-processes                 # Check what processes are running"
+    echo "  $0 --shutdown                        # Graceful system shutdown"
+    echo "  $0 --emergency-stop                  # Force kill all processes"
     echo ""
     echo -e "${CYAN}Build Optimization Examples:${NC}"
     echo "  $0 --build --parallel-workers 8     # Build with 8 parallel jobs"
@@ -201,6 +259,10 @@ while [[ $# -gt 0 ]]; do
             emergency_stop
             exit 0
             ;;
+        --check-processes)
+            check_running_processes
+            exit 0
+            ;;
         --help)
             show_help
             exit 0
@@ -256,33 +318,29 @@ check_ros2_environment() {
 kill_existing_processes() {
     print_warning "Stopping existing ROS and robot processes..."
     
-    # Stop ROS2 daemon
+    # Stop ROS2 daemon first
     print_info "Stopping ROS2 daemon..."
     ros2 daemon stop 2>/dev/null && echo "  ✓ ROS2 daemon stopped" || echo "  ✓ ROS2 daemon was not running"
     
-    # Kill VR and teleoperation processes
+    # Kill VR and teleoperation processes (highest priority for safety)
     print_info "Stopping VR and teleoperation processes..."
+    pkill -f "oculus_node" 2>/dev/null && echo "  ✓ Stopped oculus_node" || echo "  ✓ No oculus_node found"
+    pkill -f "oculus_reader" 2>/dev/null && echo "  ✓ Stopped oculus_reader" || echo "  ✓ No oculus_reader found"
+    pkill -f "lbx_input_oculus" 2>/dev/null && echo "  ✓ Stopped lbx_input_oculus" || echo "  ✓ No lbx_input_oculus found"
     pkill -f "oculus_vr_server" 2>/dev/null && echo "  ✓ Stopped oculus_vr_server" || echo "  ✓ No oculus_vr_server found"
     pkill -f "vr_control_interface" 2>/dev/null && echo "  ✓ Stopped vr_control_interface" || echo "  ✓ No vr_control_interface found"
+    pkill -f "vr_teleop_node" 2>/dev/null && echo "  ✓ Stopped vr_teleop_node" || echo "  ✓ No vr_teleop_node found"
+    
+    # Kill system management processes
+    print_info "Stopping system management processes..."
     pkill -f "system_manager" 2>/dev/null && echo "  ✓ Stopped system_manager" || echo "  ✓ No system_manager found"
-    
-    # Kill camera processes
-    print_info "Stopping camera processes..."
-    pkill -f "camera_server" 2>/dev/null && echo "  ✓ Stopped camera_server" || echo "  ✓ No camera_server found"
-    pkill -f "realsense" 2>/dev/null && echo "  ✓ Stopped realsense processes" || echo "  ✓ No realsense processes found"
-    
-    # Kill data recording processes
-    print_info "Stopping data recording processes..."
-    pkill -f "data_recorder" 2>/dev/null && echo "  ✓ Stopped data_recorder" || echo "  ✓ No data_recorder found"
-    pkill -f "mcap" 2>/dev/null && echo "  ✓ Stopped mcap processes" || echo "  ✓ No mcap processes found"
-    
-    # Kill MoveIt processes
-    print_info "Stopping MoveIt processes..."
-    pkill -f "moveit" 2>/dev/null && echo "  ✓ Stopped moveit processes" || echo "  ✓ No moveit processes found"
-    pkill -f "move_group" 2>/dev/null && echo "  ✓ Stopped move_group" || echo "  ✓ No move_group found"
+    pkill -f "system_orchestrator" 2>/dev/null && echo "  ✓ Stopped system_orchestrator" || echo "  ✓ No system_orchestrator found"
+    pkill -f "system_monitor" 2>/dev/null && echo "  ✓ Stopped system_monitor" || echo "  ✓ No system_monitor found"
+    pkill -f "main_system" 2>/dev/null && echo "  ✓ Stopped main_system" || echo "  ✓ No main_system found"
     
     # Kill robot control processes
     print_info "Stopping robot control processes..."
+    pkill -f "robot_control_node" 2>/dev/null && echo "  ✓ Stopped robot_control_node" || echo "  ✓ No robot_control_node found"
     pkill -f "robot_state_publisher" 2>/dev/null && echo "  ✓ Stopped robot_state_publisher" || echo "  ✓ No robot_state_publisher found"
     pkill -f "joint_state_publisher" 2>/dev/null && echo "  ✓ Stopped joint_state_publisher" || echo "  ✓ No joint_state_publisher found"
     pkill -f "controller_manager" 2>/dev/null && echo "  ✓ Stopped controller_manager" || echo "  ✓ No controller_manager found"
@@ -294,6 +352,24 @@ kill_existing_processes() {
     pkill -f "franka_gripper" 2>/dev/null && echo "  ✓ Stopped franka_gripper" || echo "  ✓ No franka_gripper found"
     pkill -f "franka_control" 2>/dev/null && echo "  ✓ Stopped franka_control" || echo "  ✓ No franka_control found"
     
+    # Kill MoveIt processes
+    print_info "Stopping MoveIt processes..."
+    pkill -f "move_group" 2>/dev/null && echo "  ✓ Stopped move_group" || echo "  ✓ No move_group found"
+    pkill -f "moveit" 2>/dev/null && echo "  ✓ Stopped moveit processes" || echo "  ✓ No moveit processes found"
+    
+    # Kill camera processes
+    print_info "Stopping camera processes..."
+    pkill -f "camera_node" 2>/dev/null && echo "  ✓ Stopped camera_node" || echo "  ✓ No camera_node found"
+    pkill -f "vision_camera_node" 2>/dev/null && echo "  ✓ Stopped vision_camera_node" || echo "  ✓ No vision_camera_node found"
+    pkill -f "camera_server" 2>/dev/null && echo "  ✓ Stopped camera_server" || echo "  ✓ No camera_server found"
+    pkill -f "realsense" 2>/dev/null && echo "  ✓ Stopped realsense processes" || echo "  ✓ No realsense processes found"
+    
+    # Kill data recording processes
+    print_info "Stopping data recording processes..."
+    pkill -f "mcap_recorder_node" 2>/dev/null && echo "  ✓ Stopped mcap_recorder_node" || echo "  ✓ No mcap_recorder_node found"
+    pkill -f "data_recorder" 2>/dev/null && echo "  ✓ Stopped data_recorder" || echo "  ✓ No data_recorder found"
+    pkill -f "mcap" 2>/dev/null && echo "  ✓ Stopped mcap processes" || echo "  ✓ No mcap processes found"
+    
     # Kill visualization
     print_info "Stopping visualization..."
     pkill -f "rviz2" 2>/dev/null && echo "  ✓ Stopped rviz2" || echo "  ✓ No rviz2 found"
@@ -304,17 +380,31 @@ kill_existing_processes() {
     pkill -f "ros2 run" 2>/dev/null && echo "  ✓ Stopped ros2 run processes" || echo "  ✓ No ros2 run processes found"
     pkill -f "ros2 launch" 2>/dev/null && echo "  ✓ Stopped ros2 launch processes" || echo "  ✓ No ros2 launch processes found"
     
+    # Kill any remaining nodes that might have LBX package names
+    print_info "Stopping LBX package processes..."
+    pkill -f "lbx_franka_control" 2>/dev/null && echo "  ✓ Stopped lbx_franka_control" || echo "  ✓ No lbx_franka_control found"
+    pkill -f "lbx_franka_moveit" 2>/dev/null && echo "  ✓ Stopped lbx_franka_moveit" || echo "  ✓ No lbx_franka_moveit found"
+    pkill -f "lbx_vision_camera" 2>/dev/null && echo "  ✓ Stopped lbx_vision_camera" || echo "  ✓ No lbx_vision_camera found"
+    pkill -f "lbx_data_recorder" 2>/dev/null && echo "  ✓ Stopped lbx_data_recorder" || echo "  ✓ No lbx_data_recorder found"
+    pkill -f "lbx_launch" 2>/dev/null && echo "  ✓ Stopped lbx_launch" || echo "  ✓ No lbx_launch found"
+    
     # Wait for processes to terminate
     print_info "Waiting for processes to terminate..."
     sleep 3
     
-    # Force kill any stubborn processes
-    print_info "Force killing any remaining processes..."
-    pkill -9 -f "moveit" 2>/dev/null || true
-    pkill -9 -f "franka" 2>/dev/null || true
-    pkill -9 -f "rviz2" 2>/dev/null || true
-    pkill -9 -f "oculus_vr_server" 2>/dev/null || true
-    pkill -9 -f "camera_server" 2>/dev/null || true
+    # Force kill any stubborn processes (most critical ones)
+    print_info "Force killing any remaining critical processes..."
+    pkill -9 -f "oculus_node|moveit|franka_hardware|system_manager" 2>/dev/null || true
+    
+    # Final verification - check if any problematic processes remain
+    print_info "Verifying process cleanup..."
+    remaining_critical=$(pgrep -f "oculus_node|moveit|franka_hardware|system_manager" 2>/dev/null | wc -l)
+    if [ "$remaining_critical" -gt 0 ]; then
+        print_warning "$remaining_critical critical processes still running"
+        print_info "Attempting final cleanup..."
+        pkill -9 -f "oculus_node|moveit|franka_hardware|system_manager" 2>/dev/null || true
+        sleep 1
+    fi
     
     print_success "All existing processes terminated"
 }
@@ -547,25 +637,41 @@ graceful_shutdown() {
     echo ""
     print_info "Initiating graceful shutdown..."
     
-    # Stop robot motion first
+    # Stop robot motion first for safety
     print_info "Stopping robot motion..."
     timeout 3 ros2 service call /fr3_arm_controller/stop std_srvs/srv/Trigger 2>/dev/null || true
+    timeout 3 ros2 service call /system/stop std_srvs/srv/Trigger 2>/dev/null || true
     
-    # Stop VR control
+    # Stop VR control immediately to prevent further robot commands
     print_info "Stopping VR control..."
+    pkill -SIGTERM -f "oculus_node" 2>/dev/null || true
+    pkill -SIGTERM -f "oculus_reader" 2>/dev/null || true
+    pkill -SIGTERM -f "lbx_input_oculus" 2>/dev/null || true
     pkill -SIGTERM -f "oculus_vr_server" 2>/dev/null || true
     pkill -SIGTERM -f "vr_control_interface" 2>/dev/null || true
+    pkill -SIGTERM -f "vr_teleop_node" 2>/dev/null || true
     
-    # Stop other components gracefully
+    # Stop other critical system components gracefully
     print_info "Stopping system components..."
     pkill -SIGTERM -f "system_manager" 2>/dev/null || true
+    pkill -SIGTERM -f "robot_control_node" 2>/dev/null || true
+    pkill -SIGTERM -f "main_system" 2>/dev/null || true
     pkill -SIGTERM -f "data_recorder" 2>/dev/null || true
     pkill -SIGTERM -f "camera_server" 2>/dev/null || true
+    pkill -SIGTERM -f "vision_camera_node" 2>/dev/null || true
     
     # Wait for graceful shutdown
-    sleep 3
+    print_info "Waiting for graceful shutdown..."
+    sleep 5
     
-    # Kill remaining processes
+    # Check if any critical processes are still running
+    remaining_vr=$(pgrep -f "oculus_node|oculus_reader|lbx_input_oculus" 2>/dev/null | wc -l)
+    if [ "$remaining_vr" -gt 0 ]; then
+        print_warning "Some VR processes still running, force stopping..."
+        pkill -9 -f "oculus_node|oculus_reader|lbx_input_oculus" 2>/dev/null || true
+    fi
+    
+    # Kill remaining processes using our comprehensive function
     kill_existing_processes
     
     print_success "Graceful shutdown completed"
@@ -579,15 +685,39 @@ emergency_stop() {
     # Immediate robot stop
     print_error "Stopping robot motion immediately..."
     timeout 2 ros2 service call /fr3_arm_controller/stop std_srvs/srv/Trigger 2>/dev/null || true
+    timeout 2 ros2 service call /system/emergency_stop std_srvs/srv/Trigger 2>/dev/null || true
     
-    # Kill all processes immediately
-    print_error "Killing all processes..."
+    # Kill VR processes immediately to stop any control commands
+    print_error "Killing VR processes immediately..."
+    pkill -9 -f "oculus_node" 2>/dev/null || true
+    pkill -9 -f "oculus_reader" 2>/dev/null || true
+    pkill -9 -f "lbx_input_oculus" 2>/dev/null || true
+    pkill -9 -f "vr_teleop_node" 2>/dev/null || true
+    pkill -9 -f "oculus_vr_server" 2>/dev/null || true
+    
+    # Kill all robot control processes immediately
+    print_error "Killing robot control processes..."
+    pkill -9 -f "robot_control_node" 2>/dev/null || true
+    pkill -9 -f "system_manager" 2>/dev/null || true
     pkill -9 -f "moveit" 2>/dev/null || true
     pkill -9 -f "franka" 2>/dev/null || true
-    pkill -9 -f "ros2" 2>/dev/null || true
+    pkill -9 -f "controller_manager" 2>/dev/null || true
+    
+    # Kill all remaining processes
+    print_error "Killing all remaining processes..."
     pkill -9 -f "rviz2" 2>/dev/null || true
-    pkill -9 -f "oculus_vr_server" 2>/dev/null || true
     pkill -9 -f "camera_server" 2>/dev/null || true
+    pkill -9 -f "vision_camera_node" 2>/dev/null || true
+    pkill -9 -f "ros2" 2>/dev/null || true
+    pkill -9 -f "main_system" 2>/dev/null || true
+    
+    # Final verification
+    print_error "Verifying emergency stop..."
+    remaining_critical=$(pgrep -f "oculus_node|moveit|franka|robot_control" 2>/dev/null | wc -l)
+    if [ "$remaining_critical" -gt 0 ]; then
+        print_error "Force killing $remaining_critical remaining critical processes..."
+        pkill -9 -f "oculus_node|moveit|franka|robot_control" 2>/dev/null || true
+    fi
     
     print_error "Emergency stop completed"
 }
@@ -618,6 +748,7 @@ display_configuration() {
 echo ""
 echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${CYAN}           LBX Robotics Unified Launch System                   ${NC}"
+echo -e "${CYAN}           (Enhanced with comprehensive process management)     ${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}"
 
 # Setup steps
@@ -671,6 +802,21 @@ export VR_MODE="$VR_MODE"
 export HOT_RELOAD="$HOT_RELOAD"
 export LOG_LEVEL="$LOG_LEVEL"
 export VR_IP="$VR_IP"
+
+# Set workspace root for config discovery
+export COLCON_WS="$WORKSPACE_DIR"
+
+# Check if camera config file exists, if not use auto-detection
+if [ "$ENABLE_CAMERAS" = "true" ]; then
+    CAMERA_CONFIG_PATH="$WORKSPACE_DIR/configs/sensors/realsense_cameras.yaml"
+    if [ ! -f "$CAMERA_CONFIG_PATH" ]; then
+        print_warning "Camera config not found at $CAMERA_CONFIG_PATH, using auto-detection"
+        LAUNCH_ARGS="$LAUNCH_ARGS camera_config:=auto"
+    else
+        print_info "Using camera config: $CAMERA_CONFIG_PATH"
+        LAUNCH_ARGS="$LAUNCH_ARGS camera_config:=$CAMERA_CONFIG_PATH"
+    fi
+fi
 
 # Launch the system
 print_info "Starting LBX Robotics System..."

@@ -32,7 +32,7 @@ cameras:
       height: 720
       fps: 30
     topics:
-      base: "/cameras/overhead_camera"
+      base: "/cameras/cam_realsense_218622277093"
     transforms:
       parent_frame: base_link
       camera_frame: realsense_218622277093_link
@@ -63,7 +63,7 @@ cameras:
       height: 720
       fps: 30
     topics:
-      base: "/cameras/wrist_camera"
+      base: "/cameras/cam_realsense_218622272999"
     transforms:
       parent_frame: base_link
       camera_frame: realsense_218622272999_link

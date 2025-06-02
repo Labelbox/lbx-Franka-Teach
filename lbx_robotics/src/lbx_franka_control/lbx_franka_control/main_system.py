@@ -27,9 +27,18 @@ from typing import Dict, Optional, List
 import numpy as np
 import json
 
-# Import system components
-from .system_manager import SystemManager
-from .franka_controller import FrankaController
+# Import system components with error handling
+try:
+    from .system_manager import SystemManager
+except ImportError as e:
+    print(f"Warning: Could not import SystemManager: {e}", file=sys.stderr)
+    SystemManager = None
+
+try:
+    from .franka_controller import FrankaController
+except ImportError as e:
+    print(f"Warning: Could not import FrankaController: {e}", file=sys.stderr)
+    FrankaController = None
 
 # ROS2 messages
 from std_msgs.msg import String, Bool, Header
@@ -166,7 +175,7 @@ class LabelboxRoboticsSystem(Node):
             depth=10
         )
         
-        # Subscribe to diagnostics from all nodes
+        # Subscribe to diagnostics from all nodes (lightweight monitoring for health status)
         self.diagnostics_subscription = self.create_subscription(
             DiagnosticArray,
             '/diagnostics',
@@ -365,10 +374,163 @@ class LabelboxRoboticsSystem(Node):
         print(f"\n{Colors.WARNING}Press Ctrl+C to stop the system{Colors.ENDC}\n")
     
     def cleanup(self):
-        """Clean up resources"""
+        """Clean up resources and shutdown ROS nodes"""
         print(f"\n\n{Colors.CYAN}Shutting down systems...{Colors.ENDC}")
         
-        # Cleanup will be handled by ROS2 shutdown
+        # First attempt graceful ROS node shutdown
+        self._graceful_node_shutdown()
+        
+        # Then cleanup ROS2 processes
+        self._cleanup_ros_processes()
+        
+        print(f"{Colors.GREEN}✅ Shutdown complete{Colors.ENDC}")
+    
+    def _graceful_node_shutdown(self):
+        """Attempt graceful shutdown of ROS nodes"""
+        print(f"{Colors.CYAN}Attempting graceful node shutdown...{Colors.ENDC}")
+        
+        try:
+            # Stop robot motion first for safety
+            if self.robot_healthy:
+                print("  • Stopping robot motion...")
+                stop_client = self.create_client(Trigger, '/system/stop')
+                if stop_client.wait_for_service(timeout_sec=2.0):
+                    future = stop_client.call_async(Trigger.Request())
+                    # Don't wait for response, just send the command
+                
+            # Request system components to shutdown
+            shutdown_topics = [
+                '/system/shutdown',
+                '/vr/shutdown', 
+                '/cameras/shutdown',
+                '/recording/shutdown'
+            ]
+            
+            for topic in shutdown_topics:
+                try:
+                    shutdown_pub = self.create_publisher(Bool, topic, 1)
+                    # Give it a moment to connect
+                    time.sleep(0.1)
+                    shutdown_msg = Bool()
+                    shutdown_msg.data = True
+                    shutdown_pub.publish(shutdown_msg)
+                    print(f"  • Sent shutdown signal to {topic}")
+                    self.destroy_publisher(shutdown_pub)
+                except Exception as e:
+                    # Silent continue - this is cleanup
+                    pass
+            
+            # Give nodes time to shutdown gracefully
+            print("  • Waiting for graceful shutdown...")
+            time.sleep(2.0)
+            
+        except Exception as e:
+            print(f"  • Warning: Error during graceful shutdown: {e}")
+    
+    def _cleanup_ros_processes(self):
+        """Cleanup ROS processes if graceful shutdown fails"""
+        print(f"{Colors.CYAN}Cleaning up ROS processes...{Colors.ENDC}")
+        
+        import subprocess
+        import signal
+        import os
+        
+        # List of process patterns to kill (in order of priority)
+        process_patterns = [
+            # VR and teleoperation processes (highest priority)
+            "oculus_node",           # The oculus executable
+            "oculus_reader",         # The oculus node name
+            "lbx_input_oculus",      # The package process
+            "vr_teleop_node",        # VR teleoperation node
+            "system_manager",        # System manager
+            
+            # Robot control processes
+            "robot_control_node",    # Robot control
+            "system_orchestrator",   # System orchestrator  
+            "system_monitor",        # System monitor
+            "franka_hardware",       # Franka hardware interface
+            "controller_manager",    # ROS2 controller manager
+            
+            # MoveIt processes
+            "move_group",            # MoveIt move_group
+            "moveit",                # Any moveit processes
+            
+            # Camera processes
+            "camera_node",           # Camera node
+            "vision_camera_node",    # Vision camera node
+            "realsense",             # RealSense processes
+            
+            # Data recording
+            "mcap_recorder_node",    # MCAP recorder
+            "data_recorder",         # Data recorder
+            
+            # Visualization
+            "rviz2",                 # RViz
+            
+            # General ROS processes
+            "ros2 run",              # ROS2 run commands
+            "ros2 launch",           # ROS2 launch commands
+        ]
+        
+        killed_processes = []
+        
+        for pattern in process_patterns:
+            try:
+                # Use pkill to find and terminate processes matching the pattern
+                result = subprocess.run(
+                    ['pkill', '-f', pattern],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    killed_processes.append(pattern)
+                    print(f"  ✓ Stopped processes matching: {pattern}")
+                else:
+                    # Check if any processes exist
+                    check_result = subprocess.run(
+                        ['pgrep', '-f', pattern],
+                        capture_output=True,
+                        text=True,
+                        timeout=1
+                    )
+                    if check_result.returncode != 0:
+                        pass  # No processes found, which is good
+                        
+            except subprocess.TimeoutExpired:
+                print(f"  ⚠ Timeout killing: {pattern}")
+            except Exception as e:
+                # Silent continue - this is cleanup
+                pass
+        
+        # Wait for processes to terminate
+        if killed_processes:
+            print("  • Waiting for processes to terminate...")
+            time.sleep(3.0)
+        
+        # Force kill any stubborn processes
+        stubborn_patterns = ["oculus_node", "moveit", "franka", "rviz2"]
+        for pattern in stubborn_patterns:
+            try:
+                subprocess.run(
+                    ['pkill', '-9', '-f', pattern],
+                    capture_output=True,
+                    timeout=1
+                )
+            except:
+                pass
+        
+        # Stop ROS2 daemon last
+        try:
+            print("  • Stopping ROS2 daemon...")
+            subprocess.run(['ros2', 'daemon', 'stop'], capture_output=True, timeout=3)
+        except:
+            pass
+        
+        if killed_processes:
+            print(f"  ✓ Cleaned up {len(killed_processes)} process types")
+        else:
+            print("  ✓ No processes needed cleanup")
     
     def _get_bool_param(self, param_name: str, default: bool = False) -> bool:
         """Helper to safely convert launch parameters to boolean values"""
@@ -504,22 +666,10 @@ class LabelboxRoboticsSystem(Node):
             pass
 
     def diagnostics_callback(self, msg):
-        """Callback for receiving diagnostics from all nodes"""
+        """Lightweight callback for basic health status tracking"""
         for status in msg.status:
-            node_name = status.name
-            if node_name not in self.node_diagnostics:
-                self.node_diagnostics[node_name] = {}
-            
-            # Store the summary/status message
-            self.node_diagnostics[node_name]['Summary'] = status.message
-            self.node_diagnostics[node_name]['Level'] = self._diagnostic_level_to_string(status.level)
-            
-            # Store individual key-value pairs
-            for item in status.values:
-                self.node_diagnostics[node_name][item.key] = item.value
-            
-            # Extract system health from main_system diagnostics
-            if 'main_system' in node_name:
+            # Extract basic system health from main_system diagnostics only
+            if 'main_system' in status.name:
                 for item in status.values:
                     if item.key == 'vr_connected':
                         self.vr_healthy = (item.value == 'True')
@@ -531,25 +681,8 @@ class LabelboxRoboticsSystem(Node):
                         self.current_system_mode = item.value
                     elif item.key == 'recording_active':
                         self.recording_active = (item.value == 'True')
-                    # Check if MoveIt is ready based on the 'moveit_ready' key from system_monitor
-                    elif item.key == 'moveit_ready': # Assuming system_monitor adds this key
+                    elif item.key == 'moveit_ready':
                         self.moveit_healthy = (item.value == 'True')
-
-                # Fallback for moveit_healthy based on message if 'moveit_ready' key is not present
-                # This part should ideally be less reliant on string parsing if a dedicated key is available
-                if not any(item.key == 'moveit_ready' for item in status.values):
-                    if 'fully operational' in status.message.lower() or \
-                       ('vr fallback' in status.message.lower() and self.robot_healthy): # VR fallback implies MoveIt is OK if robot is OK
-                        self.moveit_healthy = True
-                    elif 'moveit pending' in status.message.lower() or not self.robot_healthy:
-                        self.moveit_healthy = False
-                    # else, keep previous state or default to False if unsure
-        
-        # Check if it's time to print a diagnostic summary
-        current_time = time.time()
-        if current_time - self.last_diagnostic_summary_time > self.diagnostic_summary_interval:
-            self.last_diagnostic_summary_time = current_time
-            self.print_diagnostic_summary()
     
     def _diagnostic_level_to_string(self, level):
         """Convert diagnostic level to human-readable string"""
@@ -560,342 +693,16 @@ class LabelboxRoboticsSystem(Node):
             DiagnosticStatus.STALE: "STALE"
         }
         return level_map.get(level, f"UNKNOWN({level})")
-    
-    def print_diagnostic_summary(self):
-        """Print a beautiful system health summary from diagnostics"""
-        
-        # Clear previous output for a clean look
-        print("\n" * 1)
-        
-        # Main header with simple line splitters
-        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{Colors.GREEN}                     📊 SYSTEM HEALTH DIAGNOSTICS 📊{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        
-        # Timestamp
-        current_time = datetime.now().strftime("%H:%M:%S")
-        print(f"🕐 Time: {Colors.BOLD}{current_time}{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'-' * 80}{Colors.ENDC}")
-        
-        # Extract information from diagnostics
-        system_diagnostics = {}
-        vr_performance = {}
-        control_performance = {}
-        camera_diagnostics_data = {} # Renamed to avoid conflict with the other camera_diagnostics
-        resource_info = {}
-        
-        # Consolidate oculus_reader specific diagnostics for VR section
-        oculus_node_diagnostics = None
-
-        for node_name, diagnostics_content in self.node_diagnostics.items():
-            if 'main_system' in node_name: # Should be specific like self.get_name()
-                system_diagnostics = diagnostics_content
-                # System state updates are handled in diagnostics_callback directly
-            
-            elif node_name == 'oculus_reader:vr_controller': # Specific key for VR performance
-                vr_performance = diagnostics_content # This now holds all KVs for this diagnostic source
-            elif node_name.startswith('oculus_reader') and not oculus_node_diagnostics: # General oculus_reader status
-                 oculus_node_diagnostics = diagnostics_content
-
-            elif node_name.startswith("Camera ") and " (Unavailable)" not in node_name: # Match active cameras by task name
-                # Extracts <camera_id> from "Camera <camera_id>"
-                cam_id_key = node_name.split("Camera ", 1)[1]
-                camera_diagnostics_data[cam_id_key] = diagnostics_content
-            elif node_name.startswith("Camera ") and " (Unavailable)" in node_name:
-                cam_id_key = node_name.split("Camera ", 1)[1].replace(" (Unavailable)", "")
-                # Optionally store unavailable camera diagnostics if needed for detailed display beyond status
-                # For now, the status is primary, handled by CameraNodeOverallStatusTask for summary
-                # and IndividualCameraDiagnosticTask for the specific 'unavailable' status message.
-                pass # Or store if you want to display more from it.
-            
-            elif 'control_loop' in node_name: # Matches 'robot_control_node:control_loop'
-                control_performance = diagnostics_content
-
-            elif 'resources' in node_name:
-                resource_info = diagnostics_content
-        
-        # System Mode - Most prominent display
-        mode_color = Colors.GREEN if self.current_system_mode == "teleoperation" else Colors.YELLOW
-        if self.current_system_mode == "error":
-            mode_color = Colors.FAIL
-        print(f"🤖 {Colors.BOLD}SYSTEM MODE:{Colors.ENDC} {mode_color}{Colors.BOLD}{self.current_system_mode.upper()}{Colors.ENDC}")
-        
-        # Recording Status - Prominent display
-        if self.recording_active:
-            print(f"🔴 {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.RED}{Colors.BOLD}● RECORDING ON{Colors.ENDC}")
-        else:
-            print(f"⚫ {Colors.BOLD}RECORDING STATUS:{Colors.ENDC} {Colors.CYAN}○ RECORDING OFF{Colors.ENDC}")
-        
-        # VR Controller Performance & Status
-        print(f"\n{Colors.BOLD}🎮 VR STATUS & PERFORMANCE:{Colors.ENDC}")
-        if self.vr_healthy:
-            # Try to get specific performance data from 'oculus_reader:vr_controller'
-            target_fps_vr = vr_performance.get('target_rate', 'N/A') 
-            actual_fps_vr = vr_performance.get('current_rate', 'N/A')
-            efficiency_vr = vr_performance.get('efficiency', 'N/A')
-            status_msg_vr = vr_performance.get('Summary', 'Connected')
-
-            print(f"   • Status: {Colors.GREEN}{status_msg_vr}{Colors.ENDC}")
-            print(f"   • Target FPS: {Colors.CYAN}{target_fps_vr} Hz{Colors.ENDC}")
-            
-            try: actual_fps_float = float(actual_fps_vr)
-            except ValueError: actual_fps_float = 0.0
-            fps_color = Colors.GREEN if actual_fps_float >= 55 else Colors.WARNING if actual_fps_float >= 30 else Colors.FAIL
-            print(f"   • Actual FPS: {fps_color}{actual_fps_vr} Hz{Colors.ENDC}")
-            
-            if efficiency_vr != 'N/A': 
-                try: efficiency_float = float(efficiency_vr)
-                except ValueError: efficiency_float = 0.0
-                eff_color = Colors.GREEN if efficiency_float >= 90 else Colors.WARNING if efficiency_float >= 70 else Colors.FAIL
-                print(f"   • Efficiency: {eff_color}{efficiency_vr}%{Colors.ENDC}")
-        elif oculus_node_diagnostics: # General oculus_reader status if specific performance data not found but oculus_reader is publishing
-            oc_status_msg = oculus_node_diagnostics.get('Summary', 'Graceful Fallback')
-            oc_level = oculus_node_diagnostics.get('Level', 'WARNING')
-            oc_color = Colors.GREEN if oc_level == 'OK' else Colors.WARNING if oc_level == 'WARNING' else Colors.FAIL
-            print(f"   {oc_color}• {oc_status_msg}{Colors.ENDC}")
-            print(f"   {Colors.YELLOW}• Performance data not found under 'oculus_reader:vr_controller' diagnostics.{Colors.ENDC}")
-        else:
-            print(f"   {Colors.WARNING}• VR Controller not connected or no diagnostics received.{Colors.ENDC}")
-        
-        # Robot Control Loop Performance (only shown during teleoperation)
-        if self.current_system_mode == "teleoperation" and control_performance:
-            print(f"\n{Colors.BOLD}🤖 ROBOT CONTROL LOOP:{Colors.ENDC}")
-            target_rate = control_performance.get('target', 45.0)
-            actual_rate = control_performance.get('actual', 0.0)
-            efficiency = control_performance.get('efficiency', 0.0)
-            
-            if actual_rate > 0:
-                fps_color = Colors.GREEN if actual_rate >= 40 else Colors.WARNING if actual_rate >= 20 else Colors.FAIL
-                print(f"   • Target Rate: {Colors.CYAN}{target_rate:.0f} Hz{Colors.ENDC}")
-                print(f"   • Actual Rate: {fps_color}{actual_rate:.1f} Hz{Colors.ENDC}")
-                eff_color = Colors.GREEN if efficiency >= 90 else Colors.WARNING if efficiency >= 70 else Colors.FAIL
-                print(f"   • Efficiency: {eff_color}{efficiency:.1f}%{Colors.ENDC}")
-            else:
-                print(f"   {Colors.WARNING}• Control loop not active yet{Colors.ENDC}")
-        
-        # Camera System Performance
-        if self.cameras_healthy and camera_diagnostics_data:
-            print(f"\n{Colors.BOLD}{Colors.BLUE}📹 CAMERA SYSTEM PERFORMANCE{Colors.ENDC}")
-            print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
-            
-            # Load camera config to get expected cameras and their positions
-            expected_cameras_map = {}
-            camera_config_path = self.launch_params.get('camera_config', '')
-            # self.get_logger().info(f"Attempting to load expected_cameras from: {camera_config_path}") # Already logged earlier
-            if os.path.exists(camera_config_path):
-                try:
-                    with open(camera_config_path, 'r') as f:
-                        config_from_file = yaml.safe_load(f)
-                        if config_from_file and 'cameras' in config_from_file:
-                            for cam_id_yaml, cam_cfg_yaml in config_from_file.get('cameras', {}).items():
-                                if cam_cfg_yaml.get('enabled', False):
-                                    expected_cameras_map[cam_id_yaml] = {
-                                        'serial': cam_cfg_yaml.get('serial_number', 'N/A'),
-                                        'position': cam_cfg_yaml.get('metadata', {}).get('position', 'Unknown') # Get position from metadata
-                                    }
-                            # self.get_logger().info(f"Loaded {len(expected_cameras_map)} expected cameras with positions from config.")
-                except Exception as e:
-                    self.get_logger().error(f"Failed to load/parse camera config for positions in main_system: {camera_config_path} - {e}")
-            
-            main_cam_node_status = self.node_diagnostics.get('vision_camera_node:Camera System Status', {})
-            cam_node_summary = main_cam_node_status.get('Summary', 'Camera node status not directly available')
-            cam_node_level = main_cam_node_status.get('Level', 'OK')
-            cam_node_color = Colors.GREEN if cam_node_level == 'OK' else Colors.WARNING if cam_node_level == 'WARNING' else Colors.FAIL
-
-            print(f"  🔧 {Colors.BOLD}CAMERA NODE STATUS:{Colors.ENDC} {cam_node_color}{cam_node_summary}{Colors.ENDC}")
-            print(f"  📷 {Colors.BOLD}Discovered & Reporting Cameras:{Colors.ENDC} {Colors.CYAN}{len(camera_diagnostics_data)}{Colors.ENDC}")
-            
-            print(f"\n  📊 {Colors.BOLD}INDIVIDUAL CAMERA PERFORMANCE:{Colors.ENDC}")
-            print(f"  {'.' * 56}") # Dotted line
-            
-            # Iterate through camera_diagnostics_data which should now be keyed by camera_id
-            for cam_id_diag, cam_diag_content in camera_diagnostics_data.items():
-                # cam_id_diag is the camera_id from the diagnostic task name
-                # cam_diag_content is the dictionary of KVs for this specific camera
-                
-                # Get configured position using cam_id_diag from expected_cameras_map
-                # serial = cam_diag_content.get('Actual SN', cam_diag_content.get('Configured SN/Idx', 'Unknown')) # Prioritize actual SN if available
-                # position = cam_config.get('metadata', {}).get('position', 'N/A')
-                serial = cam_diag_content.get('Actual SN', cam_diag_content.get('Configured SN/Idx', 'Unknown'))
-                position = expected_cameras_map.get(cam_id_diag, {}).get('position', 'Config Pos N/A')
-
-                status_summary = cam_diag_content.get('Summary', 'Status N/A')
-                level = cam_diag_content.get('Level', 'OK')
-
-                print(f"\n  📷 {Colors.BOLD}{cam_id_diag}{Colors.ENDC} (SN: {serial}, Pos: {position}):")
-                
-                if level == 'ERROR':
-                    print(f"     {Colors.FAIL}• Status: {status_summary}{Colors.ENDC}")
-                    continue
-                elif level == 'WARNING':
-                    print(f"     {Colors.WARNING}• Status: {status_summary}{Colors.ENDC}")
-                else:
-                    print(f"     {Colors.GREEN}• Status: {status_summary}{Colors.ENDC}")
-
-                # Color stream performance
-                color_target = cam_diag_content.get('Target Color FPS', 'N/A')
-                color_current = cam_diag_content.get('Actual Color FPS', 'N/A')
-                color_efficiency = cam_diag_content.get('Color Efficiency (%)', 'N/A')
-                color_frames = cam_diag_content.get('Color Frames Published', 'N/A')
-                
-                if color_current != 'N/A':
-                    try: color_current_float = float(color_current)
-                    except ValueError: color_current_float = 0.0
-                    print(f"     • Color FPS (Target: {color_target}): ", end="")
-                    fps_color = Colors.GREEN if color_current_float >= (float(color_target)*0.9 if color_target !='N/A' else 25) else Colors.WARNING if color_current_float >= (float(color_target)*0.7 if color_target != 'N/A' else 15) else Colors.FAIL
-                    print(f"{fps_color}{color_current} Hz{Colors.ENDC} (Eff: {color_efficiency}%) ({color_frames})")
-                
-                # Depth stream performance
-                depth_target = cam_diag_content.get('Target Depth FPS', 'N/A')
-                depth_current = cam_diag_content.get('Actual Depth FPS', 'N/A')
-                depth_efficiency = cam_diag_content.get('Depth Efficiency (%)', 'N/A')
-                depth_frames = cam_diag_content.get('Depth Frames Published', 'N/A')
-                
-                # Check if depth is enabled for this camera from the config
-                depth_enabled_in_config = False
-                if cam_id_diag in expected_cameras_map: # Check if cam_id_diag is a valid key
-                    # This assumes expected_cameras_map stores the full config for the camera, 
-                    # or that camera_config_path needs to be parsed again to get specific depth enabled status
-                    # For simplicity, let's assume the camera_node only provides depth diagnostics if enabled.
-                    # A more robust way would be to check the original camera_config_file content.
-                    # The IndividualCameraDiagnosticTask already checks this from its own camera_config.
-                    # So if depth_current is not N/A, it implies it was enabled and measured.
-                    depth_enabled_in_config = True # Simpler: if depth_current is present, assume it was enabled
-
-                if depth_current != 'N/A' and depth_enabled_in_config:
-                    try: depth_current_float = float(depth_current)
-                    except ValueError: depth_current_float = 0.0
-                    print(f"     • Depth FPS (Target: {depth_target}): ", end="")
-                    fps_color = Colors.GREEN if depth_current_float >= (float(depth_target)*0.9 if depth_target !='N/A' else 25) else Colors.WARNING if depth_current_float >= (float(depth_target)*0.7 if depth_target != 'N/A' else 15) else Colors.FAIL
-                    print(f"{fps_color}{depth_current} Hz{Colors.ENDC} (Eff: {depth_efficiency}%) ({depth_frames})")
-            
-            # Summary
-            connected_count = sum(1 for cam_diag_content in camera_diagnostics_data.values() 
-                                if cam_diag_content.get('Level') != 'ERROR')
-            
-            print(f"\n  {'.' * 56}") # Dotted line
-            print(f"  📈 {Colors.BOLD}SUMMARY:{Colors.ENDC} {connected_count}/{len(expected_cameras_map)} configured cameras reported as operational by diagnostics.")
-            if connected_count < len(expected_cameras_map) and len(expected_cameras_map) > 0:
-                print(f"  💡 {Colors.CYAN}System may be operating with partial camera coverage or config mismatch.{Colors.ENDC}")
-            elif len(expected_cameras_map) == 0 and self.cameras_healthy:
-                print(f"  💡 {Colors.YELLOW}Cameras are enabled, but no cameras found in the loaded config file: {camera_config_path}{Colors.ENDC}")
-            
-            print(f"{Colors.CYAN}{'=' * 60}{Colors.ENDC}")
-        
-        # System Resources
-        if resource_info:
-            cpu_val = resource_info.get('cpu_percent', '0.0') # These are KVs, so value is string
-            mem_val = resource_info.get('memory_percent', '0.0')
-            try:
-                cpu = float(cpu_val)
-                memory = float(mem_val)
-            except ValueError:
-                cpu = 0.0
-                memory = 0.0
-            
-            if cpu > 0 or memory > 0:
-                print(f"\n{Colors.BOLD}{Colors.BLUE}💻 SYSTEM RESOURCES{Colors.ENDC}")
-                print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
-                
-                cpu_color = Colors.GREEN if cpu < 80 else Colors.WARNING if cpu < 90 else Colors.FAIL
-                mem_color = Colors.GREEN if memory < 80 else Colors.WARNING if memory < 90 else Colors.FAIL
-                
-                print(f"  • CPU Usage: {cpu_color}{cpu:.1f}%{Colors.ENDC}")
-                print(f"  • Memory Usage: {mem_color}{memory:.1f}%{Colors.ENDC}")
-        
-        # Detailed MoveIt Services Status
-        print(f"\n{Colors.BOLD}{Colors.BLUE}🔧 MOVEIT SERVICES STATUS{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
-        moveit_overall_ready = system_diagnostics.get('moveit_ready', 'False') == 'True'
-        
-        if moveit_overall_ready:
-            print(f"  {Colors.GREEN}✅ All core MoveIt services reported as ready.{Colors.ENDC}")
-        else:
-            print(f"  {Colors.WARNING}⚠️ Some MoveIt services may not be ready:{Colors.ENDC}")
-
-        ik_status = system_diagnostics.get('moveit_ik_service', 'Pending')
-        planner_status = system_diagnostics.get('moveit_planner_service', 'Pending')
-        scene_status = system_diagnostics.get('moveit_scene_service', 'Pending')
-
-        print(f"    ├─ IK Service (/compute_ik): {Colors.GREEN if ik_status == 'Ready' else Colors.WARNING}{ik_status}{Colors.ENDC}")
-        print(f"    ├─ Planner Service (/plan_kinematic_path): {Colors.GREEN if planner_status == 'Ready' else Colors.WARNING}{planner_status}{Colors.ENDC}")
-        print(f"    └─ Scene Service (/get_planning_scene): {Colors.GREEN if scene_status == 'Ready' else Colors.WARNING}{scene_status}{Colors.ENDC}")
-
-        # Other nodes status (filtered)
-        if self.node_diagnostics:
-            print(f"\n{Colors.BOLD}{Colors.BLUE}📋 OTHER NODE STATUS (Filtered){Colors.ENDC}")
-            print(f"{Colors.CYAN}{'-' * 40}{Colors.ENDC}")
-            
-            # Filter out nodes we've already shown details for or are part of other sections
-            shown_nodes_prefixes = [
-                'main_system', 
-                'oculus_reader:vr_controller', 
-                # 'vision_camera_node:camera_', # Covered by new parsing
-                'Camera ', # Covers active and unavailable individual camera tasks
-                'Camera Node Status', # Covers the overall camera node status task
-                'resources', 
-                self.get_name()
-            ]
-            # Also filter specific camera node summary if we list cameras individually
-            # The camera_diagnostics keys are like 'realsense_D435_12345'
-            # The node names are like 'vision_camera_node:camera_realsense_D435_12345'
-
-            other_nodes_to_print = []
-            oculus_reader_summaries = set() # To avoid duplicate oculus_reader general messages
-
-            for node_name, diagnostics_content in sorted(self.node_diagnostics.items()):
-                is_shown_elsewhere = False
-                for prefix in shown_nodes_prefixes:
-                    if node_name.startswith(prefix):
-                        is_shown_elsewhere = True
-                        break
-                if is_shown_elsewhere:
-                    continue
-                
-                # Consolidate oculus_reader general messages
-                if node_name.startswith('oculus_reader'):
-                    summary_msg = diagnostics_content.get('Summary', 'No status')
-                    if summary_msg in oculus_reader_summaries:
-                        continue # Skip if this exact summary for oculus_reader was already added
-                    oculus_reader_summaries.add(summary_msg)
-
-                other_nodes_to_print.append((node_name, diagnostics_content))
-
-            for node_name, diagnostics in other_nodes_to_print[:7]:  # Limit to avoid clutter
-                level = diagnostics.get('Level', 'OK')
-                level_color = Colors.CYAN # Default
-                level_icon = "🔵"
-                if level == 'OK': level_color = Colors.GREEN; level_icon = "🟢"
-                elif level == 'WARNING': level_color = Colors.WARNING; level_icon = "🟡"
-                elif level == 'ERROR': level_color = Colors.FAIL; level_icon = "🔴"
-                
-                display_name = node_name.replace(':', ' -> ')
-                if len(display_name) > 35:
-                    display_name = display_name[:32] + "..."
-                
-                summary = diagnostics.get('Summary', 'No status')
-                if len(summary) > 40:
-                    summary = summary[:37] + "..."
-                
-                print(f"  {level_icon} {Colors.BOLD}{display_name:<35}{Colors.ENDC}: {level_color}{summary}{Colors.ENDC}")
-        
-        # Footer with quick actions
-        print(f"\n{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        print(f"{Colors.BOLD}{Colors.BLUE}🚀 QUICK ACTIONS{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'-' * 20}{Colors.ENDC}")
-        print(f"• Live diagnostics: {Colors.YELLOW}ros2 topic echo /diagnostics{Colors.ENDC}")
-        print(f"• Check nodes: {Colors.YELLOW}ros2 node list{Colors.ENDC}")
-        print(f"• Emergency stop: {Colors.RED}Ctrl+C{Colors.ENDC}")
-        print(f"{Colors.CYAN}{'=' * 80}{Colors.ENDC}")
-        
-        # Force flush output
-        sys.stdout.flush()
 
 
 async def async_main():
     """Async main entry point"""
     # Initialize ROS2
-    rclpy.init()
+    try:
+        rclpy.init()
+    except Exception as e:
+        print(f"Failed to initialize ROS2: {e}", file=sys.stderr)
+        return
     
     # Parse launch parameters from environment and ROS parameters
     launch_params = {
@@ -911,6 +718,7 @@ async def async_main():
     }
     
     # Configuration path - fix to use correct relative path
+    config_path = None
     try:
         from ament_index_python.packages import get_package_share_directory
         config_path = os.path.join(
@@ -918,7 +726,10 @@ async def async_main():
             'config',
             'franka_vr_control_config.yaml'
         )
-    except:
+    except Exception as e:
+        print(f"Warning: Could not get package share directory: {e}", file=sys.stderr)
+        
+    if not config_path or not os.path.exists(config_path):
         # Fallback for development/source builds
         config_path = os.path.join(
             os.path.dirname(__file__),
@@ -940,23 +751,28 @@ async def async_main():
                 'robot': {'robot_ip': '192.168.1.59'},
                 'recording': {'enabled': True}
             }
-            import yaml
-            with open(config_path, 'w') as f:
-                yaml.dump(default_config, f)
+            try:
+                import yaml
+                with open(config_path, 'w') as f:
+                    yaml.dump(default_config, f)
+            except Exception as e:
+                print(f"Warning: Could not create default config: {e}", file=sys.stderr)
     
     # Create main system node
-    system = LabelboxRoboticsSystem(config_path, launch_params)
-    
-    # Update config with launch parameters
-    if launch_params.get('robot_ip'):
-        system.config['robot']['robot_ip'] = launch_params['robot_ip']
-    
-    # Create executor
-    executor = MultiThreadedExecutor()
-    executor.add_node(system)
-    
-    # Run system with proper executor integration
+    system = None
+    executor = None
     try:
+        system = LabelboxRoboticsSystem(config_path, launch_params)
+        
+        # Update config with launch parameters
+        if launch_params.get('robot_ip'):
+            system.config['robot']['robot_ip'] = launch_params['robot_ip']
+        
+        # Create executor
+        executor = MultiThreadedExecutor()
+        executor.add_node(system)
+        
+        # Run system with proper executor integration
         # Start the executor in a separate thread
         import threading
         import concurrent.futures
@@ -988,11 +804,31 @@ async def async_main():
         traceback.print_exc()
     finally:
         # Shutdown in the correct order
-        system.running = False
-        system.cleanup()
-        executor.shutdown(timeout_sec=5.0)
-        system.destroy_node()
-        rclpy.shutdown()
+        if system:
+            system.running = False
+            try:
+                system.cleanup()
+            except Exception as e:
+                print(f"Error during system cleanup: {e}")
+        
+        if executor:
+            try:
+                executor.shutdown(timeout_sec=5.0)
+            except Exception as e:
+                print(f"Error shutting down executor: {e}")
+        
+        if system:
+            try:
+                system.destroy_node()
+            except Exception as e:
+                print(f"Error destroying system node: {e}")
+        
+        # Only shutdown RCL if it's still initialized
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"Error during RCL shutdown: {e}")
 
 
 def main():
@@ -1006,6 +842,13 @@ def main():
         print(f"Error in main system: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        # Final cleanup
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except:
+            pass  # Ignore errors during final cleanup
 
 
 if __name__ == '__main__':

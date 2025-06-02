@@ -88,7 +88,7 @@ def test_realsense_camera(serial_number: str, cam_specific_config: Dict, global_
         fc, t_start = 0, time.time(); dur = global_config.get('test_duration_sec',2.0); min_depth_cov = global_config.get('min_depth_coverage_pct',30.)/100.
         for _ in range(int(fps*dur)):
             try:
-                frames = pipeline.wait_for_frames(1000)
+                frames = pipeline.wait_for_frames(50)
                 if not frames: continue
                 cf = frames.get_color_frame()
                 if cf: result.rgb_capture_ok=True; result.resolution=(cf.get_width(),cf.get_height())

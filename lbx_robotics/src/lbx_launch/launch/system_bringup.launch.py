@@ -59,8 +59,28 @@ def generate_launch_description():
     )
     
     # Get workspace path for camera config default
-    workspace_root = os.environ.get('COLCON_WS', os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    workspace_root = os.environ.get('COLCON_WS', None)
+    if not workspace_root:
+        # Try to detect workspace root from current file location
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        # Navigate up from src/lbx_launch/launch/system_bringup.launch.py to workspace root
+        workspace_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file_dir))))
+    
     default_camera_config = os.path.join(workspace_root, 'lbx_robotics', 'configs', 'sensors', 'realsense_cameras.yaml')
+    
+    # Fallback if the computed path doesn't exist
+    if not os.path.exists(default_camera_config):
+        # Try alternative paths
+        fallback_paths = [
+            os.path.join(workspace_root, 'configs', 'sensors', 'realsense_cameras.yaml'),
+            os.path.join(os.path.dirname(workspace_root), 'lbx_robotics', 'configs', 'sensors', 'realsense_cameras.yaml'),
+            'auto'  # Final fallback to auto-detection
+        ]
+        
+        for fallback_path in fallback_paths:
+            if fallback_path == 'auto' or os.path.exists(fallback_path):
+                default_camera_config = fallback_path
+                break
     
     declare_camera_config = DeclareLaunchArgument(
         'camera_config',
@@ -100,7 +120,7 @@ def generate_launch_description():
     
     declare_camera_init_delay = DeclareLaunchArgument(
         'camera_init_delay',
-        default_value='5.0',
+        default_value='12.0',
         description='Delay in seconds to wait for camera initialization before starting robot nodes'
     )
     
@@ -198,7 +218,7 @@ def generate_launch_description():
     system_nodes_delayed = TimerAction(
         period=PythonExpression([
             "float('", LaunchConfiguration('camera_init_delay'), 
-            "') + 3.0 if '", LaunchConfiguration('enable_cameras'), "' == 'true' else 2.0"
+            "') + 5.0 if '", LaunchConfiguration('enable_cameras'), "' == 'true' else 4.0"
         ]),
         actions=[
             # System Monitor Node (start early to track all components)
@@ -238,72 +258,87 @@ def generate_launch_description():
                 }]
             ),
             
-            # Robot Control Node (handles MoveIt and robot commands)
-            Node(
-                package='lbx_franka_control',
-                executable='robot_control_node',
-                name='robot_control_node',
-                output='screen',
-                parameters=[{
-                    'config_file': franka_control_config,
-                    'robot_name': 'fr3',
-                    'control_rate': 45.0,
-                    'log_level': LaunchConfiguration('log_level'),
-                }]
-            ),
-            
-            # VR Teleoperation Node (processes VR input)
-            Node(
-                package='lbx_franka_control',
-                executable='vr_teleop_node',
-                name='vr_teleop_node',
-                output='screen',
-                parameters=[{
-                    'config_file': franka_control_config,
-                    'control_rate': 45.0,
-                    'calibration_file': os.path.join(
-                        os.path.expanduser('~'),
-                        'vr_calibration_data.json'
+            # Robot Control Node (handles MoveIt and robot commands) - delayed more for safety
+            TimerAction(
+                period=2.0,  # Additional 2 second delay for robot control
+                actions=[
+                    Node(
+                        package='lbx_franka_control',
+                        executable='robot_control_node',
+                        name='robot_control_node',
+                        output='screen',
+                        parameters=[{
+                            'config_file': franka_control_config,
+                            'robot_name': 'fr3',
+                            'control_rate': 45.0,
+                            'log_level': LaunchConfiguration('log_level'),
+                        }]
                     ),
-                    'log_level': LaunchConfiguration('log_level'),
-                }],
-                remappings=[
-                    # Map VR controller input from oculus node
-                    ('/vr/controller_pose', PythonExpression([
-                        "'/vr/right_controller/pose' if '",
-                        LaunchConfiguration('use_right_controller'),
-                        "' == 'true' else '/vr/left_controller/pose'"
-                    ])),
-                    ('/vr/controller_joy', PythonExpression([
-                        "'/vr/right_controller_joy' if '",
-                        LaunchConfiguration('use_right_controller'),
-                        "' == 'true' else '/vr/left_controller_joy'"
-                    ])),
                 ]
             ),
             
-            # Main System Node (primary terminal interface and system monitor)
-            Node(
-                package='lbx_franka_control',
-                executable='main_system',
-                name='main_system',
-                output='screen',
-                parameters=[{
-                    'config_file': franka_control_config,
-                    'log_level': LaunchConfiguration('log_level'),
-                }],
-                # Pass launch parameters as environment variables
-                additional_env={
-                    'VR_IP': LaunchConfiguration('vr_ip'),
-                    'ENABLE_CAMERAS': LaunchConfiguration('enable_cameras'),
-                    'CAMERA_CONFIG': LaunchConfiguration('camera_config'),
-                    'HOT_RELOAD': LaunchConfiguration('hot_reload'),
-                    'VERIFY_DATA': 'false',  # Not used anymore
-                    'USE_FAKE_HARDWARE': LaunchConfiguration('use_fake_hardware'),
-                    'ROBOT_IP': LaunchConfiguration('robot_ip'),
-                    'ENABLE_RVIZ': LaunchConfiguration('enable_rviz'),
-                    'ENABLE_RECORDING': LaunchConfiguration('enable_recording'),
-                }
+            # VR Teleoperation Node (processes VR input) - delayed even more for safety
+            TimerAction(
+                period=3.0,  # Additional 3 second delay for VR teleoperation
+                actions=[
+                    Node(
+                        package='lbx_franka_control',
+                        executable='vr_teleop_node',
+                        name='vr_teleop_node',
+                        output='screen',
+                        parameters=[{
+                            'config_file': franka_control_config,
+                            'control_rate': 45.0,
+                            'calibration_file': os.path.join(
+                                os.path.expanduser('~'),
+                                'vr_calibration_data.json'
+                            ),
+                            'log_level': LaunchConfiguration('log_level'),
+                        }],
+                        remappings=[
+                            # Map VR controller input from oculus node
+                            ('/vr/controller_pose', PythonExpression([
+                                "'/vr/right_controller/pose' if '",
+                                LaunchConfiguration('use_right_controller'),
+                                "' == 'true' else '/vr/left_controller/pose'"
+                            ])),
+                            ('/vr/controller_joy', PythonExpression([
+                                "'/vr/right_controller_joy' if '",
+                                LaunchConfiguration('use_right_controller'),
+                                "' == 'true' else '/vr/left_controller_joy'"
+                            ])),
+                        ]
+                    ),
+                ]
+            ),
+            
+            # Main System Node (primary terminal interface and system monitor) - started last
+            TimerAction(
+                period=1.0,  # Additional 1 second delay for main system
+                actions=[
+                    Node(
+                        package='lbx_franka_control',
+                        executable='main_system',
+                        name='main_system',
+                        output='screen',
+                        parameters=[{
+                            'config_file': franka_control_config,
+                            'log_level': LaunchConfiguration('log_level'),
+                        }],
+                        # Pass launch parameters as environment variables
+                        additional_env={
+                            'VR_IP': LaunchConfiguration('vr_ip'),
+                            'ENABLE_CAMERAS': LaunchConfiguration('enable_cameras'),
+                            'CAMERA_CONFIG': LaunchConfiguration('camera_config'),
+                            'HOT_RELOAD': LaunchConfiguration('hot_reload'),
+                            'VERIFY_DATA': 'false',  # Not used anymore
+                            'USE_FAKE_HARDWARE': LaunchConfiguration('use_fake_hardware'),
+                            'ROBOT_IP': LaunchConfiguration('robot_ip'),
+                            'ENABLE_RVIZ': LaunchConfiguration('enable_rviz'),
+                            'ENABLE_RECORDING': LaunchConfiguration('enable_recording'),
+                        }
+                    ),
+                ]
             ),
         ]
     )

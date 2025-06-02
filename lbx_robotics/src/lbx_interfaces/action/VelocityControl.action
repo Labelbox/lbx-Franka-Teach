@@ -1,0 +1,11 @@
+# Goal: Enable velocity control mode
+# No parameters needed - control is enabled until cancelled
+
+---
+# Result: Success status
+bool success
+string message
+
+---
+# Feedback: Current joint velocities
+float64[] current_velocities 

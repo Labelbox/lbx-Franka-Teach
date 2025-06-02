@@ -903,11 +903,25 @@ class DataRecorderInterface:
 def main(args=None):
     rclpy.init(args=args)
     
-    # Get config path from parameter or default
-    config_path = os.path.join(
-        os.path.dirname(__file__),
-        '../../../configs/control/franka_vr_control_config.yaml'
-    )
+    # Create a temporary node to get parameters
+    temp_node = rclpy.create_node('system_manager_temp')
+    
+    # Declare and get config file parameter
+    temp_node.declare_parameter('config_file', '')
+    config_file = temp_node.get_parameter('config_file').value
+    
+    # Destroy temporary node
+    temp_node.destroy_node()
+    
+    # Use parameter if provided, otherwise use default
+    if config_file:
+        config_path = config_file
+    else:
+        # Default config path
+        config_path = os.path.join(
+            os.path.dirname(__file__),
+            '../../../configs/control/franka_vr_control_config.yaml'
+        )
     
     # Create node
     system_manager = SystemManager(config_path)

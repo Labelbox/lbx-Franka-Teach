@@ -167,6 +167,7 @@ class FrankaController:
         services_ready = True
         timeout = self.config['moveit']['service_wait_timeout_sec']
         
+        # Check each service with individual timeout
         if not self.ik_client.wait_for_service(timeout_sec=timeout):
             self.node.get_logger().error("❌ IK service not available")
             services_ready = False
@@ -185,12 +186,28 @@ class FrankaController:
         else:
             self.node.get_logger().info("✅ FK service ready")
         
-        if not self.trajectory_client.wait_for_server(timeout_sec=timeout):
-            self.node.get_logger().error("❌ Trajectory action server not available")
-            services_ready = False
-        else:
-            self.node.get_logger().info("✅ Trajectory action server ready")
+        # For action servers, check with longer timeout and retry
+        max_retries = 3
+        retry_delay = 2.0
         
+        # Check trajectory action server with retries
+        trajectory_ready = False
+        for attempt in range(max_retries):
+            if self.trajectory_client.wait_for_server(timeout_sec=timeout):
+                trajectory_ready = True
+                self.node.get_logger().info("✅ Trajectory action server ready")
+                break
+            else:
+                if attempt < max_retries - 1:
+                    self.node.get_logger().warn(f"⏳ Trajectory action server not ready, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                else:
+                    self.node.get_logger().error("❌ Trajectory action server not available after retries")
+        
+        if not trajectory_ready:
+            services_ready = False
+        
+        # Check gripper action server
         if not self.gripper_client.wait_for_server(timeout_sec=timeout):
             self.node.get_logger().error("❌ Gripper action server not available")
             services_ready = False
@@ -200,7 +217,17 @@ class FrankaController:
         if services_ready:
             self.node.get_logger().info('✅ All MoveIt services ready!')
         else:
-            raise RuntimeError("Required MoveIt services not available")
+            # Don't throw exception - allow degraded operation
+            self.node.get_logger().error("⚠️  Some MoveIt services not available - operating in degraded mode")
+            self.node.get_logger().info("   The system will attempt to reconnect to missing services")
+    
+    def is_fully_operational(self):
+        """Check if all services are available for full operation"""
+        return (self.ik_client.service_is_ready() and
+                self.planning_scene_client.service_is_ready() and
+                self.fk_client.service_is_ready() and
+                self.trajectory_client.server_is_ready() and
+                self.gripper_client.server_is_ready())
     
     def execute_command(self, action: np.ndarray, action_info: Dict, robot_state):
         """Execute robot command"""
@@ -727,17 +754,26 @@ class FrankaController:
         
         # First, check if services are ready
         self.node.get_logger().info("🔍 Checking MoveIt services...")
-        if not self.ik_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().warn("⚠️  IK service not ready")
+        services_available = self.is_fully_operational()
         
-        if not self.fk_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().warn("⚠️  FK service not ready")
-        
-        if not self.trajectory_client.server_is_ready():
-            self.node.get_logger().warn("⚠️  Trajectory server not ready")
-        
-        if not self.gripper_client.server_is_ready():
-            self.node.get_logger().warn("⚠️  Gripper service not ready")
+        if not services_available:
+            self.node.get_logger().warn("⚠️  Not all services available - checking individual services...")
+            
+            # Check which services are available
+            if not self.ik_client.service_is_ready():
+                self.node.get_logger().warn("   ❌ IK service not ready")
+            if not self.fk_client.service_is_ready():
+                self.node.get_logger().warn("   ❌ FK service not ready")
+            if not self.trajectory_client.server_is_ready():
+                self.node.get_logger().warn("   ❌ Trajectory server not ready")
+            if not self.gripper_client.server_is_ready():
+                self.node.get_logger().warn("   ❌ Gripper service not ready")
+            
+            # If trajectory server is not ready, we can't reset
+            if not self.trajectory_client.server_is_ready():
+                self.node.get_logger().error("❌ Cannot reset robot - trajectory server not available")
+                # Return zeros for position and None for joint positions
+                return np.array([0.5, 0.0, 0.5]), np.array([0.0, 0.0, 0.0, 1.0]), None
         
         # Execute trajectory to home position
         self.node.get_logger().info(f"🏠 Moving robot to home position...")
@@ -749,30 +785,42 @@ class FrankaController:
             # Give time for robot to settle
             time.sleep(1.0)
             
-            # Test gripper functionality
-            self.node.get_logger().info(f"🔧 Testing gripper functionality...")
+            # Get current end-effector pose after reset
+            ee_pos, ee_quat = self.get_current_end_effector_pose(home_positions)
             
-            # Close gripper
-            close_success = self.execute_gripper_command(
-                self.config['constants']['GRIPPER_CLOSE'],
-                timeout=3.0,
-                wait_for_completion=True
-            )
-            if close_success:
-                self.node.get_logger().info(f"   ✅ Gripper CLOSE completed successfully")
-            else:
-                self.node.get_logger().warn(f"   ❌ Gripper CLOSE command failed")
+            if ee_pos is None or ee_quat is None:
+                # If FK fails, use approximate values for home position
+                self.node.get_logger().warn("⚠️  Could not get exact end-effector pose, using approximate values")
+                ee_pos = np.array([0.3, 0.0, 0.5])  # Approximate home position for FR3
+                ee_quat = np.array([0.0, 0.0, 0.0, 1.0])  # Identity orientation
             
-            # Open gripper
-            open_success = self.execute_gripper_command(
-                self.config['constants']['GRIPPER_OPEN'],
-                timeout=3.0,
-                wait_for_completion=True
-            )
-            if open_success:
-                self.node.get_logger().info(f"   ✅ Gripper OPEN completed successfully")
+            # Test gripper functionality if available
+            if self.gripper_client.server_is_ready():
+                self.node.get_logger().info(f"🔧 Testing gripper functionality...")
+                
+                # Close gripper
+                close_success = self.execute_gripper_command(
+                    self.config['constants']['GRIPPER_CLOSE'],
+                    timeout=3.0,
+                    wait_for_completion=True
+                )
+                if close_success:
+                    self.node.get_logger().info(f"   ✅ Gripper CLOSE completed successfully")
+                else:
+                    self.node.get_logger().warn(f"   ❌ Gripper CLOSE command failed")
+                
+                # Open gripper
+                open_success = self.execute_gripper_command(
+                    self.config['constants']['GRIPPER_OPEN'],
+                    timeout=3.0,
+                    wait_for_completion=True
+                )
+                if open_success:
+                    self.node.get_logger().info(f"   ✅ Gripper OPEN completed successfully")
+                else:
+                    self.node.get_logger().warn(f"   ❌ Gripper OPEN command failed")
             else:
-                self.node.get_logger().warn(f"   ❌ Gripper OPEN command failed")
+                self.node.get_logger().warn("⚠️  Gripper service not available - skipping gripper test")
             
             # Reset smoothing state
             self._smoothed_target_pos = None
@@ -780,10 +828,17 @@ class FrankaController:
             self._smoothed_target_gripper = None
             self._last_gripper_command = None
             
-            return success
+            return ee_pos, ee_quat, np.array(home_positions)
         else:
             self.node.get_logger().error(f"❌ Robot trajectory to home position failed")
-            return False
+            # Return current pose if available, or defaults
+            if hasattr(self, '_last_joint_positions') and self._last_joint_positions is not None:
+                ee_pos, ee_quat = self.get_current_end_effector_pose(self._last_joint_positions)
+                if ee_pos is not None and ee_quat is not None:
+                    return ee_pos, ee_quat, self._last_joint_positions
+            
+            # Return safe defaults
+            return np.array([0.5, 0.0, 0.5]), np.array([0.0, 0.0, 0.0, 1.0]), None
     
     def emergency_stop(self):
         """Emergency stop - halt all motion"""

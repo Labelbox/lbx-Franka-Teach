@@ -549,26 +549,57 @@ class LabelboxRoboticsSystem(Node):
         
         # Try to call reset service if available
         reset_client = self.create_client(Empty, '/reset_robot')
-        if reset_client.wait_for_service(timeout_sec=2.0):
-            print("   🔄 Sending reset command...")
+        
+        # Wait longer for the service to be available (up to 10 seconds)
+        print("   🔄 Waiting for robot reset service...")
+        service_ready = reset_client.wait_for_service(timeout_sec=10.0)
+        
+        if service_ready:
+            print("   ✅ Reset service available")
+            print("   📤 Sending reset command...")
             try:
-                future = reset_client.call_async(Empty.Request())
+                # Create request
+                request = Empty.Request()
+                future = reset_client.call_async(request)
                 
                 # Wait for completion with timeout
                 start_time = time.time()
-                while not future.done() and (time.time() - start_time) < 5.0:
+                while not future.done() and (time.time() - start_time) < 10.0:
                     time.sleep(0.1)
                 
                 if future.done():
-                    print(f"   ✅ Robot reset to home position")
+                    # Check if the call was successful
+                    try:
+                        result = future.result()
+                        print(f"   ✅ Robot reset command sent successfully")
+                        print(f"   ⏳ Waiting for robot to reach home position...")
+                        
+                        # Give the robot time to move to home position
+                        time.sleep(3.0)
+                        
+                        print(f"   ✅ Robot should now be at home position")
+                        print(f"   💡 Verify robot is at home position before proceeding")
+                    except Exception as e:
+                        print(f"   ⚠️  Reset service call failed: {e}")
+                        print(f"   💡 Robot may already be at home position")
                 else:
-                    print(f"   ⚠️  Reset command timeout, but continuing...")
+                    print(f"   ⚠️  Reset command timeout - robot may still be moving")
+                    print(f"   💡 Check robot status and wait if necessary")
             except Exception as e:
-                print(f"   ⚠️  Reset command failed: {e}, but continuing...")
+                print(f"   ⚠️  Reset command error: {e}")
+                print(f"   💡 Manual intervention may be required")
         else:
-            print(f"   ℹ️  Reset service not available - robot may already be in home position")
-            print(f"   📍 Current system uses MoveIt for robot control")
-            print(f"   💡 Robot will be positioned during VR teleoperation startup")
+            print(f"   ⚠️  Reset service not available after 10 seconds")
+            print(f"   📍 Possible reasons:")
+            print(f"      • Robot control node (system_manager) not running")
+            print(f"      • Robot control node still initializing")
+            print(f"      • Different ROS2 domain or namespace")
+            print(f"   💡 To manually reset robot:")
+            print(f"      • ros2 service call /reset_robot std_srvs/srv/Empty")
+            print(f"      • Or use the VR controller calibration to set home position")
+        
+        # Cleanup
+        self.destroy_client(reset_client)
     
     def enter_calibration_mode(self):
         """Guide user through calibration"""

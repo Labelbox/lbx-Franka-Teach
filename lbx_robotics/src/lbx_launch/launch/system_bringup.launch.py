@@ -77,7 +77,7 @@ def generate_launch_description():
     declare_use_right_controller = DeclareLaunchArgument(
         'use_right_controller',
         default_value='true',
-        description='Use right controller (false for left)'
+        description='Use right controller (true) or left controller (false)'
     )
     
     declare_hot_reload = DeclareLaunchArgument(
@@ -96,6 +96,12 @@ def generate_launch_description():
         'log_level',
         default_value='INFO',
         description='Logging level (DEBUG, INFO, WARN, ERROR)'
+    )
+    
+    declare_enable_ui = DeclareLaunchArgument(
+        'enable_ui',
+        default_value='true',
+        description='Enable simple UI node for user interaction'
     )
     
     # Config file for system_manager_node
@@ -153,35 +159,71 @@ def generate_launch_description():
         ]
     )
     
-    # Main System Node (full-featured orchestrator with UI)
-    main_system_node = Node(
+    # System Orchestrator Node (lightweight coordinator)
+    system_orchestrator_node = Node(
         package='lbx_franka_control',
-        executable='main_system',
-        name='main_system',
+        executable='system_orchestrator',
+        name='system_orchestrator',
+        output='screen',
+        parameters=[{
+            'log_level': LaunchConfiguration('log_level'),
+        }]
+    )
+    
+    # Robot Control Node (handles MoveIt and robot commands)
+    robot_control_node = Node(
+        package='lbx_franka_control',
+        executable='robot_control_node',
+        name='robot_control_node',
+        output='screen',
         parameters=[{
             'config_file': franka_control_config,
-            'use_right_controller': LaunchConfiguration('use_right_controller'),
-            'hot_reload': LaunchConfiguration('hot_reload'),
-            'enable_recording': LaunchConfiguration('enable_recording'),
+            'robot_name': 'fr3',
+            'control_rate': 45.0,
+            'log_level': LaunchConfiguration('log_level'),
+        }]
+    )
+    
+    # VR Teleoperation Node (processes VR input)
+    vr_teleop_node = Node(
+        package='lbx_franka_control',
+        executable='vr_teleop_node',
+        name='vr_teleop_node',
+        output='screen',
+        parameters=[{
+            'config_file': franka_control_config,
+            'control_rate': 45.0,
+            'calibration_file': os.path.join(
+                os.path.expanduser('~'),
+                'vr_calibration_data.json'
+            ),
             'log_level': LaunchConfiguration('log_level'),
         }],
-        output='screen',
         remappings=[
-            # Remap VR inputs to match oculus_node outputs
+            # Map VR controller input from oculus node
             ('/vr/controller_pose', PythonExpression([
-                "'/vr/right_controller_pose' if '", LaunchConfiguration('use_right_controller'), 
-                "' == 'true' else '/vr/left_controller_pose'"
+                "'/vr/right_controller/pose' if '",
+                LaunchConfiguration('use_right_controller'),
+                "' == 'true' else '/vr/left_controller/pose'"
             ])),
-            ('/vr/controller_buttons', '/vr/buttons'),
-        ],
-        # Set environment variables that main_system expects
-        additional_env={
-            'VR_IP': LaunchConfiguration('vr_ip'),
-            'ENABLE_CAMERAS': LaunchConfiguration('enable_cameras'),
-            'CAMERA_CONFIG': LaunchConfiguration('camera_config'),
-            'HOT_RELOAD': LaunchConfiguration('hot_reload'),
-            'VERIFY_DATA': PythonExpression(["'true' if '", LaunchConfiguration('enable_recording'), "' == 'true' else 'false'"]),
-        }
+            ('/vr/controller_joy', PythonExpression([
+                "'/vr/right_controller_joy' if '",
+                LaunchConfiguration('use_right_controller'),
+                "' == 'true' else '/vr/left_controller_joy'"
+            ])),
+        ]
+    )
+    
+    # UI Node (optional - for user interaction)
+    ui_node = Node(
+        package='lbx_franka_control',
+        executable='ui_node',
+        name='ui_node',
+        output='screen',
+        parameters=[{
+            'log_level': LaunchConfiguration('log_level'),
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_ui'))
     )
     
     # Data Recorder Node (conditional)
@@ -191,8 +233,8 @@ def generate_launch_description():
         name='data_recorder',
         parameters=[{
             'output_dir': os.path.expanduser('~/recordings'),
-            'save_images': True,
-            'save_depth': True,
+            'save_images': 'true',
+            'save_depth': 'true',
             'enable_cameras': LaunchConfiguration('enable_cameras'),
             'camera_config': LaunchConfiguration('camera_config'),
         }],
@@ -231,13 +273,14 @@ def generate_launch_description():
     # )
     
     # Status echo nodes for debugging
-    status_echo_node = Node(
-        package='ros2',
-        executable='topic',
-        name='status_echo',
-        arguments=['echo', '/system_status'],
-        output='screen'
-    )
+    # NOTE: This would need ExecuteProcess instead of Node for ros2 CLI tools
+    # status_echo_node = Node(
+    #     package='ros2',
+    #     executable='topic',
+    #     name='status_echo',
+    #     arguments=['echo', '/system_status'],
+    #     output='screen'
+    # )
     
     return LaunchDescription([
         # Declare arguments
@@ -252,11 +295,15 @@ def generate_launch_description():
         declare_hot_reload,
         declare_vr_mode,
         declare_log_level,
+        declare_enable_ui,
         
         # Launch components
         moveit_launch,
         vr_namespace_group,
-        main_system_node,
+        system_orchestrator_node,
+        robot_control_node,
+        vr_teleop_node,
+        ui_node,
         data_recorder_node,
         camera_namespace_group,
         

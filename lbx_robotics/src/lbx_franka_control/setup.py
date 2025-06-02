@@ -28,6 +28,10 @@ setup(
             'system_manager = lbx_franka_control.system_manager:main',
             'main_system = lbx_franka_control.main_system:main',
             'system_monitor = lbx_franka_control.system_monitor:main',
+            'system_orchestrator = lbx_franka_control.system_orchestrator:main',
+            'robot_control_node = lbx_franka_control.robot_control_node:main',
+            'vr_teleop_node = lbx_franka_control.vr_teleop_node:main',
+            'ui_node = lbx_franka_control.ui_node:main',
         ],
     },
 ) 

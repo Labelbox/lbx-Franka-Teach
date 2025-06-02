@@ -22,15 +22,15 @@ cameras:
     serial_number: '218622277093'
     device_id: realsense_218622277093
     color:
-      width: 640
-      height: 480
-      fps: 15
+      width: 1280
+      height: 720
+      fps: 30
       format: bgr8
     depth:
       enabled: true
-      width: 640
-      height: 480
-      fps: 15
+      width: 1280
+      height: 720
+      fps: 30
     topics:
       base: "/cameras/overhead_camera"
     transforms:
@@ -53,15 +53,15 @@ cameras:
     serial_number: '218622272999'
     device_id: realsense_218622272999
     color:
-      width: 640
-      height: 480
-      fps: 15
+      width: 1280
+      height: 720
+      fps: 30
       format: bgr8
     depth:
       enabled: true
-      width: 640
-      height: 480
-      fps: 15
+      width: 1280
+      height: 720
+      fps: 30
     topics:
       base: "/cameras/wrist_camera"
     transforms:

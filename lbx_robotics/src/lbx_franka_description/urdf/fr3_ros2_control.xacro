@@ -13,11 +13,8 @@
           <plugin>franka_hardware/FrankaHardwareInterface</plugin>
           <param name="robot_ip">${robot_ip}</param>
           <param name="arm_id">${arm_id}</param>
-          <param name="prefix">${arm_id}_</param>
+          <param name="prefix">${arm_id}</param>
           <param name="version">0.1.0</param>
-          <param name="joint_names">${arm_id}_joint1 ${arm_id}_joint2 ${arm_id}_joint3 ${arm_id}_joint4 ${arm_id}_joint5 ${arm_id}_joint6 ${arm_id}_joint7</param>
-          <param name="command_interfaces">position velocity</param>
-          <param name="state_interfaces">position velocity effort</param>
         </xacro:unless>
       </hardware>
       

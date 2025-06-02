@@ -16,15 +16,16 @@ setup(
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
     ],
     install_requires=['setuptools'],
-    zip_safe=True,
-    maintainer='User',
-    maintainer_email='user@example.com',
-    description='Data recording and MCAP integration for robotics teleoperation',
-    license='TODO: License declaration',
+    zip_safe=False,
+    maintainer='Labelbox Robotics',
+    maintainer_email='robotics@labelbox.com',
+    description='High-performance data recording for VR teleoperation',
+    license='MIT',
     entry_points={
         'console_scripts': [
             'mcap_recorder_node = lbx_data_recorder.mcap_recorder_node:main',
             'recorder_node = lbx_data_recorder.recorder_node:main',
         ],
     },
+    include_package_data=True,
 ) 

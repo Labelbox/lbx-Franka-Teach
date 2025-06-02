@@ -2,7 +2,7 @@
 """
 Launch file for the LBX Franka FR3 MoveIt Server.
 This launch file starts the core MoveIt2 components (move_group, rviz, etc.)
-based on configurations from lbx_franka_description and lbx_franka_moveit packages.
+based on configurations from franka_description and franka_fr3_moveit_config packages.
 """
 
 import os
@@ -23,7 +23,7 @@ def launch_setup(context, *args, **kwargs):
     rviz_config = LaunchConfiguration('rviz_config')
     arm_id = LaunchConfiguration('arm_id')
     
-    # First, load our custom URDF with ros2_control
+    # Use the standard franka_description URDF with ros2_control enabled
     robot_description_content = Command(
         [
             PathJoinSubstitution([FindExecutable(name='xacro')]),
@@ -60,7 +60,6 @@ def launch_setup(context, *args, **kwargs):
             'load_gripper': load_gripper,
             'use_rviz': enable_rviz,
             'rviz_config': rviz_config,
-            'robot_description': robot_description_content,
         }).items()
     )
     

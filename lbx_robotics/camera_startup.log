@@ -1,0 +1,54 @@
+[INFO] [launch]: All log files can be found below /home/lbx-robot-1/.ros/log/2025-06-02-02-17-41-497550-lbxrobot1-BeyondMax-Series-412055
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [camera_node-1]: process started with pid [412057]
+[camera_node-1] [INFO] [1748855862.213991146] [vision_camera_node]: No camera_config_file provided. Attempting auto-detection and loading default configs.
+[camera_node-1] [INFO] [1748855862.214484044] [vision_camera_node]: 🔍 Searching for Intel RealSense cameras...
+[camera_node-1] [INFO] [1748855862.557699669] [vision_camera_node]:    Found 1 RealSense camera(s).
+[camera_node-1] [INFO] [1748855862.557981127] [vision_camera_node]: 🔍 Searching for ZED cameras...
+[camera_node-1] [INFO] [1748855862.558168212] [vision_camera_node]: ZED SDK (pyzed) not available or not discoverable. Cannot discover ZED cameras via SDK.
+[camera_node-1] [INFO] [1748855862.558347532] [vision_camera_node]:    Found 0 ZED camera(s).
+[camera_node-1] [INFO] [1748855862.558538183] [vision_camera_node]: DEBUG: Raw discovery result from discover_all_cameras: {'realsense': [{'serial_number': '218622277093', 'name': 'Intel RealSense D405', 'firmware': '5.12.14.100', 'type': 'realsense', 'usb_type': '3.2', 'physical_port': '/sys/devices/pci0000:00/0000:00:08.3/0000:67:00.4/usb8/8-1/8-1:1.0/video4linux/video0'}]}
+[camera_node-1] [INFO] [1748855862.558722863] [vision_camera_node]: Found RealSense camera with serial: 218622277093
+[camera_node-1] [INFO] [1748855862.558896192] [vision_camera_node]: DEBUG: Populated self.discovered_realsense_sns: ['218622277093']
+[camera_node-1] [INFO] [1748855862.559069892] [vision_camera_node]: Auto-detected 1 RealSense camera(s). Attempting to load 'realsense_cameras.yaml'.
+[camera_node-1] [INFO] [1748855862.559247359] [vision_camera_node]: Using auto-selected camera config: /home/lbx-robot-1/projects/lbx-Franka-Teach/lbx_robotics/lbx_robotics/configs/sensors/realsense_cameras.yaml
+[camera_node-1] [INFO] [1748855862.561098508] [vision_camera_node]: Successfully loaded camera configuration from /home/lbx-robot-1/projects/lbx-Franka-Teach/lbx_robotics/lbx_robotics/configs/sensors/realsense_cameras.yaml
+[camera_node-1] [INFO] [1748855862.561294048] [vision_camera_node]: Running camera startup tests...
+[camera_node-1] [INFO] [1748855862.561634616] [vision_camera_node]: 🔍 Starting camera functionality tests (RealSense & ZED only)...
+[camera_node-1] [INFO] [1748855862.561825457] [vision_camera_node]: ============================================================
+[camera_node-1] [INFO] [1748855862.562009987] [vision_camera_node]: 
+[camera_node-1] 📷 Testing RealSense: realsense_218622277093 (SN: 218622277093)...
+[camera_node-1] [INFO] [1748855862.613767832] [vision_camera_node]: Connected RS: Intel RealSense D405 SN: 218622277093
+[camera_node-1] [INFO] [1748855867.194450734] [vision_camera_node]:    ✅ PASS realsense_218622277093 (realsense) - 640x480 @ 30.7fps
+[camera_node-1] [INFO] [1748855867.194863614] [vision_camera_node]: 
+[camera_node-1] ============================================================
+[camera_node-1] [INFO] [1748855867.195073260] [vision_camera_node]: 📊 Camera Test Summary (RealSense & ZED):
+[camera_node-1] [INFO] [1748855867.195283758] [vision_camera_node]:    Total RealSense/ZED cameras tested: 1
+[camera_node-1] [INFO] [1748855867.195469279] [vision_camera_node]:    Passed: 1
+[camera_node-1] [INFO] [1748855867.195690076] [vision_camera_node]:    Failed: 0
+[camera_node-1] [INFO] [1748855867.195938744] [vision_camera_node]: 
+[camera_node-1] ✅ All attempted RealSense/ZED camera tests PASSED or were skipped due to missing SDKs!
+[camera_node-1] [INFO] [1748855867.196132831] [vision_camera_node]: All configured and enabled camera tests passed.
+[camera_node-1] [INFO] [1748855867.210056803] [vision_camera_node]: Publishers for realsense_218622277093 on ~/cam_realsense_218622277093
+[camera_node-1] /usr/lib/python3/dist-packages/scipy/__init__.py:146: UserWarning: A NumPy version >=1.17.3 and <1.25.0 is required for this version of SciPy (detected version 1.26.4
+[camera_node-1]   warnings.warn(f"A NumPy version >={np_minversion} and <{np_maxversion}"
+[camera_node-1] [INFO] [1748855867.253091875] [vision_camera_node]: Static TF for realsense_218622277093: base_link -> realsense_218622277093_link -> realsense_218622277093_optical_frame
+[camera_node-1] [INFO] [1748855867.253399873] [vision_camera_node]: Initializing camera realsense_218622277093 of type: realsense
+[camera_node-1] [INFO] [1748855867.269549243] [vision_camera_node]: Attempting to enable RealSense device with SN: 218622277093
+[camera_node-1] [INFO] [1748855867.269781330] [vision_camera_node]: Configuring RealSense color: 640x480 @ 30fps, Format: bgr8
+[camera_node-1] [INFO] [1748855867.269972492] [vision_camera_node]: Configuring RealSense depth: 640x480 @ 30fps, Format: z16
+[camera_node-1] [INFO] [1748855867.304268311] [vision_camera_node]: Started realsense_218622277093: Intel RealSense D405 (SN: 218622277093)
+[camera_node-1] [INFO] [1748855867.304535783] [vision_camera_node]: RealSense depth-to-color alignment enabled.
+[camera_node-1] [INFO] [1748855869.314959667] [vision_camera_node]: RealSense camera realsense_218622277093 initialization complete
+[camera_node-1] [INFO] [1748855869.316210190] [vision_camera_node]: Capture thread started for realsense_218622277093 (realsense)
+[camera_node-1] [INFO] [1748855869.325357395] [vision_camera_node]: CameraManager started with 1 active camera(s). 0 configured cameras are unavailable.
+[camera_node-1] [INFO] [1748855869.328442847] [vision_camera_node]: Camera node started. Publishing enabled at ~30.0 Hz.
+[camera_node-1] [INFO] [1748855869.331789080] [vision_camera_node]: Added IndividualCameraDiagnosticTask for active camera: Camera realsense_218622277093
+[camera_node-1] [INFO] [1748855869.332028150] [vision_camera_node]: Diagnostics publishing every 5.00s.
+[camera_node-1] [INFO] [1748855869.332245710] [vision_camera_node]: Camera node initialized successfully, starting spin...
+[camera_node-1] [ERROR] [1748855996.294713379] [vision_camera_node]: Pub color realsense_218622277093 error: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:389
+[camera_node-1] Failed to publish log message to rosout: publisher's context is invalid, at ./src/rcl/publisher.c:389
+[camera_node-1] [ERROR] [1748855996.295186630] [vision_camera_node]: Pub depth realsense_218622277093 error: Failed to publish: publisher's context is invalid, at ./src/rcl/publisher.c:389
+[camera_node-1] Failed to publish log message to rosout: publisher's context is invalid, at ./src/rcl/publisher.c:389
+[camera_node-1] terminate called without an active exception
+[ERROR] [camera_node-1]: process has died [pid 412057, exit code -6, cmd '/home/lbx-robot-1/projects/lbx-Franka-Teach/lbx_robotics/install/lbx_vision_camera/lib/lbx_vision_camera/camera_node --ros-args --log-level info --ros-args -r __node:=vision_camera_node --params-file /tmp/launch_params_lr9a9xve'].
